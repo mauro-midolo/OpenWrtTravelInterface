@@ -1,0 +1,546 @@
+import { useEffect, useState } from 'preact/hooks';
+import { UbusError } from '../lib/ubus';
+import { usePoll } from '../lib/poll';
+import { useApply } from '../lib/apply';
+import { formatBytes, formatRate, getDashboard, overallState } from '../lib/dashboard';
+import type { Dashboard as DashboardData, DashWan, OverallState } from '../lib/dashboard';
+import { MODE_LABEL, activeInterfaces, getMwan, statusLabel } from '../lib/mwan';
+import { HealthSheet, MwanCard, MwanSheet, RuleSheet, RulesCard } from './MultiWan';
+import type { Mwan, MwanInterface, MwanRule } from '../lib/mwan';
+import {
+  hostnameFromUci,
+  hostnameLabel,
+  isValidHostname,
+  stageWanHostname,
+} from '../lib/hostname';
+import type { HostnameChoice } from '../lib/hostname';
+import { findSaved, listSaved, updateNetwork } from '../lib/networks';
+import type { SavedNetwork } from '../lib/networks';
+import { HostnamePicker } from '../components/HostnamePicker';
+import { ApplyStatus } from '../components/ApplyStatus';
+import { MacCloneSheet, PortalMemoryCard, PortalPanel } from './Portal';
+
+/**
+ * Il sommario in cima, in una riga.
+ *
+ * "Collegato" e "Internet raggiungibile" sono due frasi diverse di proposito:
+ * la prima dice che c'e' una rotta, la seconda che una richiesta vera e'
+ * uscita ed e' tornata. Prima della Fase 5 esisteva solo la prima, e sotto ci
+ * stava anche il caso peggiore - una rete d'albergo che ti tiene fuori con una
+ * pagina di login mentre tutto sembra a posto.
+ */
+const OVERALL: Record<OverallState, { text: string; tone: string }> = {
+  online: { text: 'Internet raggiungibile', tone: 'addressed' },
+  connected: { text: 'Collegato', tone: 'addressed' },
+  portal: { text: 'Serve un login', tone: 'no-address' },
+  'no-internet': { text: 'Collegato, ma non esce niente', tone: 'unassociated' },
+  degraded: { text: 'Degradato', tone: 'no-address' },
+  offline: { text: 'Nessuna connessione', tone: 'unassociated' },
+};
+
+/**
+ * Il sommario di stato dipende dal tipo: una radio che non aggancia e un cavo
+ * scollegato hanno rimedi opposti, e chiamarli allo stesso modo manda a cercare
+ * il guasto nel posto sbagliato.
+ */
+function stateLabel(wan: DashWan): string {
+  switch (wan.state) {
+    case 'addressed':
+      return 'con indirizzo';
+    case 'no-address':
+      if (wan.kind === 'wifi') return 'agganciata, senza indirizzo';
+      // Sul tethering non c'e' nessun cavo di cui parlare: il telefono e'
+      // collegato, ma non sta ancora condividendo la connessione.
+      if (wan.kind === 'usb') return 'collegato, senza indirizzo';
+      return 'cavo collegato, senza indirizzo';
+    case 'unassociated':
+      return 'non agganciata a nessuna rete';
+    case 'no-carrier':
+      // Zero e "non leggibile" non sono la stessa cosa: nel secondo caso non
+      // si puo' affermare che manchi il cavo.
+      return wan.carrier === 0 ? 'nessun cavo collegato' : 'nessun collegamento';
+    case 'disabled':
+      return 'disattivata';
+    default:
+      return wan.kind === 'wifi' ? 'nessuna rete configurata' : 'non configurata';
+  }
+}
+
+function stateDetail(wan: DashWan): string {
+  switch (wan.state) {
+    case 'unassociated':
+      return 'Configurata ma non agganciata a nessuna rete.';
+    case 'no-carrier':
+      return wan.carrier === 0
+        ? 'Attacca un cavo alla porta WAN per usarla come uplink.'
+        : 'La porta non è attiva. Se hai attaccato un cavo, controlla che sia nella porta WAN.';
+    case 'disabled':
+      return 'Disattivata.';
+    case 'absent':
+      if (wan.kind === 'wifi')
+        return 'Questa radio è libera: collegala a una rete dalla schermata WiFi per usarla come uplink.';
+      if (wan.kind === 'usb')
+        return 'Attacca il telefono via USB e attiva la condivisione della connessione.';
+      return 'Nessun collegamento su questa interfaccia.';
+    default:
+      return 'Nessun collegamento su questa interfaccia.';
+  }
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div class="row">
+      <span class="row__label">{label}</span>
+      <span class="row__value">{value}</span>
+    </div>
+  );
+}
+
+function wanTitle(wan: DashWan): string {
+  if (wan.kind === 'wifi') return `WiFi ${wan.band || wan.radio} GHz`;
+  // Il nome fisico della porta, non il suo ruolo: OpenWrt le chiama col ruolo
+  // di fabbrica (`wan`, `lan1`), che dopo una commutazione dice il contrario
+  // di com'e' messa. Il device identifica sempre la stessa presa.
+  if (wan.kind === 'usb') return 'Tethering USB';
+  if (wan.kind === 'ethernet') return wan.device ? `Porta ${wan.device}` : 'Porta ethernet';
+  return wan.network;
+}
+
+function WanCard({
+  wan,
+  mwan,
+  deviceHostname,
+  onHealth,
+  onHostname,
+  onClone,
+  onPortal,
+}: {
+  wan: DashWan;
+  mwan: MwanInterface | null;
+  /** Nome del router: e' cio' che viene inviato in modalita' "nome del router". */
+  deviceHostname: string;
+  onHealth: () => void;
+  onHostname: () => void;
+  onClone: () => void;
+  onPortal: () => void;
+}) {
+  return (
+    <section class={`card uplink uplink--${wan.state}`}>
+      <header class="radio__head">
+        <div>
+          <h2 class="uplink__title">{wanTitle(wan)}</h2>
+          <p class="muted">
+            {stateLabel(wan)}
+            {wan.ssid ? ` · ${wan.ssid}` : ''}
+            {mwan ? ` · mwan3: ${statusLabel(mwan.status)}` : ''}
+          </p>
+        </div>
+        {wan.active && <span class="badge badge--ok">porta il traffico</span>}
+        {wan.portal?.state === 'portal' && <span class="badge badge--warn">login</span>}
+      </header>
+
+      {/* La verifica dell'uscita sta in alto, prima dei dettagli: e' la
+          domanda che ci si fa guardando questa scheda, e la risposta non deve
+          stare sotto tre righe di numeri. */}
+      {(wan.state === 'addressed' || wan.portal) && (
+        <PortalPanel wan={wan} onDone={onPortal} onClone={onClone} />
+      )}
+
+      {/* mwan3 controlla con un ping, che un portale lascia passare: puo'
+          quindi dichiarare online una WAN da cui non esce niente, e mandarci
+          sopra il traffico. Dirlo qui e' l'unico modo di spiegare perche' la
+          rete "funziona" e le pagine non si aprono. */}
+      {mwan && mwan.status === 'online' && wan.portal?.state === 'portal' && (
+        <p class="alert alert--warn">
+          Per mwan3 questa WAN è <strong>online</strong>: il suo controllo è un ping, e il
+          portale lo lascia passare. Finché non fai il login il traffico esce da qui e non
+          arriva da nessuna parte.
+        </p>
+      )}
+
+      {/* Il controllo di salute per singolo IP: e' quello che spiega PERCHE'
+          una WAN risulta giu', non solo che lo e'. */}
+      {mwan && mwan.enabled && mwan.tracking.length > 0 && (
+        <>
+          <header class="radio__head">
+            <h2>Controllo di salute</h2>
+            <button class="button button--ghost" onClick={onHealth}>
+              Modifica
+            </button>
+          </header>
+          {mwan.tracking.map((t) => (
+            <Row
+              key={t.ip}
+              label={t.ip}
+              value={
+                t.status === 'up'
+                  ? `${t.latency} ms · ${t.packetloss}% persi`
+                  : `irraggiungibile · ${t.packetloss}% persi`
+              }
+            />
+          ))}
+          <Row
+            label="Priorità / peso"
+            value={`${mwan.priority} / ${mwan.weight}`}
+          />
+        </>
+      )}
+      {mwan && !mwan.enabled && (
+        <p class="muted">Esclusa dal multi-WAN: mwan3 non la usa e non la controlla.</p>
+      )}
+
+      {/* Impostazione, non stato: si mostra anche quando la WAN e' giu', ed e'
+          proprio li' che serve poterla cambiare prima di riprovare. */}
+      <header class="radio__head">
+        <h2>Richiesta DHCP</h2>
+        <button class="button button--ghost" onClick={onHostname}>
+          Modifica
+        </button>
+      </header>
+      <Row
+        label="Nome inviato"
+        value={hostnameLabel(hostnameFromUci(wan.hostname), deviceHostname)}
+      />
+
+      {wan.state === 'addressed' || wan.state === 'no-address' ? (
+        <>
+          <Row label="Indirizzo" value={wan.ipv4 || 'nessuno'} />
+          <Row label="Gateway" value={wan.gateway || '—'} />
+          <Row label="DNS" value={wan.dns?.length ? wan.dns.join('  ') : '—'} />
+          <Row label="MAC in uso" value={wan.mac || '—'} />
+          {wan.kind === 'usb' && (
+            <>
+              <Row
+                label="Dispositivo"
+                value={
+                  wan.device
+                    ? `${wan.device}${wan.driver ? ` · ${wan.driver}` : ''}`
+                    : 'nessuno collegato'
+                }
+              />
+            </>
+          )}
+          {wan.kind === 'wifi' && (
+            <>
+              <Row
+                label="Segnale"
+                value={typeof wan.signal === 'number' ? `${wan.signal} dBm` : '—'}
+              />
+              <Row
+                label="Canale e rate"
+                value={`ch ${wan.channel || '—'}${wan.bitrate ? ` · ${Math.round(wan.bitrate / 1000)} Mbit/s` : ''}`}
+              />
+              <Row label="BSSID" value={wan.bssid || '—'} />
+            </>
+          )}
+
+          <h2>Traffico</h2>
+          <Row
+            label="Adesso"
+            value={`↓ ${formatRate(wan.rx_rate)}   ↑ ${formatRate(wan.tx_rate)}`}
+          />
+          <Row
+            label="Da questa sessione"
+            value={`↓ ${formatBytes(wan.rx_session)}   ↑ ${formatBytes(wan.tx_session)}`}
+          />
+        </>
+      ) : (
+        <p class="muted">{stateDetail(wan)}</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Nome inviato nella richiesta DHCP di una WAN.
+ *
+ * Vive sull'interfaccia logica, quindi la stessa scheda serve per il WiFi, per
+ * le porte ethernet e per il tethering. Passa da applica-e-conferma come ogni
+ * scrittura su `network`: cambiare il nome fa rinnovare il DHCP, e una WAN che
+ * non torna su deve poter essere annullata da sola.
+ *
+ * Su una WAN WiFi si aggiorna anche la rete salvata corrispondente: senza,
+ * alla prima riconnessione automatica travelD rimetterebbe il nome di prima e
+ * la modifica sembrerebbe sparita da sola.
+ */
+function HostnameSheet({
+  wan,
+  deviceHostname,
+  onClose,
+}: {
+  wan: DashWan;
+  deviceHostname: string;
+  onClose: (changed: boolean) => void;
+}) {
+  const apply = useApply();
+  const [choice, setChoice] = useState<HostnameChoice>(() => hostnameFromUci(wan.hostname));
+  const [saved, setSaved] = useState<SavedNetwork | null>(null);
+  const [done, setDone] = useState(false);
+
+  // La voce salvata di questa rete, se c'e': serve solo per il WiFi.
+  useEffect(() => {
+    if (wan.kind !== 'wifi' || !wan.ssid) return;
+    let cancelled = false;
+    void listSaved()
+      .then((list) => {
+        if (!cancelled) setSaved(findSaved(list, wan.ssid, wan.band) ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [wan.kind, wan.ssid, wan.band]);
+
+  const valid = choice.mode !== 'custom' || isValidHostname(choice.value.trim());
+
+  const go = async () => {
+    const ok = await apply.run(() => stageWanHostname(wan.network, choice));
+    if (!ok) return;
+
+    if (saved) {
+      try {
+        await updateNetwork(saved.section, {
+          hostname_mode: choice.mode,
+          hostname_value: choice.mode === 'custom' ? choice.value.trim() : '',
+        });
+      } catch {
+        // La WAN e' gia' cambiata: non averlo scritto anche fra le reti
+        // salvate si vede alla prossima riconnessione, non adesso.
+      }
+    }
+    setDone(true);
+  };
+
+  return (
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="sheet__panel card">
+        <h2>{wanTitle(wan)}</h2>
+
+        {apply.phase === 'idle' && (
+          <>
+            <HostnamePicker
+              choice={choice}
+              deviceHostname={deviceHostname}
+              onChange={setChoice}
+            />
+
+            <p class="muted">
+              Cambiarlo fa rinnovare l'indirizzo su questa WAN: può restare senza
+              connessione per qualche secondo.
+              {saved
+                ? ` Verrà aggiornata anche la rete salvata "${saved.ssid}", così la riconnessione automatica non lo rimette com'era.`
+                : ''}
+            </p>
+
+            <div class="sheet__actions">
+              <button class="button button--ghost" onClick={() => onClose(false)}>
+                Annulla
+              </button>
+              <button class="button button--primary" disabled={!valid} onClick={go}>
+                Salva
+              </button>
+            </div>
+          </>
+        )}
+
+        <ApplyStatus apply={apply} onClose={() => onClose(true)} />
+
+        {done && (
+          <>
+            <p class="alert alert--ok">Fatto.</p>
+            <div class="sheet__actions">
+              <button class="button button--primary" onClick={() => onClose(true)}>
+                Chiudi
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+export function Dashboard({ onLogout }: { onLogout: () => void }) {
+  // Due secondi come previsto dal budget di polling, e il timer si ferma
+  // quando la scheda non e' visibile: sul router il costo scende a zero.
+  const poll = usePoll<DashboardData>(() => getDashboard(), 2000);
+  // Lo stato di mwan3 cambia lentamente (il controllo gira ogni 5s) e la sua
+  // lettura costa parecchi processi: ogni 10s basta.
+  const mwanPoll = usePoll<Mwan>(() => getMwan(), 10000);
+
+  if (poll.error instanceof UbusError && poll.error.isAuthError) {
+    onLogout();
+  }
+
+  const data = poll.data;
+  const mwan = mwanPoll.data;
+  const [editingMwan, setEditingMwan] = useState(false);
+  const [health, setHealth] = useState<MwanInterface | null>(null);
+  const [rule, setRule] = useState<{ value: MwanRule | null } | null>(null);
+  const [hostnameWan, setHostnameWan] = useState<DashWan | null>(null);
+  const [cloneWan, setCloneWan] = useState<DashWan | null>(null);
+  const mwanOf = (wan: DashWan): MwanInterface | null =>
+    mwan?.interfaces.find((i) => i.network === wan.network) ?? null;
+
+  if (!data) {
+    return (
+      <main class="screen">
+        <header class="topbar">
+          <h1>Internet</h1>
+        </header>
+        {poll.loading ? (
+          <p class="muted">Caricamento…</p>
+        ) : (
+          <section class="card">
+            <p class="muted">
+              La dashboard è servita da travelD, che non risponde. Le altre schermate
+              funzionano lo stesso.
+            </p>
+            {poll.error && <p class="alert alert--warn alert--code">{poll.error.message}</p>}
+          </section>
+        )}
+      </main>
+    );
+  }
+
+  const overall = OVERALL[overallState(data.wans)];
+  const active = data.wans.find((w) => w.active);
+  return (
+    <main class="screen">
+      <header class="topbar">
+        <h1>Internet</h1>
+        <button class="button button--ghost" onClick={onLogout}>
+          Esci
+        </button>
+      </header>
+
+      <section class={`card uplink uplink--${overall.tone}`}>
+        <h2 class="uplink__title">{overall.text}</h2>
+        <p class="muted">
+          {active
+            ? `Il traffico esce da ${wanTitle(active)}${active.ssid ? ` · ${active.ssid}` : ''}.`
+            : 'Nessuna WAN sta portando traffico.'}
+        </p>
+        {/* Il titolo dice cosa succede, questa riga dice cosa fare: da sola
+            "Serve un login" lascerebbe a cercare dove. */}
+        {active?.portal?.state === 'portal' && (
+          <p class="muted">
+            Apri la pagina di accesso dalla scheda di {wanTitle(active)}, qui sotto.
+          </p>
+        )}
+        <p class="muted">
+          Riconnessione automatica {data.autoreconnect ? 'attiva' : 'spenta'}.{' '}
+          {data.portal_check === false ? 'Verifica dei portali spenta. ' : ''}
+          {mwan === null
+            ? 'Multi-WAN: lettura in corso.'
+            : !mwan.installed
+              ? 'Multi-WAN non installato: al prossimo setup con Internet.'
+              : !mwan.running
+                ? 'Multi-WAN installato ma mwan3 non risponde.'
+                : `Multi-WAN in ${MODE_LABEL[mwan.mode].toLowerCase()}` +
+                  (activeInterfaces(mwan).length > 0
+                    ? `, online: ${activeInterfaces(mwan)
+                        .map((i) => i.network)
+                        .join(', ')}.`
+                    : ', nessuna WAN online.')}
+        </p>
+      </section>
+
+      {/* Un kill switch sospeso e' l'unica cosa della VPN che sta anche qui.
+          Non e' duplicazione: durante una sospensione il traffico esce in
+          chiaro, e chi sta guardando questa schermata sta guardando proprio
+          come esce il traffico. Scoprirlo solo aprendo un'altra scheda
+          sarebbe il momento sbagliato. */}
+      {data.killswitch?.on && data.killswitch.resume_at > 0 && (
+        <p class="alert alert--warn">
+          Kill switch <strong>sospeso</strong>: il traffico esce in chiaro. Si riarma da solo
+          fra {Math.max(0, Math.ceil((data.killswitch.resume_at - data.at) / 60))} min.
+        </p>
+      )}
+
+      <MwanCard mwan={mwan} onEdit={() => setEditingMwan(true)} />
+
+      <RulesCard
+        mwan={mwan}
+        onAdd={() => setRule({ value: null })}
+        onEdit={(r) => setRule({ value: r })}
+      />
+
+      {data.wans.map((wan) => (
+        <WanCard
+          key={wan.network}
+          wan={wan}
+          mwan={mwanOf(wan)}
+          deviceHostname={data.system.hostname}
+          onHealth={() => setHealth(mwanOf(wan))}
+          onHostname={() => setHostnameWan(wan)}
+          onClone={() => setCloneWan(wan)}
+          onPortal={poll.refresh}
+        />
+      ))}
+
+      <PortalMemoryCard />
+
+      {data.wans.length === 0 && (
+        <section class="card">
+          <p class="muted">Nessuna WAN configurata nella zona firewall.</p>
+        </section>
+      )}
+
+      {data.last_error && <p class="alert alert--warn alert--code">{data.last_error}</p>}
+
+      {editingMwan && mwan && (
+        <MwanSheet
+          mwan={mwan}
+          onClose={(changed) => {
+            setEditingMwan(false);
+            if (changed) mwanPoll.refresh();
+          }}
+        />
+      )}
+
+      {rule && mwan && (
+        <RuleSheet
+          mwan={mwan}
+          rule={rule.value}
+          onClose={(changed) => {
+            setRule(null);
+            if (changed) mwanPoll.refresh();
+          }}
+        />
+      )}
+
+      {cloneWan && (
+        <MacCloneSheet
+          wan={cloneWan}
+          onClose={(changed) => {
+            setCloneWan(null);
+            if (changed) poll.refresh();
+          }}
+        />
+      )}
+
+      {hostnameWan && (
+        <HostnameSheet
+          wan={hostnameWan}
+          deviceHostname={data.system.hostname}
+          onClose={(changed) => {
+            setHostnameWan(null);
+            if (changed) poll.refresh();
+          }}
+        />
+      )}
+
+      {health && (
+        <HealthSheet
+          iface={health}
+          onClose={(changed) => {
+            setHealth(null);
+            if (changed) mwanPoll.refresh();
+          }}
+        />
+      )}
+    </main>
+  );
+}

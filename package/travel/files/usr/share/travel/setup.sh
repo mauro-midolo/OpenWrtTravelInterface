@@ -1,0 +1,470 @@
+#!/bin/sh
+# Configurazione lato router, eseguita da tools/deploy.ps1 dopo aver copiato i file.
+# Idempotente: puo' essere rilanciata quante volte si vuole senza effetti collaterali.
+#
+# Variabili d'ambiente riconosciute:
+#   TRAVEL_INSTALL_TTYD=1   installa anche il terminale web (richiede Internet)
+
+set -e
+
+say() { printf '  %s\n' "$*"; }
+
+# Aspettare che si esca prima di installare, e non lasciare mai `apk` senza un
+# limite di tempo. Su un router pulito un'installazione lanciata mentre mwan3 si
+# stava ancora avviando e' rimasta appesa per sempre: le sue regole mandano il
+# traffico in `unreachable` finche' non dichiara online una WAN.
+. /usr/share/travel/online.sh
+
+say "permessi sugli eseguibili"
+chmod 0755 /usr/libexec/rpcd/travel
+chmod 0755 /usr/share/travel/setup.sh
+chmod 0755 /etc/init.d/travel
+chmod 0755 /etc/hotplug.d/net/30-travel-usb
+chmod 0755 /etc/hotplug.d/net/40-travel-vpn
+chmod 0755 /etc/hotplug.d/usb/20-travel-usb-mode
+chmod 0755 /usr/share/travel/usb-mode.sh
+chmod 0755 /usr/share/travel/vpn-setup.sh
+chmod 0644 /usr/share/travel/online.sh
+chmod 0644 /usr/share/travel/traveld.uc
+chmod 0644 /usr/share/travel/probe.uc
+chmod 0644 /usr/share/rpcd/acl.d/travel.json
+
+# uhttpd deve esporre il canale /ubus: e' l'unica via di comunicazione della UI
+# (decisione D3/D4). Su un'installazione con LuCI c'e' quasi sempre gia'.
+if [ -z "$(uci -q get uhttpd.main.ubus_prefix)" ]; then
+	say "abilito il canale /ubus in uhttpd"
+	uci set uhttpd.main.ubus_prefix='/ubus'
+	uci commit uhttpd
+	NEED_UHTTPD_RELOAD=1
+else
+	say "canale /ubus gia' presente"
+fi
+
+# La radice del router porta all'interfaccia da viaggio.
+#
+# `/www/index.html` arriva da luci-base e rimanda a `/cgi-bin/luci`. Qui viene
+# sostituito con un rimando a `/travel/`, cosi' digitare l'indirizzo del router
+# apre l'interfaccia che si usa tutti i giorni invece di quella di emergenza.
+#
+# LuCI non viene toccata: resta esattamente dov'era, e la pagina di rimando la
+# elenca. Anzi, e' proprio la ragione per cui questa pagina ha due link e non
+# un redirect secco - se un giorno la SPA non parte, la radice del router deve
+# comunque offrire una via d'uscita che non dipende da lei.
+#
+# L'originale si conserva una volta sola: un aggiornamento di luci-base
+# riscrive il suo index.html, e da li' basta rilanciare questo script.
+if ! grep -q 'travel-ui redirect' /www/index.html 2>/dev/null; then
+	if [ -f /www/index.html ] && [ ! -f /www/index.html.luci ]; then
+		say "conservo l'index.html di LuCI in /www/index.html.luci"
+		cp /www/index.html /www/index.html.luci
+	fi
+
+	say "la radice del router apre /travel/"
+	cat > /www/index.html <<'EOF'
+<!DOCTYPE html>
+<!-- travel-ui redirect -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=/travel/">
+<title>Router da viaggio</title>
+</head>
+<body style="font-family: system-ui, sans-serif; padding: 2rem; line-height: 1.6">
+<p><a href="/travel/">Interfaccia di gestione</a></p>
+<p><a href="/cgi-bin/luci/">LuCI (configurazione avanzata)</a></p>
+</body>
+</html>
+EOF
+else
+	say "la radice del router apre gia' /travel/"
+fi
+
+if [ ! -f /etc/config/travel ]; then
+	say "creo /etc/config/travel"
+	cat > /etc/config/travel <<'EOF'
+config globals 'globals'
+	option installed_phase '0'
+EOF
+else
+	say "/etc/config/travel gia' presente, non lo tocco"
+fi
+
+# Un'interfaccia logica PER RADIO, non una sola condivisa.
+#
+# Due STA agganciate alla stessa interfaccia logica si contendono lo stesso
+# indirizzo e una delle due resta senza: sono due uplink distinti, con IP,
+# gateway, DNS e - in Fase 3 - metrica di route separati.
+#
+# Non hanno un device proprio: e' la wifi-iface in modo sta che si aggancia
+# tramite `option network <nome>`.
+WAN_ZONE=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'\$/\1/p" | head -n 1)
+
+# Ruolo di fabbrica delle due porte ethernet: eth0 WAN, eth1 dentro il bridge
+# LAN. E' la rete di sicurezza del dispositivo - se una modifica sbagliata
+# rompe il WiFi o la configurazione a monte, eth1 resta un modo per rientrare
+# via cavo che non dipende da nient'altro.
+#
+# Una volta sola, come le altre impostazioni dell'utente in questo script: la
+# schermata "Porte ethernet" permette di commutarle, e un redeploy non deve
+# riportarle indietro sopra una scelta fatta li'.
+if [ "$(uci -q get travel.globals.eth_roles_init)" != "1" ]; then
+	say "porte ethernet: eth0 WAN, eth1 LAN (rete di sicurezza)"
+
+	BRLAN_SECTION=""
+	for s in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^.]*\)=device$/\1/p'); do
+		if [ "$(uci -q get "network.$s.name")" = "br-lan" ]; then
+			BRLAN_SECTION="$s"
+			break
+		fi
+	done
+
+	if [ -z "$BRLAN_SECTION" ]; then
+		say "ATTENZIONE: sezione device br-lan non trovata, salto la configurazione delle porte"
+	else
+		BRIDGE_PORTS=$(uci -q get "network.$BRLAN_SECTION.ports")
+
+		if printf '%s\n' "$BRIDGE_PORTS" | tr ' ' '\n' | grep -qx eth1; then
+			say "eth1 gia' nel bridge LAN"
+		else
+			say "aggiungo eth1 al bridge LAN"
+			uci add_list "network.$BRLAN_SECTION.ports=eth1"
+			NEED_NETWORK_RELOAD=1
+		fi
+
+		if printf '%s\n' "$BRIDGE_PORTS" | tr ' ' '\n' | grep -qx eth0; then
+			say "tolgo eth0 dal bridge LAN"
+			uci del_list "network.$BRLAN_SECTION.ports=eth0"
+			NEED_NETWORK_RELOAD=1
+		fi
+		uci commit network
+
+		# Riusa l'interfaccia 'wan' se gia' esiste, come su qualunque immagine
+		# OpenWrt di fabbrica: altrimenti la crea da zero.
+		if [ -n "$(uci -q get network.wan)" ]; then
+			say "interfaccia wan gia' presente, la punto su eth0"
+		else
+			say "creo l'interfaccia wan (eth0, DHCP)"
+			uci set network.wan=interface
+			uci set network.wan.proto=dhcp
+		fi
+		uci set network.wan.device=eth0
+		# IPv6 disattivato e nessun nome nel DHCP, per coerenza con le altre WAN.
+		uci set network.wan.ipv6=0
+		uci set network.wan.hostname='*'
+		uci commit network
+		NEED_NETWORK_RELOAD=1
+
+		if [ -n "$WAN_ZONE" ]; then
+			if uci -q get "firewall.$WAN_ZONE.network" | tr ' ' '\n' | grep -qx wan; then
+				say "wan gia' nella zona firewall wan"
+			else
+				say "aggiungo wan alla zona firewall wan"
+				uci add_list "firewall.$WAN_ZONE.network=wan"
+				uci commit firewall
+				NEED_FIREWALL_RELOAD=1
+			fi
+		else
+			say "ATTENZIONE: zona firewall 'wan' non trovata, wan non e' stata aggiunta"
+		fi
+	fi
+
+	uci set travel.globals.eth_roles_init=1
+	uci commit travel
+else
+	say "porte ethernet: gia' inizializzate, non le tocco (impostazione dell'utente)"
+fi
+
+for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+	net="wwan_$radio"
+
+	if [ -z "$(uci -q get "network.$net")" ]; then
+		say "creo l'interfaccia di rete $net (DHCP)"
+		uci set "network.$net=interface"
+		uci set "network.$net.proto=dhcp"
+		# IPv6 disattivato sulle WAN per scelta esplicita: mwan3 lo gestisce a
+		# meta', i captive portal peggio, ed e' traffico che sfugge al failover.
+		uci set "network.$net.ipv6=0"
+		# Nessun nome nella richiesta DHCP: `*` e' il modo in cui netifd dice
+		# "non mandarlo". Senza l'opzione manderebbe il nome del router, che
+		# resterebbe scritto nella lista dei client di ogni rete a cui ci si
+		# aggancia - alberghi compresi.
+		uci set "network.$net.hostname=*"
+		uci commit network
+		NEED_NETWORK_RELOAD=1
+	else
+		say "interfaccia $net gia' presente"
+	fi
+
+	# Senza zona firewall il traffico verso la rete a monte non viene
+	# mascherato e i client della LAN non escono.
+	if [ -n "$WAN_ZONE" ]; then
+		if uci -q get "firewall.$WAN_ZONE.network" | tr ' ' '\n' | grep -qx "$net"; then
+			say "$net gia' nella zona firewall wan"
+		else
+			say "aggiungo $net alla zona firewall wan"
+			uci add_list "firewall.$WAN_ZONE.network=$net"
+			uci commit firewall
+			NEED_FIREWALL_RELOAD=1
+		fi
+	else
+		say "ATTENZIONE: zona firewall 'wan' non trovata, $net non e' stata aggiunta"
+	fi
+done
+
+# Interfaccia del tethering USB. Esiste sempre, ma nasce disattivata: il device
+# lo scrive lo script di hotplug quando attacchi il telefono, e il flag
+# `disabled` e' cio' che la tiene fuori dall'elenco delle WAN finche' non c'e'
+# niente collegato.
+if [ -z "$(uci -q get network.wan_usb)" ]; then
+	say "creo l'interfaccia di rete wan_usb (tethering, disattivata)"
+	uci set network.wan_usb=interface
+	uci set network.wan_usb.proto=dhcp
+	uci set network.wan_usb.ipv6=0
+	uci set network.wan_usb.hostname='*'
+	uci set network.wan_usb.disabled=1
+	uci commit network
+	NEED_NETWORK_RELOAD=1
+else
+	say "interfaccia wan_usb gia' presente"
+fi
+
+if [ -n "$WAN_ZONE" ]; then
+	if uci -q get "firewall.$WAN_ZONE.network" | tr ' ' '\n' | grep -qx wan_usb; then
+		say "wan_usb gia' nella zona firewall wan"
+	else
+		say "aggiungo wan_usb alla zona firewall wan"
+		uci add_list "firewall.$WAN_ZONE.network=wan_usb"
+		uci commit firewall
+		NEED_FIREWALL_RELOAD=1
+	fi
+fi
+
+# Nome inviato nella richiesta DHCP: spento su TUTTE le WAN gia' esistenti,
+# comprese quelle via cavo create prima che l'impostazione esistesse.
+#
+# Una volta sola, e la cosa resta segnata in travel: dopo, la scelta e'
+# dell'utente, e rilanciare questo script non deve riportarla indietro. Chi
+# vuole mandare un nome lo riaccende dall'interfaccia, per singola WAN.
+if [ "$(uci -q get travel.globals.dhcp_hostname_init)" != "1" ]; then
+	for net in $(uci -q get "firewall.$WAN_ZONE.network"); do
+		[ -n "$(uci -q get "network.$net")" ] || continue
+		if [ -z "$(uci -q get "network.$net.hostname")" ]; then
+			say "$net: nessun nome nella richiesta DHCP"
+			uci set "network.$net.hostname=*"
+			NEED_NETWORK_RELOAD=1
+		fi
+	done
+	uci commit network
+	uci set travel.globals.dhcp_hostname_init=1
+	uci commit travel
+fi
+
+# Migrazione dalla vecchia interfaccia unica: le STA gia' configurate vengono
+# spostate su quella della loro radio, altrimenti dopo l'aggiornamento
+# resterebbero agganciate a un'interfaccia che non usiamo piu'.
+for section in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+	[ "$(uci -q get "wireless.$section.mode")" = "sta" ] || continue
+	[ "$(uci -q get "wireless.$section.network")" = "wwan" ] || continue
+	radio=$(uci -q get "wireless.$section.device")
+	[ -n "$radio" ] || continue
+	say "sposto $section da wwan a wwan_$radio"
+	uci set "wireless.$section.network=wwan_$radio"
+	uci commit wireless
+	NEED_WIFI_RELOAD=1
+done
+
+# La vecchia wwan si rimuove solo quando non la usa piu' nessuno.
+if [ -n "$(uci -q get network.wwan)" ]; then
+	if uci show wireless 2>/dev/null | grep -q "\.network='wwan'"; then
+		say "wwan ancora in uso, la lascio"
+	else
+		say "rimuovo la vecchia interfaccia wwan"
+		uci -q delete network.wwan
+		uci commit network
+		if [ -n "$WAN_ZONE" ]; then
+			uci -q del_list "firewall.$WAN_ZONE.network=wwan"
+			uci commit firewall
+			NEED_FIREWALL_RELOAD=1
+		fi
+		NEED_NETWORK_RELOAD=1
+	fi
+fi
+
+if [ "$NEED_FIREWALL_RELOAD" = "1" ]; then
+	/etc/init.d/firewall reload >/dev/null 2>&1
+fi
+if [ "$NEED_NETWORK_RELOAD" = "1" ]; then
+	/etc/init.d/network reload >/dev/null 2>&1
+fi
+if [ "$NEED_WIFI_RELOAD" = "1" ]; then
+	wifi reload >/dev/null 2>&1
+fi
+
+if [ "$TRAVEL_INSTALL_TTYD" = "1" ]; then
+	if [ -x /usr/bin/ttyd ]; then
+		say "terminale web gia' installato"
+	else
+		say "installo il terminale web (serve Internet)"
+		if travel_apk_add luci-app-ttyd; then
+			/etc/init.d/ttyd enable  >/dev/null 2>&1 || true
+			/etc/init.d/ttyd start   >/dev/null 2>&1 || true
+			say "terminale web installato"
+		else
+			say "ATTENZIONE: installazione fallita (Internet assente?), riprova piu' tardi"
+		fi
+	fi
+fi
+
+# Parametri della riconnessione automatica e della verifica dei portali. Creati
+# con valori prudenti se mancano, mai sovrascritti: sono impostazioni dell'utente.
+#
+# `portal_check` nasce acceso, al contrario di `autoreconnect`: non cambia
+# niente sul router - manda una richiesta HTTP e legge cosa torna - e senza di
+# lui la dashboard tornerebbe a dire "collegato" su una rete che chiede un
+# login. L'indirizzo di verifica non si scrive: il valore incorporato vale
+# finche' non c'e' `travel.globals.portal_url` a scavalcarlo.
+for pair in "autoreconnect=0" "rssi_min=-78" "roam_hysteresis=8" \
+            "blacklist_after=3" "blacklist_ttl=600" "scan_interval=60" \
+            "portal_check=1"; do
+	opt="${pair%%=*}"
+	val="${pair#*=}"
+	if [ -z "$(uci -q get "travel.globals.$opt")" ]; then
+		uci set "travel.globals.$opt=$val"
+		NEED_TRAVEL_COMMIT=1
+	fi
+done
+if [ "$NEED_TRAVEL_COMMIT" = "1" ]; then
+	say "aggiungo i parametri di riconnessione a /etc/config/travel"
+	uci commit travel
+fi
+
+# Porta USB alla massima velocita' che il dispositivo collegato sa negoziare
+# (Fase 3d). La limitazione a USB 2.0 esiste ancora come interruttore nella
+# scheda Dispositivo, ma non e' piu' il default: nella sessione in cui era nata,
+# lo stack USB del telefono era incantato e a risolvere e' stato un suo riavvio.
+# Con il telefono sano la SuperSpeed non e' mai stata riprovata, e non si paga
+# un limite permanente su un sospetto mai confermato.
+if [ -z "$(uci -q get travel.usb)" ]; then
+	say "porta USB: velocita' piena (travel.usb.force_usb2=0)"
+	uci set travel.usb=usb
+	uci set travel.usb.force_usb2=0
+	uci commit travel
+fi
+
+# Chi aveva gia' la porta forzata a USB 2.0 dal default di prima torna alla
+# velocita' piena, una volta sola: era un default, non una scelta. Da qui in
+# poi comanda l'interruttore, e un redeploy non lo tocca piu'.
+if [ "$(uci -q get travel.globals.usb_speed_reset)" != "1" ]; then
+	if [ "$(uci -q get travel.usb.force_usb2)" = "1" ]; then
+		say "porta USB: tolgo il limite a USB 2.0 ereditato dal default precedente"
+		uci set travel.usb.force_usb2=0
+	fi
+	uci set travel.globals.usb_speed_reset=1
+	uci commit travel
+fi
+sh /usr/share/travel/usb-mode.sh apply
+say "porta USB: $(sh /usr/share/travel/usb-mode.sh status)"
+
+# Driver per il tethering USB.
+#
+# Stavano dentro mwan3-setup.sh, che e' il posto sbagliato per due motivi: non
+# hanno niente a che vedere con il multi-WAN, e quello script esce prima di
+# arrivarci se mwan3 non si installa. Il risultato era un router senza i driver
+# e senza niente che lo dicesse - il telefono mostrava il tethering acceso e qui
+# non compariva nessuna WAN.
+#
+# **La prova e' che il modulo si CARICHI, non che il file esista.** La prima
+# versione di questo controllo guardava il .ko sul disco, e su un router dove i
+# pacchetti erano installati ma `usbnet` non si caricava rispondeva "gia'
+# presenti" tirando dritto - il tethering restava invisibile e lo script diceva
+# che era tutto a posto. Il file sul disco non e' lo stato che conta.
+#
+# `usbnet` va per primo: e' la base di cdc_ncm, rndis_host e cdc_ether, e
+# quando non si carica lui il log riempie di "dependency not loaded usbnet" e
+# sembrano rotti tutti e tre indipendentemente.
+USB_NET_MODULES="usbnet cdc_ncm rndis_host cdc_ether"
+USB_NET_PACKAGES="kmod-usb-net kmod-usb-net-cdc-ncm kmod-usb-net-rndis kmod-usb-net-cdc-ether"
+
+# Vero se il modulo e' in memoria, provando a caricarlo se non lo e' gia'.
+usb_net_module_ok() {
+	[ -d "/sys/module/$1" ] && return 0
+	modprobe "$1" >/dev/null 2>&1 || true
+	[ -d "/sys/module/$1" ]
+}
+
+usb_net_broken() {
+	local mod list=""
+	for mod in $USB_NET_MODULES; do
+		usb_net_module_ok "$mod" || list="$list $mod"
+	done
+	printf '%s' "$list"
+}
+
+BROKEN_USB=$(usb_net_broken)
+
+if [ -n "$BROKEN_USB" ]; then
+	say "driver per il tethering USB da sistemare:$BROKEN_USB"
+	# shellcheck disable=SC2086
+	travel_apk_add $USB_NET_PACKAGES || true
+
+	# Secondo giro di caricamento, e non e' ridondante: durante l'installazione
+	# kmodloader puo' provare a caricare un driver prima che `usbnet` sia
+	# scritto sul disco, e fallire per una dipendenza che un attimo dopo c'e'.
+	# E' il motivo per cui rilanciare lo stesso `apk add` a mano "risolveva".
+	BROKEN_USB=$(usb_net_broken)
+fi
+
+if [ -n "$BROKEN_USB" ]; then
+	say "ATTENZIONE: questi moduli non si caricano:$BROKEN_USB"
+	for mod in $BROKEN_USB; do
+		say "  modprobe $mod: $(modprobe "$mod" 2>&1 | head -n 1)"
+	done
+	say "Senza, un telefono in tethering resta invisibile: lui mostra la"
+	say "condivisione accesa e qui non compare nessuna WAN. Le cause tipiche"
+	say "sono due: mancava Internet adesso (rilancia il deploy quando c'e'),"
+	say "oppure i kmod non combaciano con il kernel in esecuzione - in quel"
+	say "caso servono i pacchetti della stessa build del firmware."
+else
+	say "driver per il tethering USB caricati"
+fi
+
+# Multi-WAN (Fase 3): installazione e configurazione generata. Non blocca il
+# resto se manca Internet: lo script lo dice e si esce puliti.
+chmod 0755 /usr/share/travel/mwan3-setup.sh
+say "multi-WAN"
+sh /usr/share/travel/mwan3-setup.sh
+
+# VPN (Fase 6a): tailscale e la regola del kill switch. Come per il multi-WAN,
+# la mancanza di Internet non blocca il resto: lo script lo dice ed esce.
+say "VPN"
+sh /usr/share/travel/vpn-setup.sh
+
+say "avvio travelD"
+/etc/init.d/travel enable  >/dev/null 2>&1
+/etc/init.d/travel restart >/dev/null 2>&1
+
+say "riavvio rpcd"
+/etc/init.d/rpcd restart
+# rpcd rilegge i plugin all'avvio: piccola attesa prima dello smoke test.
+sleep 2
+
+if [ "$NEED_UHTTPD_RELOAD" = "1" ]; then
+	say "ricarico uhttpd"
+	/etc/init.d/uhttpd reload
+fi
+
+say "verifica: ubus call travel status"
+ubus call travel status
+
+printf '\n'
+say "verifica: ubus call traveld status"
+if ubus call traveld status 2>/dev/null; then
+	:
+else
+	say "travelD non ha registrato l'oggetto ubus. Cosa dice il log:"
+	logread 2>/dev/null | grep -i traveld | tail -n 15
+	say ""
+	say "Il resto dell'interfaccia funziona lo stesso: travelD serve solo alla"
+	say "riconnessione automatica, che non e' ancora attiva."
+fi

@@ -1,0 +1,9 @@
+# Tutto cio' che finisce sul router deve avere fine riga LF: busybox ash e
+# ucode non tollerano il \r di Windows (es. "set -e\r" -> "illegal option").
+# core.autocrlf=true su Windows altrimenti li converte in CRLF al checkout,
+# ed e' esattamente quello che ha rotto il deploy.
+package/** text eol=lf
+tools/*.sh text eol=lf
+
+# Il file stesso: niente motivo per farlo oscillare fra piattaforme.
+.gitattributes text eol=lf

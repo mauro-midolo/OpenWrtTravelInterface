@@ -1,0 +1,101 @@
+#!/bin/sh
+# Aggancia il tethering USB a un'interfaccia logica stabile (requisito A).
+#
+# Il nome che il kernel da' al device - usb0, eth2, wwan0, enp0s... - dipende
+# dall'ordine di enumerazione e dal telefono attaccato: non e' deterministico,
+# e scriverlo a mano nella configurazione significa rifarlo ogni volta.
+#
+# Quello che invece e' stabile e' il DRIVER: un telefono in tethering si
+# presenta sempre con uno di una manciata di driver noti. Qui si riconosce il
+# device da quello e lo si assegna sempre a `wan_usb`, che e' il nome che il
+# resto del sistema - firewall, mwan3, interfaccia - conosce e non cambia mai.
+
+[ -n "$DEVICENAME" ] || exit 0
+
+LOGICAL=wan_usb
+
+log() { logger -t travel-usb "$@"; }
+
+# Nome del driver se il device e' un tethering USB, altrimenti niente.
+#
+# In rimozione questa non funziona: il device e' gia' sparito da sysfs. Per
+# quello il ramo `remove` confronta il nome con quello configurato, che e'
+# l'unica traccia rimasta.
+usb_net_driver() {
+	local link name
+
+	link=$(readlink -f "/sys/class/net/$1/device/driver" 2>/dev/null)
+	[ -n "$link" ] || return 1
+	name=$(basename "$link")
+
+	case "$name" in
+		# Android moderno espone NCM, quelli piu' vecchi RNDIS. Gli altri
+		# coprono iPhone e le chiavette che si presentano come ethernet.
+		cdc_ncm|cdc_mbim|cdc_ether|cdc_eem|rndis_host|ipheth)
+			printf '%s' "$name"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+case "$ACTION" in
+add)
+	if ! driver=$(usb_net_driver "$DEVICENAME"); then
+		# Un device di rete su bus USB che non riconosciamo va detto: e' la
+		# differenza fra "il telefono non e' collegato" e "il telefono e'
+		# collegato con un driver che non e' nel nostro elenco", che dal lato
+		# dell'interfaccia sono lo stesso schermo vuoto. Il log e' l'unico
+		# posto in cui quel dettaglio puo' comparire.
+		if [ -e "/sys/class/net/$DEVICENAME/device" ]; then
+			unknown=$(basename "$(readlink -f "/sys/class/net/$DEVICENAME/device/driver" 2>/dev/null)" 2>/dev/null)
+			bus=$(basename "$(readlink -f "/sys/class/net/$DEVICENAME/device/subsystem" 2>/dev/null)" 2>/dev/null)
+			[ "$bus" = "usb" ] && log "$DEVICENAME: driver '$unknown' non riconosciuto come tethering, ignorato"
+		fi
+		exit 0
+	fi
+
+	current=$(uci -q get "network.$LOGICAL.device")
+
+	# Un secondo tethering attaccato non porta via il posto al primo, che
+	# potrebbe essere quello che sta portando il traffico in questo momento.
+	if [ -n "$current" ] && [ "$current" != "$DEVICENAME" ] && [ -e "/sys/class/net/$current" ]; then
+		log "ignoro $DEVICENAME: $LOGICAL sta gia' usando $current"
+		exit 0
+	fi
+
+	# Gia' agganciato e attivo: niente da fare, e soprattutto niente scritture
+	# in flash per un evento che non cambia nulla.
+	if [ "$current" = "$DEVICENAME" ] && [ "$(uci -q get "network.$LOGICAL.disabled")" != "1" ]; then
+		exit 0
+	fi
+
+	log "tethering $DEVICENAME ($driver) agganciato a $LOGICAL"
+	uci set "network.$LOGICAL.device=$DEVICENAME"
+	uci set "network.$LOGICAL.disabled=0"
+	uci commit network
+
+	# `uci commit` scrive il file, non la memoria di netifd: senza reload
+	# `ifup` lavorerebbe ancora sulla configurazione di prima - quella in cui
+	# l'interfaccia e' disabilitata e non ha nessun device - e non alzerebbe
+	# niente. E' la differenza fra un tethering che compare e uno che resta
+	# invisibile all'interfaccia pur essendo attaccato.
+	ubus call network reload >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1
+	/sbin/ifup "$LOGICAL"
+	;;
+
+remove)
+	[ "$(uci -q get "network.$LOGICAL.device")" = "$DEVICENAME" ] || exit 0
+
+	log "tethering $DEVICENAME scollegato"
+	# L'interfaccia si disattiva ma non si cancella: il nome del device resta
+	# scritto, e alla prossima connessione dello stesso telefono si riparte
+	# senza riconfigurare niente. Il flag `disabled` e' anche cio' che la fa
+	# sparire dall'elenco delle WAN finche' non c'e' nulla attaccato.
+	uci set "network.$LOGICAL.disabled=1"
+	uci commit network
+	/sbin/ifdown "$LOGICAL"
+	ubus call network reload >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1
+	;;
+esac

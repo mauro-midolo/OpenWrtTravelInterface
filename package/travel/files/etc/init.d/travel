@@ -1,0 +1,74 @@
+#!/bin/sh /etc/rc.common
+# Avvia travelD sotto procd.
+
+START=95
+STOP=10
+USE_PROCD=1
+
+DAEMON=/usr/share/travel/traveld.uc
+PROBE=/usr/share/travel/probe.uc
+UCODE=/usr/bin/ucode
+
+# Con quale opzione questo ucode esegue un file come script.
+#
+# Le versioni non concordano fra loro: alcune trattano il file come template se
+# non glielo si dice, e il daemon verrebbe stampato invece che eseguito. Invece
+# di indovinare, si prova: costa qualche millisecondo all'avvio e non sbaglia.
+ucode_flag() {
+	local flag
+
+	for flag in "-R" "-S" ""; do
+		if [ -n "$flag" ]; then
+			"$UCODE" "$flag" "$PROBE" 2>/dev/null | grep -q TRAVELOK && {
+				printf '%s' "$flag"
+				return 0
+			}
+		else
+			"$UCODE" "$PROBE" 2>/dev/null | grep -q TRAVELOK && return 0
+		fi
+	done
+
+	return 1
+}
+
+start_service() {
+	local flag
+
+	[ -x "$UCODE" ] || {
+		echo "travel: manca /usr/bin/ucode" >&2
+		return 1
+	}
+
+	flag=$(ucode_flag) || {
+		echo "travel: nessuna opzione di ucode esegue uno script, daemon non avviato" >&2
+		return 1
+	}
+
+	# La modalita' della porta USB si riapplica anche qui, oltre che
+	# dall'hotplug del root hub: al boot l'ordine fra i due non e' garantito,
+	# e l'operazione e' idempotente.
+	sh /usr/share/travel/usb-mode.sh apply 2>/dev/null
+
+	# Stessa ragione per la parte della VPN che vive in RAM: l'inoltro IP e la
+	# regola che rimanda nel tunnel le risposte ai nodi del tailnet, senza la
+	# quale mwan3 le manda fuori dalla WAN. L'ordine fra sysctl.d, mwan3 e
+	# tailscaled all'avvio non e' garantito, e l'operazione e' idempotente.
+	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
+
+	procd_open_instance travel
+	if [ -n "$flag" ]; then
+		procd_set_param command "$UCODE" "$flag" "$DAEMON"
+	else
+		procd_set_param command "$UCODE" "$DAEMON"
+	fi
+	# Se muore lo si riavvia, ma senza avvitarsi: cinque tentativi a distanza
+	# di cinque secondi, poi si ferma e resta traccia nel log.
+	procd_set_param respawn 3600 5 5
+	procd_set_param stderr 1
+	procd_set_param stdout 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "travel" "wireless"
+}

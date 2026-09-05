@@ -1,0 +1,16 @@
+#!/bin/sh
+# Quando compare un root hub USB - al boot, o dopo un riavvio del controller -
+# si riapplica la modalita' della porta. Lo stato delle porte vive nel
+# controller: un rebind lo ricrea da zero e lo riporta al default.
+#
+# I root hub hanno DEVPATH che finisce in usbN; tutto il resto non interessa.
+
+[ "$ACTION" = "add" ] || exit 0
+[ "$DEVTYPE" = "usb_device" ] || exit 0
+
+case "${DEVPATH##*/}" in
+	usb[0-9]*) ;;
+	*) exit 0 ;;
+esac
+
+sh /usr/share/travel/usb-mode.sh apply

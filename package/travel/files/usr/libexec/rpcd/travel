@@ -1,0 +1,4067 @@
+#!/bin/sh
+# Oggetto ubus "travel" - plugin rpcd.
+#
+# Metodi in sola lettura, senza argomenti letti da stdin: non esiste superficie
+# di injection. Verra' sostituito dal daemon ucode quando servira' stato
+# persistente e timer (riconnessione automatica, storico, health check).
+
+. /usr/share/libubox/jshn.sh
+
+VERSION_FILE=/usr/share/travel/version
+
+# Legge la prima riga di un file, stringa vuota se assente o illeggibile.
+first_line() {
+	[ -r "$1" ] || return 0
+	read -r _line < "$1" 2>/dev/null && printf '%s' "$_line"
+}
+
+meminfo_kb() {
+	awk -v k="$1:" '$1 == k { print $2; exit }' /proc/meminfo
+}
+
+# Primo sensore termico disponibile, in milligradi. Non tutti i target ne hanno.
+soc_temp_mc() {
+	local zone
+	for zone in /sys/class/thermal/thermal_zone*/temp; do
+		[ -r "$zone" ] || continue
+		first_line "$zone"
+		return 0
+	done
+}
+
+# Nome reale (cfgXXXX) della prima sezione di un tipo.
+#
+# La forma "@tipo[0]" e' comoda da riga di comando ma `uci set` via ubus non la
+# accetta: serve il nome interno, che solo ubus sa dire.
+anon_section() {
+	ubus call uci get "{\"config\":\"$1\",\"type\":\"$2\"}" 2>/dev/null \
+		| jsonfilter -e '@.values[*]' \
+		| while read -r _obj; do
+			[ -n "$_obj" ] || continue
+			printf '%s' "$_obj" | jsonfilter -e '@[".name"]'
+			break
+		done
+}
+
+method_status() {
+	local uptime idle load1 load5 load15 temp
+
+	read -r uptime idle < /proc/uptime
+	read -r load1 load5 load15 _rest < /proc/loadavg
+	temp=$(soc_temp_mc)
+
+	json_init
+	json_add_string version  "$(first_line "$VERSION_FILE")"
+	json_add_string phase    "8"
+	json_add_string model    "$(first_line /tmp/sysinfo/model)"
+	json_add_string release  "$(. /etc/openwrt_release 2>/dev/null; printf '%s' "$DISTRIB_DESCRIPTION")"
+	json_add_string hostname "$(first_line /proc/sys/kernel/hostname)"
+	json_add_int    uptime   "${uptime%%.*}"
+
+	json_add_array load
+	json_add_double "$load1"
+	json_add_double "$load5"
+	json_add_double "$load15"
+	json_close_array
+
+	json_add_object memory
+	json_add_int total_kb     "$(meminfo_kb MemTotal)"
+	json_add_int available_kb "$(meminfo_kb MemAvailable)"
+	json_close_object
+
+	json_add_object overlay
+	set -- $(df -k /overlay 2>/dev/null | awk 'NR == 2 { print $2, $4 }')
+	json_add_int total_kb     "${1:-0}"
+	json_add_int available_kb "${2:-0}"
+	json_close_object
+
+	# Campo assente se il target non ha sensori: meglio di un valore inventato.
+	[ -n "$temp" ] && json_add_int temp_mc "$temp"
+
+	json_dump
+}
+
+# Nome del router: quello vero in RAM e la sezione uci in cui cambiarlo.
+#
+# I due possono divergere - il nome scritto in uci diventa quello di sistema
+# solo dopo il reload - e vanno detti tutti e due: la UI mostra quello attivo e
+# scrive nella sezione, che senza il nome reale non sarebbe raggiungibile.
+method_system() {
+	local section
+
+	section=$(anon_section system system)
+
+	json_init
+	json_add_string hostname  "$(first_line /proc/sys/kernel/hostname)"
+	json_add_string configured "$(uci -q get "system.$section.hostname")"
+	json_add_string section   "$section"
+	json_dump
+}
+
+band_label() {
+	case "$1" in
+		2g) printf '2.4' ;;
+		5g) printf '5' ;;
+		*)  printf '' ;;
+	esac
+}
+
+wireless_status() {
+	local status
+	status=$(ubus call network.wireless status 2>/dev/null)
+	if [ -n "$status" ]; then
+		printf '%s' "$status"
+	else
+		printf '{}'
+	fi
+}
+
+# Nome dell'interfaccia di sistema che corrisponde a una sezione uci.
+ifname_of_section() {
+	local status="$1" radio="$2" want="$3" i=0 section
+
+	while [ "$i" -lt 8 ]; do
+		section=$(printf '%s' "$status" | jsonfilter -e "@.$radio.interfaces[$i].section")
+		[ -n "$section" ] || break
+		if [ "$section" = "$want" ]; then
+			printf '%s' "$status" | jsonfilter -e "@.$radio.interfaces[$i].ifname"
+			return 0
+		fi
+		i=$((i + 1))
+	done
+}
+
+# Interfaccia viva su una radio, qualunque essa sia: serve per scansionare.
+# Una radio senza nessuna interfaccia attiva non e' scansionabile.
+live_device_of() {
+	local status="$1" radio="$2" i=0 section ifname device=""
+
+	while [ "$i" -lt 8 ]; do
+		section=$(printf '%s' "$status" | jsonfilter -e "@.$radio.interfaces[$i].section")
+		[ -n "$section" ] || break
+		ifname=$(printf '%s' "$status" | jsonfilter -e "@.$radio.interfaces[$i].ifname")
+		[ -n "$ifname" ] && device="$ifname"
+		i=$((i + 1))
+	done
+	printf '%s' "$device"
+}
+
+# Elenco delle radio con il loro stato reale.
+#
+# Esiste per due motivi, entrambi seri:
+#
+#  1. `network.wireless status` restituisce la PASSWORD del WiFi in chiaro.
+#     Non deve mai raggiungere il browser. Qui si prende solo cio' che serve.
+#  2. Quel metodo e' dichiarato senza argomenti, ma uhttpd aggiunge sempre
+#     `ubus_rpc_session` alla chiamata: da HTTP fallisce con "invalid argument".
+#     Chiamandolo da qui, in locale, il problema non si pone.
+method_radios() {
+	local status radio up failed band channel device section dev mode disabled
+	local ap_section ap_ssid ap_disabled sta_section sta_disabled ifaces
+
+	status=$(wireless_status)
+
+	# Le sezioni si leggono da uci, non dallo stato: netifd elenca solo le
+	# interfacce che ha avviato, quindi un access point spento sparirebbe e non
+	# ci sarebbe piu' modo di riaccenderlo.
+	ifaces=$(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p')
+
+	json_init
+	json_add_array radios
+
+	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		up=$(printf '%s' "$status" | jsonfilter -e "@.$radio.up")
+		# netifd lo alza quando hostapd o wpa_supplicant rifiutano la
+		# configurazione: e' l'unico modo per accorgersi che una modifica ha
+		# lasciato la radio giu' invece di funzionare.
+		failed=$(printf '%s' "$status" | jsonfilter -e "@.$radio.retry_setup_failed")
+		band=$(uci -q get "wireless.$radio.band")
+
+		ap_section=""; ap_ssid=""; ap_disabled=1
+		sta_section=""; sta_disabled=1
+
+		for section in $ifaces; do
+			dev=$(uci -q get "wireless.$section.device")
+			[ "$dev" = "$radio" ] || continue
+			mode=$(uci -q get "wireless.$section.mode")
+			disabled=$(uci -q get "wireless.$section.disabled")
+			disabled="${disabled:-0}"
+
+			case "$mode" in
+				ap)
+					# Fra piu' access point sulla stessa radio vince quello
+					# acceso: le sezioni di default di OpenWrt restano li',
+					# spente, e non devono rubare il posto alla nostra.
+					if [ -z "$ap_section" ] || [ "$disabled" = "0" ]; then
+						ap_section="$section"
+						ap_ssid=$(uci -q get "wireless.$section.ssid")
+						ap_disabled="$disabled"
+					fi
+					;;
+				sta)
+					sta_section="$section"
+					sta_disabled="$disabled"
+					;;
+			esac
+		done
+
+		device=$(live_device_of "$status" "$radio")
+
+		# Il canale configurato puo' essere "auto": quello vero lo sa iwinfo.
+		channel=0
+		if [ -n "$device" ]; then
+			channel=$(ubus call iwinfo info "{\"device\":\"$device\"}" 2>/dev/null \
+				| jsonfilter -e '@.channel')
+			channel="${channel:-0}"
+		fi
+
+		json_add_object
+		json_add_string  name         "$radio"
+		json_add_string  band         "$(band_label "$band")"
+		json_add_string  device       "$device"
+		json_add_boolean up           "$([ "$up" = "true" ] && echo 1 || echo 0)"
+		json_add_boolean setup_failed "$([ "$failed" = "true" ] && echo 1 || echo 0)"
+		json_add_int     channel      "$channel"
+		json_add_string  ap_section   "$ap_section"
+		json_add_string  ap_ssid      "$ap_ssid"
+		json_add_boolean ap_enabled   "$([ -n "$ap_section" ] && [ "$ap_disabled" = "0" ] && echo 1 || echo 0)"
+		json_add_string  sta_section  "$sta_section"
+		json_add_boolean sta_enabled  "$([ -n "$sta_section" ] && [ "$sta_disabled" = "0" ] && echo 1 || echo 0)"
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+}
+
+# Gateway predefinito di un'interfaccia, dal suo stato ubus.
+#
+# Non basta prendere route[0]: l'elenco puo' contenere prima le rotte della
+# sottorete locale. Si cerca quella con destinazione 0.0.0.0.
+default_gateway() {
+	local routes route target
+
+	routes=$(printf '%s' "$1" | jsonfilter -e '@.route[*]')
+	printf '%s\n' "$routes" | while read -r route; do
+		[ -n "$route" ] || continue
+		target=$(printf '%s' "$route" | jsonfilter -e '@.target')
+		if [ "$target" = "0.0.0.0" ]; then
+			printf '%s' "$route" | jsonfilter -e '@.nexthop'
+			break
+		fi
+	done
+}
+
+# Interfacce logiche che sono WAN, cioe' quelle nella zona firewall "wan".
+#
+# E' la definizione operativa giusta su questo router: qualunque cosa esca da
+# li' e' un uplink, e quando in Fase 3 arrivera' il tethering USB comparira' da
+# solo senza toccare questo codice.
+wan_networks() {
+	local zone net device entry bridge ports
+	zone=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'\$/\1/p" | head -n 1)
+	[ -n "$zone" ] || return 0
+
+	bridge=$(bridge_info)
+	ports="${bridge#*	}"
+	[ "$ports" = "$bridge" ] && ports=""
+
+	for net in $(uci -q get "firewall.$zone.network"); do
+		# Un'interfaccia disattivata non e' un uplink: e' il caso di una porta
+		# commutata in LAN, che resta nella zona firewall pronta per il ritorno,
+		# ed e' anche come sta `wan_usb` finche' non c'e' un telefono attaccato.
+		# Nessuna eccezione: il riavvio della porta USB vive nella scheda
+		# Dispositivo, che c'e' sempre, quindi non serve tenere in piedi una
+		# scheda vuota per ospitarlo.
+		[ "$(uci -q get "network.$net.disabled")" = "1" ] && continue
+
+		# Secondo criterio, indipendente dal primo: se il device della porta sta
+		# dentro il bridge della LAN, quella porta e' LAN e basta. Non ci si
+		# affida al solo flag `disabled`, che dipende da come e' andata la
+		# transazione che ha commutato la porta; qui si guarda dove sta adesso.
+		device=$(uci -q get "network.$net.device")
+		if [ -n "$device" ]; then
+			for entry in $ports; do
+				[ "$entry" = "$device" ] && continue 2
+			done
+		fi
+
+		printf '%s ' "$net"
+	done
+}
+
+# Driver di un device se e' un tethering USB, altrimenti niente.
+#
+# Stesso elenco dello script di hotplug: il nome del device non e'
+# deterministico, il driver si'.
+usb_net_driver() {
+	local link name
+	[ -n "$1" ] || return 0
+
+	link=$(readlink -f "/sys/class/net/$1/device/driver" 2>/dev/null)
+	[ -n "$link" ] || return 0
+	name=$(basename "$link")
+
+	case "$name" in
+		cdc_ncm|cdc_mbim|cdc_ether|cdc_eem|rndis_host|ipheth) printf '%s' "$name" ;;
+	esac
+}
+
+# Radio a cui appartiene un'interfaccia logica "wwan_<radio>", se esiste.
+#
+# Le interfacce degli uplink WiFi le creiamo noi con questo nome, una per radio:
+# il legame vale anche quando su quella radio non c'e' nessuna rete configurata.
+radio_of_wwan() {
+	local network="$1" candidate radio
+
+	case "$network" in
+		wwan_*) candidate="${network#wwan_}" ;;
+		*) return 1 ;;
+	esac
+
+	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		[ "$radio" = "$candidate" ] && { printf '%s' "$radio"; return 0; }
+	done
+	return 1
+}
+
+# Presenza del collegamento fisico: 1 cavo attaccato, 0 scollegato, -1 ignoto.
+carrier_of() {
+	local dev="$1"
+	[ -n "$dev" ] || { printf '%s' "-1"; return; }
+	if [ -r "/sys/class/net/$dev/carrier" ]; then
+		# Il kernel rifiuta la lettura quando l'interfaccia e' amministrativamente
+		# giu': in quel caso non si sa, e dirlo e' meglio che inventare uno zero.
+		printf '%s' "$(first_line "/sys/class/net/$dev/carrier")" 2>/dev/null || printf '%s' "-1"
+	else
+		printf '%s' "-1"
+	fi
+}
+
+# Interfaccia di sistema che porta la rotta predefinita, cioe' quella che sta
+# davvero facendo passare il traffico in questo momento (requisito G.1).
+active_l3_device() {
+	ip -4 route show default 2>/dev/null \
+		| awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+# Sezione uci della STA agganciata a una certa interfaccia logica, se c'e'.
+sta_section_of_network() {
+	local want="$1" section
+	for section in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+		[ "$(uci -q get "wireless.$section.mode")" = "sta" ] || continue
+		if [ "$(uci -q get "wireless.$section.network")" = "$want" ]; then
+			printf '%s' "$section"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Un uplink per ogni WAN configurata: le STA WiFi, l'ethernet e - piu' avanti -
+# il tethering USB, ciascuna con la propria interfaccia logica e quindi il
+# proprio indirizzo, gateway e DNS.
+#
+# Distingue gli stati che dall'esterno sembrano uguali: non agganciata,
+# agganciata senza indirizzo, agganciata con indirizzo. Qui si ferma: avere un
+# indirizzo non dice che Internet funzioni, e questo metodo non lo afferma mai.
+# A dirlo e' `travel.portal_probe`, che lo verifica mandando una richiesta vera
+# fuori da quella WAN.
+method_uplinks() {
+	local status network section radio band ifname info netstat up signal
+	local active l3 kind usb_driver
+
+	status=$(wireless_status)
+	active=$(active_l3_device)
+
+	json_init
+	json_add_array uplinks
+
+	for network in $(wan_networks); do
+		# Le interfacce IPv6 si saltano: IPv6 e' disattivato per scelta, e
+		# `wan6` accanto a `wan` comparirebbe come una seconda Ethernet che non
+		# esiste. Un giorno, se IPv6 tornera', avra' una sua rappresentazione.
+		case "$(uci -q get "network.$network.proto")" in
+			dhcpv6|6in4|6to4|6rd|464xlat) continue ;;
+		esac
+
+		netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
+		l3=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
+
+		section=$(sta_section_of_network "$network")
+		radio=""
+		band=""
+		ifname="$l3"
+		info=""
+		kind="ethernet"
+
+		# Interfaccia giu': ubus non riporta il device, ma per sapere se c'e' un
+		# cavo attaccato serve comunque il nome, che sta nella configurazione.
+		[ -n "$ifname" ] || ifname=$(uci -q get "network.$network.device")
+
+		# Tethering USB: si riconosce dal driver del device, non dal nome, che
+		# cambia da telefono a telefono. Il driver serve anche a mostrarlo
+		# (requisito G.2: "dispositivo USB rilevato").
+		usb_driver=$(usb_net_driver "$ifname")
+		if [ -n "$usb_driver" ]; then
+			kind="usb"
+		elif [ "$network" = "wan_usb" ]; then
+			# Interfaccia del tethering senza niente attaccato: resta di tipo
+			# USB, altrimenti comparirebbe come una porta ethernet fantasma.
+			kind="usb"
+		fi
+
+		# Il tipo si deduce dal nome, non dalla presenza di una STA: quando ci si
+		# disconnette la sezione wireless sparisce ma l'interfaccia logica resta,
+		# e senza questo controllo una radio libera verrebbe presentata come una
+		# seconda porta ethernet.
+		[ -n "$radio" ] || radio=$(radio_of_wwan "$network")
+		if [ -n "$radio" ]; then
+			kind="wifi"
+			band=$(band_label "$(uci -q get "wireless.$radio.band")")
+		fi
+
+		if [ -n "$section" ]; then
+			kind="wifi"
+			radio=$(uci -q get "wireless.$section.device")
+			band=$(band_label "$(uci -q get "wireless.$radio.band")")
+			# Quando la STA non e' associata l'interfaccia logica non ha un
+			# device: si ricade su quello della sezione wireless.
+			[ -n "$ifname" ] || ifname=$(ifname_of_section "$status" "$radio" "$section")
+			[ -n "$ifname" ] && info=$(ubus call iwinfo info "{\"device\":\"$ifname\"}" 2>/dev/null)
+		fi
+
+		up=$(printf '%s' "$netstat" | jsonfilter -e '@.up')
+		signal=$(printf '%s' "$info" | jsonfilter -e '@.signal')
+
+		json_add_object
+		json_add_string  kind     "$kind"
+		# Quale driver ha agganciato il telefono: e' l'unico modo di sapere se
+		# si e' presentato come NCM o come RNDIS, che cambia cosa aspettarsi.
+		json_add_string  driver   "$usb_driver"
+		json_add_string  radio    "$radio"
+		json_add_string  band     "$band"
+		json_add_string  section  "$section"
+		json_add_string  network  "$network"
+		json_add_string  device   "$ifname"
+		json_add_int     metric   "$(uci -q get "network.$network.metric" || echo 0)"
+		# Nome inviato nella richiesta DHCP, cosi' com'e' scritto in uci: `*`
+		# significa non inviarlo, l'opzione assente significa "manda il nome
+		# del router". Sta sull'interfaccia logica, quindi vale allo stesso
+		# modo per le STA WiFi, per le porte ethernet e per il tethering.
+		json_add_string  hostname "$(uci -q get "network.$network.hostname")"
+		# Cavo attaccato o no: e' l'unico stato che conta per una porta
+		# ethernet, e non ha niente a che vedere con l'associazione WiFi.
+		# -1 significa "non si sa", per esempio se l'interfaccia non esiste.
+		json_add_int     carrier  "$(carrier_of "$ifname")"
+		# Vero per la sola WAN che sta portando il traffico adesso.
+		json_add_boolean active   "$([ -n "$l3" ] && [ "$l3" = "$active" ] && echo 1 || echo 0)"
+		if [ -n "$section" ]; then
+			json_add_boolean enabled "$([ "$(uci -q get "wireless.$section.disabled")" = "1" ] && echo 0 || echo 1)"
+		else
+			json_add_boolean enabled 1
+		fi
+
+		# ssid vuoto significa associazione non riuscita: e' il segnale che
+		# distingue "password sbagliata" da "agganciata ma senza indirizzo".
+		json_add_string  ssid     "$(printf '%s' "$info" | jsonfilter -e '@.ssid')"
+		json_add_string  bssid    "$(printf '%s' "$info" | jsonfilter -e '@.bssid')"
+		json_add_int     channel  "$(printf '%s' "$info" | jsonfilter -e '@.channel' || echo 0)"
+		json_add_int     bitrate  "$(printf '%s' "$info" | jsonfilter -e '@.bitrate' || echo 0)"
+		[ -n "$signal" ] && json_add_int signal "$signal"
+
+		# Il MAC che la radio sta davvero usando: se e' stato clonato, qui si
+		# vede quello clonato, non quello della scheda.
+		json_add_string  mac      "$([ -n "$ifname" ] && first_line "/sys/class/net/$ifname/address")"
+
+		json_add_boolean up       "$([ "$up" = "true" ] && echo 1 || echo 0)"
+		json_add_string  ipv4     "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')"
+		json_add_string  netmask  "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].mask')"
+		json_add_string  gateway  "$(default_gateway "$netstat")"
+
+		json_add_array dns
+		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]'); do
+			json_add_string "" "$_dns"
+		done
+		json_close_array
+
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+}
+
+# Impostazioni e stato dell'access point, una voce per radio.
+#
+# La chiave NON esce mai: si dice soltanto se ne esiste una. E' la regola dei
+# segreti (decisione D3), ed e' il motivo per cui il modulo di modifica lascia
+# il campo password vuoto invece di precompilarlo.
+method_ap() {
+	local status ifaces radio section dev disabled band ifname info clients
+	local ap_section ap_disabled
+
+	status=$(wireless_status)
+	ifaces=$(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p')
+
+	json_init
+	json_add_array aps
+
+	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		ap_section=""; ap_disabled=1
+
+		for section in $ifaces; do
+			dev=$(uci -q get "wireless.$section.device")
+			[ "$dev" = "$radio" ] || continue
+			[ "$(uci -q get "wireless.$section.mode")" = "ap" ] || continue
+			disabled=$(uci -q get "wireless.$section.disabled")
+			disabled="${disabled:-0}"
+			# Fra piu' access point sulla stessa radio vince quello acceso.
+			if [ -z "$ap_section" ] || [ "$disabled" = "0" ]; then
+				ap_section="$section"
+				ap_disabled="$disabled"
+			fi
+		done
+
+		[ -n "$ap_section" ] || continue
+
+		band=$(band_label "$(uci -q get "wireless.$radio.band")")
+		ifname=$(ifname_of_section "$status" "$radio" "$ap_section")
+
+		info=""
+		clients=0
+		if [ -n "$ifname" ]; then
+			info=$(ubus call iwinfo info "{\"device\":\"$ifname\"}" 2>/dev/null)
+			clients=$(ubus call iwinfo assoclist "{\"device\":\"$ifname\"}" 2>/dev/null \
+				| jsonfilter -e '@.results[*].mac' | awk 'END { print NR }')
+		fi
+
+		json_add_object
+		json_add_string  section    "$ap_section"
+		json_add_string  radio      "$radio"
+		json_add_string  band       "$band"
+		json_add_boolean enabled    "$([ "$ap_disabled" = "0" ] && echo 1 || echo 0)"
+		json_add_string  ssid       "$(uci -q get "wireless.$ap_section.ssid")"
+		json_add_string  encryption "$(uci -q get "wireless.$ap_section.encryption")"
+		json_add_boolean has_key    "$([ -n "$(uci -q get "wireless.$ap_section.key")" ] && echo 1 || echo 0)"
+		json_add_string  device     "$ifname"
+		json_add_string  bssid      "$(printf '%s' "$info" | jsonfilter -e '@.bssid')"
+		json_add_int     channel    "$(printf '%s' "$info" | jsonfilter -e '@.channel' || echo 0)"
+		json_add_int     clients    "${clients:-0}"
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+}
+
+# Nome della phy su cui vivono le radio.
+#
+# Su questo hardware (WiFi 7 multi-radio) ce n'e' una sola condivisa: la si
+# ricava da un'interfaccia esistente, e in mancanza dalla prima in sysfs.
+phy_name() {
+	local status="$1" radio ifname phy
+
+	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		ifname=$(live_device_of "$status" "$radio")
+		[ -n "$ifname" ] || continue
+		phy=$(iw dev "$ifname" info 2>/dev/null | awk '$1 == "wiphy" { print "phy" $2; exit }')
+		[ -n "$phy" ] && { printf '%s' "$phy"; return 0; }
+	done
+
+	for phy in /sys/class/ieee80211/*; do
+		[ -e "$phy" ] || continue
+		basename "$phy"
+		return 0
+	done
+}
+
+SCAN_TEMP_IF=travelscan
+
+scan_cleanup() {
+	if [ -n "$SCAN_TEMP_CREATED" ]; then
+		ip link set "$SCAN_TEMP_IF" down 2>/dev/null
+		iw dev "$SCAN_TEMP_IF" del 2>/dev/null
+		SCAN_TEMP_CREATED=""
+	fi
+}
+
+# Scansione di una radio, anche quando non ha nessuna interfaccia attiva.
+#
+# Serve un'interfaccia sulla radio per poter scansionare: se non c'e' ne viene
+# creata una temporanea in modo managed, che non si associa a niente e viene
+# cancellata subito dopo. E' l'unico modo per cercare reti su una radio libera.
+#
+# Unico metodo con argomenti. Il nome della radio viene confrontato con
+# l'elenco di quelle configurate: quello che arriva dalla rete non finisce mai
+# dentro un comando senza essere prima riconosciuto.
+method_scan() {
+	local input radio candidate valid status device phy results
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var candidate radio
+
+	radio=""
+	for valid in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		[ "$valid" = "$candidate" ] && radio="$valid"
+	done
+
+	if [ -z "$radio" ]; then
+		json_init
+		json_add_string error "radio sconosciuta"
+		json_add_array results
+		json_close_array
+		json_dump
+		return
+	fi
+
+	status=$(wireless_status)
+	device=$(live_device_of "$status" "$radio")
+
+	trap scan_cleanup EXIT INT TERM
+
+	if [ -z "$device" ]; then
+		phy=$(phy_name "$status")
+		if [ -z "$phy" ]; then
+			json_init
+			json_add_string error "nessuna phy wireless trovata"
+			json_add_array results
+			json_close_array
+			json_dump
+			return
+		fi
+
+		# Puo' restare da un'esecuzione interrotta: si riparte pulito.
+		iw dev "$SCAN_TEMP_IF" del 2>/dev/null
+
+		if ! iw phy "$phy" interface add "$SCAN_TEMP_IF" type managed 2>/dev/null; then
+			json_init
+			json_add_string error "impossibile creare l'interfaccia temporanea su $phy"
+			json_add_array results
+			json_close_array
+			json_dump
+			return
+		fi
+		SCAN_TEMP_CREATED=1
+		ip link set "$SCAN_TEMP_IF" up 2>/dev/null
+		device="$SCAN_TEMP_IF"
+	fi
+
+	results=$(ubus call iwinfo scan "{\"device\":\"$device\"}" 2>/dev/null)
+	scan_cleanup
+	trap - EXIT INT TERM
+
+	if [ -n "$results" ]; then
+		printf '%s' "$results"
+	else
+		json_init
+		json_add_string error "la scansione non ha restituito risultati"
+		json_add_array results
+		json_close_array
+		json_dump
+	fi
+}
+
+# Sezioni delle reti salvate in /etc/config/travel.
+saved_sections() {
+	uci show travel 2>/dev/null | sed -n 's/^travel\.\([^.]*\)=network$/\1/p'
+}
+
+# Verifica che una sezione arrivata dalla rete esista davvero fra quelle
+# salvate, e ne restituisce il nome. Lista chiusa, non sanificazione.
+valid_saved() {
+	local want="$1" section
+	for section in $(saved_sections); do
+		[ "$section" = "$want" ] && { printf '%s' "$section"; return 0; }
+	done
+	return 1
+}
+
+valid_radio() {
+	local want="$1" radio
+	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+		[ "$radio" = "$want" ] && { printf '%s' "$radio"; return 0; }
+	done
+	return 1
+}
+
+# Elenco delle reti salvate. La chiave non esce: si dice solo se c'e'.
+method_networks() {
+	local section
+
+	json_init
+	json_add_array networks
+
+	for section in $(saved_sections); do
+		json_add_object
+		json_add_string  section     "$section"
+		json_add_string  ssid        "$(uci -q get "travel.$section.ssid")"
+		json_add_string  encryption  "$(uci -q get "travel.$section.encryption")"
+		json_add_string  band        "$(uci -q get "travel.$section.band")"
+		json_add_string  mac_mode    "$(uci -q get "travel.$section.mac_mode")"
+		json_add_string  mac_value   "$(uci -q get "travel.$section.mac_value")"
+		json_add_string  note        "$(uci -q get "travel.$section.note")"
+		# Nome da mandare nel DHCP su questa rete: chi non lo ha e' nato prima
+		# che l'impostazione esistesse e vale come "non inviarlo", che e' il
+		# default del progetto.
+		json_add_string  hostname_mode  "$(uci -q get "travel.$section.hostname_mode" || echo none)"
+		json_add_string  hostname_value "$(uci -q get "travel.$section.hostname_value")"
+		json_add_int     priority    "$(uci -q get "travel.$section.priority" || echo 0)"
+		json_add_boolean disabled    "$([ "$(uci -q get "travel.$section.disabled")" = "1" ] && echo 1 || echo 0)"
+		json_add_int     last_used   "$(uci -q get "travel.$section.last_used" || echo 0)"
+		json_add_string  last_result "$(uci -q get "travel.$section.last_result")"
+		json_add_boolean has_key     "$([ -n "$(uci -q get "travel.$section.key")" ] && echo 1 || echo 0)"
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+}
+
+# Prepara la connessione a una rete salvata.
+#
+# La password resta sul router: viene letta qui e scritta direttamente nelle
+# modifiche in sospeso della sessione, senza mai passare dal browser. Per farlo
+# si riusa l'oggetto `uci` passandogli l'id di sessione ricevuto da uhttpd,
+# cosi' la modifica finisce nello stesso lotto che poi il browser applica con
+# `uci apply` e il ritorno indietro automatico.
+method_stage_connect_saved() {
+	local input sid section radio target ssid key encryption mac_mode mac_value args
+	local hostname_mode hostname_value hostname_uci
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var sid ubus_rpc_session
+	json_get_var _section section
+	json_get_var _radio radio
+
+	section=$(valid_saved "$_section") || { fail_json "rete salvata sconosciuta"; return; }
+	radio=$(valid_radio "$_radio")     || { fail_json "radio sconosciuta"; return; }
+	[ -n "$sid" ] || { fail_json "sessione mancante"; return; }
+
+	ssid=$(uci -q get "travel.$section.ssid")
+	key=$(uci -q get "travel.$section.key")
+	encryption=$(uci -q get "travel.$section.encryption")
+	mac_mode=$(uci -q get "travel.$section.mac_mode")
+	mac_value=$(uci -q get "travel.$section.mac_value")
+	target="sta_$radio"
+
+	# Il nome DHCP e' una proprieta' della rete salvata ma vive sull'interfaccia
+	# logica: si riscrive ogni volta, altrimenti resterebbe quello della rete
+	# usata prima su questa radio. Stringa vuota = opzione da cancellare, cioe'
+	# il default di OpenWrt "manda il nome del router".
+	hostname_mode=$(uci -q get "travel.$section.hostname_mode")
+	hostname_value=$(uci -q get "travel.$section.hostname_value")
+	case "$hostname_mode" in
+		device) hostname_uci="" ;;
+		custom) hostname_uci="${hostname_value:-*}" ;;
+		*)      hostname_uci="*" ;;
+	esac
+
+	# Ricreata da zero: aggiornandola resterebbero i campi della connessione
+	# precedente, per esempio un MAC clonato che non si vuole piu'.
+	json_init
+	json_add_string ubus_rpc_session "$sid"
+	json_add_string config wireless
+	json_add_string section "$target"
+	ubus call uci delete "$(json_dump)" >/dev/null 2>&1
+
+	json_init
+	json_add_string ubus_rpc_session "$sid"
+	json_add_string config wireless
+	json_add_string type wifi-iface
+	json_add_string name "$target"
+	json_add_object values
+	json_add_string device "$radio"
+	json_add_string mode sta
+	json_add_string network "wwan_$radio"
+	json_add_string ssid "$ssid"
+	json_add_string encryption "${encryption:-psk2}"
+	json_add_string disabled 0
+	[ -n "$key" ] && json_add_string key "$key"
+	case "$mac_mode" in
+		random|manual) [ -n "$mac_value" ] && json_add_string macaddr "$mac_value" ;;
+	esac
+	json_close_object
+	args=$(json_dump)
+
+	if ubus call uci add "$args" >/dev/null 2>&1; then
+		json_init
+		json_add_string ubus_rpc_session "$sid"
+		json_add_string config network
+		json_add_string section "wwan_$radio"
+		if [ -n "$hostname_uci" ]; then
+			json_add_object values
+			json_add_string hostname "$hostname_uci"
+			json_close_object
+			ubus call uci set "$(json_dump)" >/dev/null 2>&1
+		else
+			json_add_string option hostname
+			ubus call uci delete "$(json_dump)" >/dev/null 2>&1
+		fi
+
+		json_init
+		json_add_boolean staged 1
+		json_add_string section "$target"
+		json_dump
+	else
+		fail_json "impossibile preparare la connessione"
+	fi
+}
+
+# Registra l'esito dell'ultima connessione. Tocca solo /etc/config/travel, che
+# non influenza il funzionamento della rete: niente applica-e-conferma.
+method_mark_used() {
+	local input section result
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var _section section
+	json_get_var result result
+
+	section=$(valid_saved "$_section") || { fail_json "rete salvata sconosciuta"; return; }
+
+	# `portal` e' un esito a se': la connessione e' riuscita, l'indirizzo c'e', e
+	# Internet non passa lo stesso. Metterlo insieme a `ok` nasconderebbe
+	# proprio la cosa che si vuole sapere prima di ricollegarsi a quella rete.
+	case "$result" in
+		ok|portal|no-address|unassociated) ;;
+		*) result="" ;;
+	esac
+
+	uci set "travel.$section.last_used=$(date +%s)"
+	[ -n "$result" ] && uci set "travel.$section.last_result=$result"
+	uci commit travel
+
+	json_init
+	json_add_boolean saved 1
+	json_dump
+}
+
+fail_json() {
+	json_init
+	json_add_string error "$1"
+	json_dump
+}
+
+# Impostazioni della rete che il router OFFRE, distinte da quelle delle reti a
+# cui si collega.
+#
+# Restituisce anche gli indirizzi secondari: durante la finestra di conferma di
+# un cambio di indirizzo il vecchio resta attivo accanto al nuovo, ed e' proprio
+# quello che rende la conferma possibile.
+method_lan() {
+	local netstat entry dns_client dns_upstream dnsmasq_section obj
+
+	netstat=$(ubus call network.interface.lan status 2>/dev/null)
+
+	# I DNS annunciati ai client stanno in una dhcp_option "6,...". Le altre
+	# opzioni vanno restituite intatte: chi riscrive l'elenco deve poterle
+	# rimettere, altrimenti salvare i DNS cancellerebbe tutto il resto.
+	dns_client=""
+	for entry in $(uci -q get dhcp.lan.dhcp_option); do
+		case "$entry" in
+			6,*) dns_client="${entry#6,}" ;;
+		esac
+	done
+
+	dnsmasq_section=$(anon_section dhcp dnsmasq)
+
+	dns_upstream=$(uci -q get "dhcp.$dnsmasq_section.server")
+
+	json_init
+	json_add_string  device     "$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')"
+	json_add_boolean up         "$([ "$(printf '%s' "$netstat" | jsonfilter -e '@.up')" = "true" ] && echo 1 || echo 0)"
+
+	# uci restituisce gli indirizzi separati da spazio quando sono una lista, e
+	# accetta anche la forma CIDR: "192.168.10.1/24" e' un valore legittimo.
+	# Qui esce sempre il solo indirizzo, perche' la maschera e' fissa e non deve
+	# comparire in un campo che chiede un indirizzo.
+	json_add_array addresses
+	for entry in $(uci -q get network.lan.ipaddr); do
+		json_add_string "" "${entry%%/*}"
+	done
+	json_close_array
+
+	json_add_string  netmask    "$(uci -q get network.lan.netmask || echo 255.255.255.0)"
+
+	json_add_object dhcp
+	json_add_string  start      "$(uci -q get dhcp.lan.start || echo 100)"
+	json_add_string  limit      "$(uci -q get dhcp.lan.limit || echo 150)"
+	json_add_string  leasetime  "$(uci -q get dhcp.lan.leasetime || echo 12h)"
+	json_add_boolean ignore     "$([ "$(uci -q get dhcp.lan.ignore)" = "1" ] && echo 1 || echo 0)"
+	json_close_object
+
+	# I due elenchi di DNS sono cose diverse: quelli annunciati ai client e
+	# quelli che il router usa per risolvere. Confonderli e' il modo classico di
+	# rompere la risoluzione dei nomi senza capire perche'.
+	json_add_array dns_client
+	for entry in $(printf '%s' "$dns_client" | tr ',' ' '); do
+		[ -n "$entry" ] && json_add_string "" "$entry"
+	done
+	json_close_array
+
+	json_add_array dns_upstream
+	for entry in $dns_upstream; do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	# Sezione e opzioni grezze: servono a riscrivere solo cio' che si vuole
+	# cambiare, lasciando in piedi il resto.
+	json_add_string dnsmasq_section "$dnsmasq_section"
+	json_add_array dhcp_options
+	for entry in $(uci -q get dhcp.lan.dhcp_option); do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	json_dump
+}
+
+# Porte ethernet fisiche del dispositivo.
+#
+# Enumerate dal kernel, non da un elenco scritto a mano: i nomi cambiano da
+# modello a modello e indovinarli e' il modo di scrivere codice che funziona su
+# un router solo. Si tengono le interfacce con hardware reale, di tipo ethernet
+# e che non siano radio.
+physical_ports() {
+	local path name bus
+
+	for path in /sys/class/net/*; do
+		[ -e "$path/device" ] || continue
+		[ -e "$path/wireless" ] && continue
+		[ -e "$path/phy80211" ] && continue
+		[ "$(first_line "$path/type")" = "1" ] || continue
+
+		# Le porte del router stanno su un bus platform; un telefono in tethering
+		# o un adattatore USB stanno sul bus usb. Qui servono solo le prime:
+		# questo elenco alimenta la commutazione LAN/WAN, e una presa USB non si
+		# commuta - non e' nel bridge e non e' una porta del switch. Il tethering
+		# ha gia' la sua strada, `wan_usb`, e comparirebbe due volte.
+		#
+		# Si guarda il bus e non il nome del driver: vale per qualunque
+		# periferica di rete USB, anche una che oggi non conosciamo.
+		bus=$(basename "$(readlink -f "$path/device/subsystem" 2>/dev/null)" 2>/dev/null)
+		[ "$bus" = "usb" ] && continue
+
+		name=$(basename "$path")
+		printf '%s\n' "$name"
+	done
+}
+
+# Sezione uci del bridge br-lan e le sue porte, nella forma reale (cfgXXXX):
+# e' quella che il browser dovra' poi passare a `uci set`.
+bridge_info() {
+	local obj name
+
+	ubus call uci get '{"config":"network","type":"device"}' 2>/dev/null \
+		| jsonfilter -e '@.values[*]' > "/tmp/travel-dev.$$" 2>/dev/null
+
+	while read -r obj; do
+		[ -n "$obj" ] || continue
+		name=$(printf '%s' "$obj" | jsonfilter -e '@.name')
+		[ "$name" = "br-lan" ] || continue
+		printf '%s\t%s' \
+			"$(printf '%s' "$obj" | jsonfilter -e '@[".name"]')" \
+			"$(printf '%s' "$obj" | jsonfilter -e '@.ports[*]' | tr '\n' ' ')"
+		break
+	done < "/tmp/travel-dev.$$"
+
+	rm -f "/tmp/travel-dev.$$"
+}
+
+# Interfaccia logica che usa una certa porta come proprio device.
+network_using_port() {
+	local want="$1" network
+	for network in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^.]*\)=interface$/\1/p'); do
+		if [ "$(uci -q get "network.$network.device")" = "$want" ]; then
+			printf '%s' "$network"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Stato di TUTTE le porte ethernet commutabili (requisito C).
+#
+# Ogni porta puo' essere LAN (dentro il bridge) o WAN (interfaccia propria nella
+# zona firewall wan). Il ruolo si deduce dalla realta' - dove sta la porta - e
+# non da un'impostazione nostra che potrebbe divergere.
+method_ethports() {
+	local bridge bridge_section bridge_ports zone zone_networks
+	local port network role entry
+
+	bridge=$(bridge_info)
+	bridge_section="${bridge%%	*}"
+	bridge_ports="${bridge#*	}"
+	[ "$bridge_section" = "$bridge_ports" ] && bridge_ports=""
+
+	zone=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'\$/\1/p" | head -n 1)
+	zone_networks=$(uci -q get "firewall.$zone.network")
+
+	json_init
+	json_add_string bridge_section "$bridge_section"
+	json_add_array bridge_ports
+	for entry in $bridge_ports; do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	json_add_string zone_section "$zone"
+	json_add_array zone_networks
+	for entry in $zone_networks; do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	json_add_array ports
+	for port in $(physical_ports); do
+		network=$(network_using_port "$port")
+
+		role="free"
+		for entry in $bridge_ports; do
+			[ "$entry" = "$port" ] && role="lan"
+		done
+		if [ "$role" != "lan" ] && [ -n "$network" ]; then
+			[ "$(uci -q get "network.$network.disabled")" = "1" ] && role="free" || role="wan"
+		fi
+
+		json_add_object
+		json_add_string  name    "$port"
+		json_add_string  role    "$role"
+		json_add_string  network "$network"
+		json_add_int     carrier "$(carrier_of "$port")"
+		# Con mwan3 (Fase 3) ogni WAN ha anche una voce li': va seguita nella
+		# stessa transazione, altrimenti resterebbe un health check su una WAN
+		# che non esiste piu'.
+		json_add_boolean mwan3   "$([ -n "$network" ] && [ -n "$(uci -q get "mwan3.$network")" ] && echo 1 || echo 0)"
+		json_close_object
+	done
+	json_close_array
+
+	json_dump
+}
+
+# --- Chi e' collegato alla rete locale (Fase 7) -------------------------------
+#
+# Un metodo solo per due schermate: la scheda LAN mostra l'elenco, la clonazione
+# del MAC ci sceglie dentro. Due enumerazioni separate divergerebbero, e
+# divergerebbero proprio nel caso che conta - il telefono appena collegato che
+# compare in una lista e non nell'altra.
+#
+# La domanda difficile non e' "chi c'e'" ma "da dove entra": nel bridge le due
+# radio sono due porte come le altre, e un indirizzo IP non dice da quale.
+# Servono due tabelle diverse, e nessuna delle due e' l'elenco dei lease.
+
+# MAC associati agli access point. Riga: "<mac>\t<ifname>|<banda>".
+#
+# E' l'unica fonte che distingue 2.4 da 5 GHz: il nome dell'interfaccia
+# (phy0.1-ap0) non lo dice a nessuno, e la banda sta sulla radio che la ospita.
+# Un access point spento non ha ifname nello stato di netifd e sparisce da solo.
+wifi_stations() {
+	local status section radio band ifname mac
+
+	status=$(wireless_status)
+
+	for section in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+		[ "$(uci -q get "wireless.$section.mode")" = "ap" ] || continue
+		radio=$(uci -q get "wireless.$section.device")
+		[ -n "$radio" ] || continue
+		ifname=$(ifname_of_section "$status" "$radio" "$section")
+		[ -n "$ifname" ] || continue
+		band=$(band_label "$(uci -q get "wireless.$radio.band")")
+
+		for mac in $(ubus call iwinfo assoclist "{\"device\":\"$ifname\"}" 2>/dev/null \
+			| jsonfilter -e '@.results[*].mac'); do
+			printf '%s\t%s|%s\n' "$(printf '%s' "$mac" | tr 'A-Z' 'a-z')" "$ifname" "$band"
+		done
+	done
+}
+
+# MAC visti su ciascuna porta del bridge. Riga: "<mac>\t<porta>".
+#
+# La tabella la tiene il kernel, ma non la pubblica in sysfs: si passa da uno
+# dei due strumenti che sanno leggerla, e su un OpenWrt minimale puo' non
+# esserci nessuno dei due. Chi chiama deve saper vivere senza, quindi qui non si
+# inventa niente: si restituisce vuoto e basta.
+bridge_stations() {
+	local br="$1" mac dev port rest is_local numbers path name no pair
+
+	if command -v bridge >/dev/null 2>&1; then
+		bridge fdb show br "$br" 2>/dev/null | while read -r mac dev port rest; do
+			[ "$dev" = "dev" ] || continue
+			[ "$port" = "$br" ] && continue
+			# "self" e "permanent" sono gli indirizzi delle porte stesse, non
+			# di chi ci sta attaccato.
+			case " $rest " in *" self "*|*" permanent "*) continue ;; esac
+			printf '%s\t%s\n' "$(printf '%s' "$mac" | tr 'A-Z' 'a-z')" "$port"
+		done
+		return 0
+	fi
+
+	command -v brctl >/dev/null 2>&1 || return 0
+
+	# brctl numera le porte invece di nominarle; i numeri stanno in sysfs, in
+	# esadecimale, e l'aritmetica della shell li converte da sola.
+	numbers=""
+	for path in "/sys/class/net/$br/brif/"*; do
+		[ -e "$path" ] || continue
+		name=$(basename "$path")
+		no=$(first_line "/sys/class/net/$name/brport/port_no")
+		[ -n "$no" ] || continue
+		numbers="$numbers $((no)):$name"
+	done
+
+	brctl showmacs "$br" 2>/dev/null | while read -r no mac is_local rest; do
+		case "$no" in ''|*[!0-9]*) continue ;; esac
+		# "is local" e' la porta stessa, come "permanent" per l'altro strumento.
+		[ "$is_local" = "no" ] || continue
+		for pair in $numbers; do
+			[ "${pair%%:*}" = "$no" ] || continue
+			printf '%s\t%s\n' "$(printf '%s' "$mac" | tr 'A-Z' 'a-z')" "${pair#*:}"
+		done
+	done
+}
+
+# Nome scritto a mano per un MAC (`config host` in /etc/config/dhcp).
+#
+# Un dispositivo con indirizzo fisso non ha un lease, quindi non ha un nome che
+# arrivi dal DHCP: senza questo comparirebbe come una riga di sole cifre proprio
+# quando qualcuno si e' preso la briga di dargli un nome.
+static_host_name() {
+	local mac="$1" section entry
+
+	for section in $(uci show dhcp 2>/dev/null | sed -n 's/^dhcp\.\([^.]*\)=host$/\1/p'); do
+		for entry in $(uci -q get "dhcp.$section.mac" | tr 'A-Z' 'a-z'); do
+			if [ "$entry" = "$mac" ]; then
+				uci -q get "dhcp.$section.name"
+				return 0
+			fi
+		done
+	done
+}
+
+# Da dove entra un MAC, cercato prima sul WiFi e poi nel bridge.
+#
+# L'ordine conta: un client del WiFi sta anche nella tabella del bridge, ma li'
+# risulta attaccato all'interfaccia dell'access point, che non dice su quale
+# banda sia. Riempie LINK_VIA, LINK_IFACE e LINK_BAND.
+client_link() {
+	local mac="$1" hit
+
+	LINK_VIA=""; LINK_IFACE=""; LINK_BAND=""
+
+	hit=$(printf '%s\n' "$STATIONS_WIFI" | awk -F'\t' -v m="$mac" '$1 == m { print $2; exit }')
+	if [ -n "$hit" ]; then
+		LINK_VIA="wifi"
+		LINK_IFACE="${hit%%|*}"
+		LINK_BAND="${hit#*|}"
+		return 0
+	fi
+
+	hit=$(printf '%s\n' "$STATIONS_FDB" | awk -F'\t' -v m="$mac" '$1 == m { print $2; exit }')
+	if [ -n "$hit" ]; then
+		LINK_VIA="ethernet"
+		LINK_IFACE="$hit"
+		return 0
+	fi
+
+	# Senza tabella del bridge resta comunque una deduzione buona: se nel bridge
+	# c'e' una porta ethernet sola, chi non e' sul WiFi e' per forza li'. Non e'
+	# un'ipotesi, e' l'unica possibilita' rimasta.
+	if [ -n "$STATIONS_ONLY_PORT" ]; then
+		LINK_VIA="ethernet"
+		LINK_IFACE="$STATIONS_ONLY_PORT"
+	fi
+}
+
+# Una riga dell'elenco, con l'attribuzione gia' risolta.
+client_object() {
+	local mac="$1" ip="$2" name="$3" source="$4"
+
+	client_link "$mac"
+	[ -n "$name" ] || name=$(static_host_name "$mac")
+
+	json_add_object
+	json_add_string mac    "$mac"
+	json_add_string ip     "$ip"
+	json_add_string name   "$name"
+	json_add_string source "$source"
+	json_add_string via    "$LINK_VIA"
+	json_add_string iface  "$LINK_IFACE"
+	json_add_string band   "$LINK_BAND"
+	json_close_object
+}
+
+# Dispositivi visti sulla rete locale, con il MAC e la porta o l'access point da
+# cui entrano (requisito G, Fase 7).
+#
+# Serve anche alla clonazione del MAC: certi portali autenticano l'indirizzo, e
+# dopo aver fatto l'accesso dal telefono si puo' far indossare al router quello
+# stesso indirizzo invece di rifare il login - o di ripagarlo. Il MAC si sceglie
+# da un elenco e non si digita: e' un numero di dodici cifre che nessuno
+# ricorda, e ricopiarlo a mano dalle impostazioni del telefono e' il modo piu'
+# facile di sbagliarne una.
+method_clients() {
+	local lan_device expiry mac ip name rest seen entry port bridged count
+
+	lan_device=$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@.l3_device')
+	lan_device="${lan_device:-br-lan}"
+
+	STATIONS_WIFI=$(wifi_stations)
+	STATIONS_FDB=$(bridge_stations "$lan_device")
+
+	STATIONS_ONLY_PORT=""
+	if [ -z "$STATIONS_FDB" ]; then
+		bridged=""; count=0
+		for port in $(physical_ports); do
+			[ -e "/sys/class/net/$port/brport" ] || continue
+			bridged="$port"; count=$((count + 1))
+		done
+		[ "$count" = "1" ] && STATIONS_ONLY_PORT="$bridged"
+	fi
+
+	seen=" "
+
+	json_init
+	json_add_array clients
+
+	# I lease DHCP per primi: portano anche il nome che il dispositivo ha
+	# dichiarato, che e' l'unico modo di riconoscerlo a colpo d'occhio.
+	if [ -r /tmp/dhcp.leases ]; then
+		while read -r expiry mac ip name rest; do
+			[ -n "$mac" ] || continue
+			mac=$(printf '%s' "$mac" | tr 'A-Z' 'a-z')
+			# Nella seconda colonna sta un MAC solo per i lease IPv4:
+			# quelli IPv6 ci mettono un IAID, e piu' avanti un DUID che
+			# di colonne ne ha anche piu' di sei. Si accetta la forma
+			# esatta, non "qualcosa con dentro dei due punti".
+			case "$mac" in
+				[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+				*) continue ;;
+			esac
+			case "$seen" in *" $mac "*) continue ;; esac
+			seen="$seen$mac "
+
+			client_object "$mac" "$ip" "$([ "$name" = "*" ] || printf '%s' "$name")" dhcp
+		done < /tmp/dhcp.leases
+	fi
+
+	# Poi i vicini che il kernel conosce senza avere un lease: indirizzi statici,
+	# e dispositivi arrivati prima dell'ultimo riavvio di dnsmasq.
+	for entry in $(ip neigh show dev "$lan_device" 2>/dev/null | sed -n 's/^\([0-9.]\{1,\}\) .*lladdr \([0-9a-f:]\{17\}\).*/\1|\2/p'); do
+		ip="${entry%%|*}"
+		mac="${entry##*|}"
+		case "$seen" in *" $mac "*) continue ;; esac
+		seen="$seen$mac "
+
+		client_object "$mac" "$ip" "" arp
+	done
+
+	# Infine chi e' associato a un access point e non ha ancora un indirizzo.
+	# E' lo stato dei primi secondi di ogni collegamento, ed e' anche quello in
+	# cui si resta quando il DHCP non risponde: non veder comparire il
+	# dispositivo fa cercare il guasto dalla parte sbagliata.
+	for entry in $(printf '%s\n' "$STATIONS_WIFI" | awk -F'\t' '{ print $1 }'); do
+		[ -n "$entry" ] || continue
+		case "$seen" in *" $entry "*) continue ;; esac
+		seen="$seen$entry "
+
+		client_object "$entry" "" "" wifi
+	done
+
+	json_close_array
+	json_dump
+}
+
+# Stato multi-WAN (requisiti A e B), composto da mwan3 e dalla sua
+# configurazione.
+#
+# La configurazione dice cosa VORREMMO (modalita', priorita', pesi, tracking
+# IP); `ubus call mwan3 status` dice cosa STA SUCCEDENDO (online, offline,
+# quanti ping persi). La dashboard ha bisogno di entrambe le meta', e di
+# sapere se mwan3 c'e' proprio.
+method_mwan() {
+	local status net policy mode ip entry i tracked
+
+	json_init
+
+	if ! [ -x /etc/init.d/mwan3 ]; then
+		json_add_boolean installed 0
+		json_add_boolean running 0
+		json_add_string  mode "off"
+		json_add_array   interfaces
+		json_close_array
+		json_dump
+		return
+	fi
+
+	status=$(ubus call mwan3 status 2>/dev/null)
+	policy=$(uci -q get mwan3.travel_default.use_policy)
+	case "$policy" in
+		travel_balance)  mode="balance" ;;
+		travel_failover) mode="failover" ;;
+		*)               mode="off" ;;
+	esac
+
+	json_add_boolean installed 1
+	json_add_boolean running "$([ -n "$status" ] && echo 1 || echo 0)"
+	# Sticky della regola generale: si applica a tutto il traffico che non
+	# combacia con nessuna regola specifica, quindi soprattutto in
+	# bilanciamento decide se le sessioni saltano WAN a meta' strada.
+	json_add_boolean default_sticky  "$([ "$(uci -q get mwan3.travel_default.sticky)" = "1" ] && echo 1 || echo 0)"
+	json_add_int     default_timeout "$(uci -q get mwan3.travel_default.timeout || echo 600)"
+	json_add_string  mode "$mode"
+
+	json_add_array interfaces
+	for net in $(wan_networks); do
+		case "$(uci -q get "network.$net.proto")" in
+			dhcpv6|6in4|6to4|6rd|464xlat|'') continue ;;
+		esac
+		[ -n "$(uci -q get "mwan3.$net")" ] || continue
+
+		json_add_object
+		json_add_string  network     "$net"
+		# Nome fisico della porta: e' l'unica identita' che non cambia quando
+		# si commuta il ruolo, e quindi l'unica con cui ha senso chiamarla.
+		json_add_string  device      "$(uci -q get "network.$net.device")"
+		json_add_boolean enabled     "$([ "$(uci -q get "mwan3.$net.enabled")" = "0" ] && echo 0 || echo 1)"
+		json_add_int     priority    "$(uci -q get "mwan3.${net}_f.metric" || echo 0)"
+		json_add_int     weight      "$(uci -q get "mwan3.${net}_b.weight" || echo 1)"
+		json_add_int     interval    "$(uci -q get "mwan3.$net.interval" || echo 5)"
+		json_add_int     timeout     "$(uci -q get "mwan3.$net.timeout" || echo 2)"
+		json_add_int     count       "$(uci -q get "mwan3.$net.count" || echo 1)"
+		json_add_int     up          "$(uci -q get "mwan3.$net.up" || echo 3)"
+		json_add_int     down        "$(uci -q get "mwan3.$net.down" || echo 3)"
+		json_add_int     reliability "$(uci -q get "mwan3.$net.reliability" || echo 1)"
+
+		json_add_array track_ip
+		for ip in $(uci -q get "mwan3.$net.track_ip"); do
+			json_add_string "" "$ip"
+		done
+		json_close_array
+
+		# Cio' che mwan3 vede davvero. "unknown" quando il servizio non
+		# risponde: meglio dirlo che inventare "offline".
+		json_add_string  status  "$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.status" 2>/dev/null || echo unknown)"
+		json_add_int     online  "$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.online" 2>/dev/null || echo 0)"
+		json_add_int     uptime  "$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.uptime" 2>/dev/null || echo 0)"
+		json_add_int     score   "$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.score" 2>/dev/null || echo 0)"
+		json_add_int     lost    "$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.lost" 2>/dev/null || echo 0)"
+
+		# Esito per singolo tracking IP: e' quello che spiega PERCHE' una WAN
+		# risulta giu' (un IP irraggiungibile su due, latenza alta...).
+		json_add_array tracking
+		i=0
+		while [ "$i" -lt 8 ]; do
+			tracked=$(printf '%s' "$status" | jsonfilter -e "@.interfaces.$net.track_ip[$i]" 2>/dev/null)
+			[ -n "$tracked" ] || break
+			json_add_object
+			json_add_string ip         "$(printf '%s' "$tracked" | jsonfilter -e '@.ip')"
+			json_add_string status     "$(printf '%s' "$tracked" | jsonfilter -e '@.status')"
+			json_add_int    latency    "$(printf '%s' "$tracked" | jsonfilter -e '@.latency' || echo 0)"
+			json_add_int    packetloss "$(printf '%s' "$tracked" | jsonfilter -e '@.packetloss' || echo 0)"
+			json_close_object
+			i=$((i + 1))
+		done
+		json_close_array
+
+		json_close_object
+	done
+	json_close_array
+
+
+	# Regole di instradamento, NELL'ORDINE DEL FILE: mwan3 le valuta cosi' e la
+	# prima che combacia vince. L'ordine non e' un dettaglio estetico, e per
+	# questo la regola predefinita va sempre tenuta per ultima.
+	json_add_array rules
+	for rule in $(uci show mwan3 2>/dev/null | sed -n 's/^mwan3\.\([^.]*\)=rule$/\1/p'); do
+		[ "$rule" = "travel_default" ] && continue
+		json_add_object
+		json_add_string  section    "$rule"
+		json_add_string  src_ip     "$(uci -q get "mwan3.$rule.src_ip")"
+		json_add_string  dest_ip    "$(uci -q get "mwan3.$rule.dest_ip")"
+		json_add_string  dest_port  "$(uci -q get "mwan3.$rule.dest_port")"
+		json_add_string  proto      "$(uci -q get "mwan3.$rule.proto" || echo all)"
+		json_add_string  use_policy "$(uci -q get "mwan3.$rule.use_policy")"
+		json_add_boolean sticky     "$([ "$(uci -q get "mwan3.$rule.sticky")" = "1" ] && echo 1 || echo 0)"
+		json_add_int     timeout    "$(uci -q get "mwan3.$rule.timeout" || echo 0)"
+		json_close_object
+	done
+	json_close_array
+	policy_json
+	json_dump
+}
+
+# Rimette in sesto il controller USB senza riavviare il router.
+#
+# Dopo una serie di tentativi falliti il driver dell'hub "si arrende" e
+# disabilita la porta: da quel momento il telefono non viene piu' nemmeno visto,
+# e l'unico modo di riprovare sarebbe riavviare. Sganciare e riagganciare il
+# controller rifa' l'enumerazione da zero e ripulisce quello stato.
+#
+# Nessun argomento: il controller si trova da solo, e non c'e' niente che
+# arrivi dalla rete da validare.
+#
+# Non e' automatico ed e' esposto come comando esplicito, perche' stacca per
+# qualche secondo QUALUNQUE periferica USB collegata: una decisione del genere
+# la deve prendere chi sta guardando, non il router da solo.
+# Interfaccia di rete agganciata a un dispositivo USB, se ce n'e' una.
+#
+# Si parte dal dispositivo e si cercano le net device che gli appartengono,
+# non il contrario: e' l'unico verso che risponde alla domanda "questo telefono
+# e' stato agganciato da qualcuno?".
+netdev_of_usb() {
+	local real="$1" link ifpath
+	for link in /sys/class/net/*; do
+		[ -e "$link/device" ] || continue
+		ifpath=$(readlink -f "$link/device" 2>/dev/null)
+		case "$ifpath" in
+			"$real"/*|"$real":*) basename "$link"; return 0 ;;
+		esac
+	done
+}
+
+# Nome leggibile di una funzione USB, dai suoi codici di classe.
+#
+# Sono i numeri che il dispositivo dichiara per dire "questa presa parla NCM",
+# "questa e' MTP". Tradurli e' cio' che permette di dire se un telefono sta
+# offrendo il tethering oppure e' ancora in trasferimento file, che e' la
+# distinzione su cui si e' gia' perso tempo una volta.
+usb_function_label() {
+	case "$1:$2:$3" in
+		02:0d:*)  printf 'NCM (tethering)' ;;
+		02:06:*)  printf 'ECM (tethering)' ;;
+		02:0c:*)  printf 'EEM (tethering)' ;;
+		02:0e:*)  printf 'MBIM (tethering)' ;;
+		e0:01:03) printf 'RNDIS (tethering)' ;;
+		0a:*)     printf 'dati CDC' ;;
+		06:01:01) printf 'PTP (foto)' ;;
+		08:*)     printf 'archiviazione' ;;
+		ff:42:01) printf 'ADB' ;;
+		ff:ff:*)  printf 'MTP (trasferimento file)' ;;
+		01:*)     printf 'audio' ;;
+		03:*)     printf 'periferica di input' ;;
+		*)        printf '' ;;
+	esac
+}
+
+# Il modulo del kernel che serve a quella funzione, se la conosciamo.
+usb_function_module() {
+	case "$1:$2:$3" in
+		02:0d:*)  printf 'cdc_ncm' ;;
+		02:06:*)  printf 'cdc_ether' ;;
+		02:0c:*)  printf 'cdc_eem' ;;
+		02:0e:*)  printf 'cdc_mbim' ;;
+		e0:01:03) printf 'rndis_host' ;;
+	esac
+}
+
+# Stato di un modulo: caricato, presente sul disco, o proprio assente.
+#
+# I tre casi hanno rimedi diversi - niente, un `modprobe`, un `apk add` con
+# Internet - e appiattirli su "non funziona" manda a cercare nel posto sbagliato.
+module_state() {
+	[ -d "/sys/module/$1" ] && { printf 'caricato'; return; }
+	[ -n "$(find /lib/modules -name "$1.ko*" 2>/dev/null | head -n 1)" ] \
+		&& { printf 'installato'; return; }
+	printf 'assente'
+}
+
+# Dispositivi USB collegati, con l'eventuale interfaccia di rete.
+#
+# Serve a distinguere i due modi in cui il tethering "non si vede", che dal lato
+# del telefono sembrano identici: non c'e' niente attaccato, oppure c'e' ma
+# nessun driver di rete lo ha agganciato - il telefono e' in trasferimento file,
+# oppure manca il modulo per il modo che espone. Senza questo, il secondo caso
+# si presenta come uno schermo vuoto, che e' il modo peggiore di dirlo.
+method_usb_devices() {
+	local path real name netdev driver iface cls sub proto ifdriver module
+
+	json_init
+	json_add_array devices
+
+	for path in /sys/bus/usb/devices/[0-9]*-[0-9]*; do
+		[ -d "$path" ] || continue
+		# Le interfacce (1-1:1.0) non sono dispositivi.
+		case "${path##*/}" in *:*) continue ;; esac
+		# Gli hub non sono cio' che si sta cercando.
+		[ "$(first_line "$path/bDeviceClass")" = "09" ] && continue
+
+		real=$(readlink -f "$path")
+		netdev=$(netdev_of_usb "$real")
+		driver=""
+		[ -n "$netdev" ] && driver=$(basename "$(readlink -f "/sys/class/net/$netdev/device/driver" 2>/dev/null)" 2>/dev/null)
+
+		name=$(first_line "$path/product")
+		[ -n "$name" ] || name=$(first_line "$path/manufacturer")
+
+		json_add_object
+		json_add_string  port    "${path##*/}"
+		json_add_string  name    "$name"
+		json_add_string  vendor  "$(first_line "$path/idVendor")"
+		json_add_string  product "$(first_line "$path/idProduct")"
+		json_add_string  speed   "$(first_line "$path/speed")"
+		# Vuoto significa: collegato, ma nessun driver di rete lo ha preso.
+		json_add_string  netdev  "$netdev"
+		json_add_string  driver  "$driver"
+
+		# Le funzioni che il dispositivo espone, con il driver che le ha prese.
+		# E' il livello a cui si vede la differenza fra "il telefono non offre
+		# rete" e "la offre e nessuno l'ha agganciata": senza, i due casi
+		# arrivano all'interfaccia identici.
+		json_add_array interfaces
+		for iface in "$path":*; do
+			[ -d "$iface" ] || continue
+			cls=$(first_line "$iface/bInterfaceClass")
+			sub=$(first_line "$iface/bInterfaceSubClass")
+			proto=$(first_line "$iface/bInterfaceProtocol")
+			ifdriver=$(basename "$(readlink -f "$iface/driver" 2>/dev/null)" 2>/dev/null)
+			module=$(usb_function_module "$cls" "$sub" "$proto")
+
+			json_add_object
+			json_add_string  label    "$(usb_function_label "$cls" "$sub" "$proto")"
+			json_add_string  class    "$cls.$sub.$proto"
+			json_add_string  driver   "$ifdriver"
+			# Vero per le funzioni di rete: sono quelle che potrebbero
+			# diventare un uplink, e le uniche per cui manca qualcosa se
+			# nessun driver le ha prese.
+			json_add_boolean network  "$([ -n "$module" ] && echo 1 || echo 0)"
+			json_add_string  module   "$module"
+			json_add_string  module_state "$([ -n "$module" ] && module_state "$module")"
+			json_close_object
+		done
+		json_close_array
+
+		json_close_object
+	done
+
+	json_close_array
+
+	# Come sta l'interfaccia logica adesso. `disabled` e' il flag che decide se
+	# il tethering compare fra le WAN: quando resta a 1 con un telefono
+	# attaccato, l'hotplug non e' arrivato in fondo.
+	# Stato dei moduli che servono al tethering, `usbnet` compreso.
+	#
+	# `usbnet` non aggancia niente da solo: e' la base su cui poggiano cdc_ncm,
+	# rndis_host e cdc_ether. Se non si carica lui non si carica nessuno dei
+	# tre, e il sintomo si presenta come "il driver c'e' ma non fa niente" -
+	# tre guasti apparenti che in realta' sono uno. Va quindi letto e mostrato
+	# accanto agli altri, altrimenti si cerca il problema nel modulo sbagliato.
+	json_add_object modules
+	for module in usbnet cdc_ncm rndis_host cdc_ether cdc_mbim cdc_eem ipheth; do
+		json_add_string "$module" "$(module_state "$module")"
+	done
+	json_close_object
+
+	json_add_object wan_usb
+	json_add_string  device   "$(uci -q get network.wan_usb.device)"
+	json_add_boolean disabled "$([ "$(uci -q get network.wan_usb.disabled)" = "1" ] && echo 1 || echo 0)"
+	json_close_object
+
+	json_dump
+}
+
+# Stato della porta USB: cosa e' stato chiesto e cosa e' davvero in atto.
+#
+# I due possono divergere - un rebind del controller riporta le porte al
+# default finche' la modalita' non viene riapplicata - e l'interfaccia deve
+# poter dire quale dei due sta guardando.
+method_usb() {
+	local want
+
+	want=$(uci -q get travel.usb.force_usb2)
+	# Assente significa "velocita' piena": e' il default, e la limitazione a
+	# USB 2.0 e' una scelta esplicita di chi ha visto il link cadere.
+	[ -n "$want" ] || want=0
+
+	json_init
+	json_add_boolean force_usb2 "$([ "$want" = "1" ] && echo 1 || echo 0)"
+	json_add_string  mode "$(sh /usr/share/travel/usb-mode.sh status)"
+	json_dump
+}
+
+# Fa prendere effetto a `travel.usb.force_usb2`, che il browser ha gia' scritto
+# con `uci set` piu' `uci apply`. Stesso schema di `mwan_apply`: la scrittura
+# passa da uci, l'effetto sull'hardware da qui.
+method_usb_mode() {
+	cat >/dev/null
+
+	sh /usr/share/travel/usb-mode.sh apply
+
+	json_init
+	json_add_boolean applied 1
+	json_add_string  mode "$(sh /usr/share/travel/usb-mode.sh status)"
+	json_dump
+}
+
+method_usb_reset() {
+	local base dev driver=""
+
+	cat >/dev/null
+
+	for base in /sys/bus/platform/drivers/xhci*; do
+		[ -d "$base" ] || continue
+		dev=$(ls "$base" 2>/dev/null | grep -E '^[0-9a-f]+\.' | head -n 1)
+		[ -n "$dev" ] || continue
+		driver="$base"
+		break
+	done
+
+	if [ -z "$driver" ]; then
+		fail_json "nessun controller USB agganciato a un driver xhci"
+		return
+	fi
+
+	logger -t travel-usb "riavvio del controller USB $dev richiesto dall'interfaccia"
+
+	printf '%s' "$dev" > "$driver/unbind" 2>/dev/null
+	sleep 3
+	printf '%s' "$dev" > "$driver/bind" 2>/dev/null
+	sleep 3
+
+	# Il rebind ricrea i root hub con le porte al default, cioe' SuperSpeed
+	# accesa: la modalita' scelta va rimessa subito, senza aspettare l'hotplug.
+	sh /usr/share/travel/usb-mode.sh apply
+
+	json_init
+	json_add_boolean reset 1
+	json_add_string  controller "$dev"
+	json_add_string  mode "$(sh /usr/share/travel/usb-mode.sh status)"
+	json_dump
+}
+
+# Fa prendere effetto alle modifiche multi-WAN.
+#
+# `uci apply` da solo non basta: mwan3 rilegge la configurazione al riavvio del
+# servizio, e le metriche delle rotte le riapplica netifd. Nessun argomento -
+# non c'e' niente da passare e quindi niente da validare.
+#
+# Il ricaricamento della rete rinnova gli indirizzi ma non tocca le
+# associazioni WiFi, che vivono un livello piu' sotto.
+method_mwan_apply() {
+	local holder
+
+	cat >/dev/null
+
+	if ! [ -x /etc/init.d/mwan3 ]; then
+		fail_json "mwan3 non e' installato"
+		return
+	fi
+
+	# Il cancello, dalla parte del bilanciamento. Il browser ha gia' scritto la
+	# modalita' in uci: qui la si rifiuta e la si riporta a failover, che e' la
+	# modalita' compatibile con tutto. Lasciarla scritta ma non applicata
+	# vorrebbe dire una configurazione che dice una cosa e un router che ne fa
+	# un'altra, ed e' esattamente lo stato che questo progetto rifiuta altrove.
+	if policy_balance; then
+		holder=$(policy_holder balance) && {
+			uci set mwan3.travel_default.use_policy=travel_failover
+			uci commit mwan3
+			/etc/init.d/mwan3 restart >/dev/null 2>&1
+			fail_json "non posso passare al bilanciamento: $(policy_reason "$holder")"
+			return
+		}
+	fi
+
+	/etc/init.d/network reload >/dev/null 2>&1
+	/etc/init.d/mwan3 restart >/dev/null 2>&1
+
+	json_init
+	json_add_boolean applied 1
+	json_dump
+}
+
+# --- Captive portal (requisito E.4) ------------------------------------------
+#
+# Il problema: una WAN con indirizzo, gateway e DNS puo' non avere Internet,
+# perche' un portale intercetta tutto e risponde con la propria pagina di
+# accesso. DHCP e ping passano, quindi ne' netifd ne' mwan3 se ne accorgono -
+# anzi mwan3 la dichiara online e ci manda sopra il traffico. A vederlo e' solo
+# una richiesta HTTP vera, guardando COSA torna indietro.
+#
+# La richiesta deve uscire dalla WAN che si vuole verificare, non da quella
+# predefinita, altrimenti si misura sempre la stessa. Tre modi valutati:
+#
+#  1. legare la richiesta all'indirizzo di partenza della WAN. Funziona solo
+#     grazie alle regole `from <ip>` che installa mwan3 - e mwan3 le toglie
+#     proprio quando considera quella WAN offline, cioe' nel caso che qui
+#     interessa di piu';
+#  2. spostare la rotta predefinita per la durata del probe. Sposterebbe il
+#     traffico di tutti per verificare una cosa sola: fuori discussione;
+#  3. **una regola temporanea sulla destinazione**, adottata: una tabella di
+#     servizio con la sola rotta predefinita di quella WAN, e una `ip rule` che
+#     ci manda il solo indirizzo dell'endpoint di verifica. Tocca un indirizzo
+#     per qualche secondo, e funziona anche senza mwan3.
+#
+# Serve `ip` completo (pacchetto `ip-full`, gia' richiesto da mwan3): quello di
+# busybox non ha le regole di routing. Se manca lo si dice, invece di dedurre un
+# risultato che non e' stato misurato.
+
+# Tabella e priorita' usate solo durante un probe. mwan3 numera le proprie
+# tabelle a partire da 1, una per interfaccia, e tiene le sue regole oltre il
+# migliaio: qui si sta lontani da entrambe, e piu' in alto in priorita' cosi'
+# la regola del probe vince finche' esiste.
+PORTAL_TABLE=97
+PORTAL_PREF=90
+PORTAL_LOCK=/tmp/travel-portal.lock
+PORTAL_TIMEOUT=5
+
+# L'endpoint di verifica: una pagina in HTTP semplice dal contenuto noto.
+#
+# Deve essere HTTP e non HTTPS. Un portale che intercetta una connessione TLS la
+# fa fallire, e un fallimento non si distingue da una rete che non funziona; in
+# chiaro invece il portale risponde davvero, ed e' la sua risposta a
+# smascherarlo. E' il motivo per cui tutti i sistemi operativi usano un endpoint
+# in chiaro per questa stessa verifica.
+PORTAL_DEFAULT_URL='http://detectportal.firefox.com/success.txt'
+PORTAL_DEFAULT_MARKER='success'
+
+# Verifica che il nome di WAN arrivato dalla rete sia una di quelle configurate.
+# Lista chiusa, come per le radio della scansione: cio' che arriva dal browser
+# non finisce mai dentro un comando senza essere prima riconosciuto.
+valid_wan() {
+	local want="$1" net
+	for net in $(wan_networks); do
+		[ "$net" = "$want" ] && { printf '%s' "$net"; return 0; }
+	done
+	return 1
+}
+
+# Le sezioni della memoria dei portali in /etc/config/travel.
+portal_sections() {
+	uci show travel 2>/dev/null | sed -n 's/^travel\.\([^.]*\)=portal$/\1/p'
+}
+
+portal_setting() {
+	local value
+	value=$(uci -q get "travel.globals.$1")
+	[ -n "$value" ] && printf '%s' "$value" || printf '%s' "$2"
+}
+
+# Host, porta e percorso di un URL http://. Solo http, per il motivo di sopra.
+portal_split() {
+	local url="$1" rest hostport
+
+	case "$url" in
+		http://*) rest="${url#http://}" ;;
+		*) return 1 ;;
+	esac
+
+	hostport="${rest%%/*}"
+	case "$rest" in
+		*/*) PORTAL_PATH="/${rest#*/}" ;;
+		*)   PORTAL_PATH="/" ;;
+	esac
+	PORTAL_HOST="${hostport%%:*}"
+	case "$hostport" in
+		*:*) PORTAL_PORT="${hostport##*:}" ;;
+		*)   PORTAL_PORT=80 ;;
+	esac
+
+	[ -n "$PORTAL_HOST" ]
+}
+
+# Primo indirizzo IPv4 di un nome, secondo il resolver del router.
+#
+# Si leggono solo le righe dopo "Name:": busybox stampa prima l'indirizzo del
+# server DNS, con un'etichetta che in alcune versioni e' identica a quella delle
+# risposte. Partire da "Name:" evita di scambiare il resolver per il risultato.
+#
+# Se la rete ha il DNS dirottato dal portale qui torna l'indirizzo del portale:
+# non e' un problema, e' il probe che va a sbattere contro il portale e lo
+# riconosce.
+portal_resolve() {
+	nslookup "$1" 2>/dev/null | awk '
+		/^Name:/ { seen = 1; next }
+		seen && /^Address/ {
+			addr = $NF
+			sub(/:[0-9]+$/, "", addr)
+			if (addr ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print addr; exit }
+		}'
+}
+
+# Un probe alla volta.
+#
+# Due insieme si contenderebbero la stessa tabella di servizio, e il secondo
+# finirebbe per misurare la WAN del primo - un risultato sbagliato che sembra
+# giusto, che e' il peggiore.
+#
+# Il lock e' una cartella perche' crearla e' atomico. Se un probe viene ucciso
+# prima di poterla togliere, un lock eterno bloccherebbe le verifiche per
+# sempre: dopo un minuto, piu' del doppio di quanto puo' durare un probe, si
+# considera abbandonato e si riparte.
+portal_lock() {
+	local at
+
+	if mkdir "$PORTAL_LOCK" 2>/dev/null; then
+		date +%s > "$PORTAL_LOCK/at" 2>/dev/null
+		return 0
+	fi
+
+	at=$(cat "$PORTAL_LOCK/at" 2>/dev/null)
+	[ -n "$at" ] || at=0
+	[ $(( $(date +%s) - at )) -gt 60 ] || return 1
+
+	rm -rf "$PORTAL_LOCK"
+	mkdir "$PORTAL_LOCK" 2>/dev/null || return 1
+	date +%s > "$PORTAL_LOCK/at" 2>/dev/null
+}
+
+portal_cleanup() {
+	local n=0
+
+	# Piu' di una regola con la stessa priorita' non dovrebbe esserci, ma se ne
+	# restasse una da un giro precedente resterebbe li' a dirottare quel solo
+	# indirizzo per sempre. Il giro e' limitato: `ip rule del` fallisce quando
+	# non c'e' piu' niente da togliere, e non si conta su quello soltanto.
+	while [ "$n" -lt 4 ]; do
+		ip rule del pref "$PORTAL_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+
+	ip route flush table "$PORTAL_TABLE" 2>/dev/null
+	rm -rf "$PORTAL_LOCK" 2>/dev/null
+}
+
+# Manda il solo indirizzo dell'endpoint dentro la WAN da verificare.
+portal_route_up() {
+	local device="$1" gateway="$2" address="$3"
+
+	# Possono restare da un probe interrotto: si riparte pulito.
+	ip rule del pref "$PORTAL_PREF" 2>/dev/null
+	ip route flush table "$PORTAL_TABLE" 2>/dev/null
+
+	# Una rotta host verso il solo indirizzo dell'endpoint, non una rotta di
+	# default. La prima versione metteva `default` in questa tabella e nessuno
+	# se ne accorgeva - tranne tailscaled: il suo monitor tratta la comparsa o
+	# la sparizione di una rotta di default, in QUALUNQUE tabella, come un
+	# cambio di rete importante, e a ogni probe rinegoziava gli endpoint. Una
+	# /32 dice esattamente cio' che serve e per il monitor e' rumore di fondo.
+	if [ -n "$gateway" ]; then
+		ip route add "$address" via "$gateway" dev "$device" table "$PORTAL_TABLE" 2>/dev/null || return 1
+	else
+		# Uplink punto-punto: nessun gateway da attraversare, basta il device.
+		ip route add "$address" dev "$device" table "$PORTAL_TABLE" 2>/dev/null || return 1
+	fi
+
+	ip rule add to "$address" table "$PORTAL_TABLE" pref "$PORTAL_PREF" 2>/dev/null
+}
+
+# La richiesta HTTP vera e propria, in due modi.
+#
+# `nc` con una richiesta scritta a mano e' il modo preferito: restituisce la riga
+# di stato e l'header `Location`, cioe' l'indirizzo della pagina di accesso, che
+# e' proprio quello che serve mostrare. Se non c'e' o non risponde si ripiega su
+# `uclient-fetch`, che segue i rimandi e quindi puo' solo dire se il contenuto e'
+# quello atteso. Lo strumento usato finisce nella risposta: un verdetto piu'
+# povero va detto, non nascosto.
+portal_fetch_nc() {
+	command -v nc >/dev/null 2>&1 || return 1
+
+	printf 'GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: travel-router\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n' \
+		"$PORTAL_PATH" "$PORTAL_HOST" \
+		| nc -w "$PORTAL_TIMEOUT" "$1" "$PORTAL_PORT" 2>/dev/null \
+		| head -n 40 | cut -c 1-400
+}
+
+portal_fetch_uclient() {
+	command -v uclient-fetch >/dev/null 2>&1 || return 1
+
+	uclient-fetch -q -T "$PORTAL_TIMEOUT" -O - "$1" 2>/dev/null | head -n 40 | cut -c 1-400
+}
+
+# Nome di sezione stabile per la memoria dei portali.
+#
+# Deriva dalla chiave - l'SSID, o il nome dell'interfaccia per le WAN via cavo -
+# cosi' la stessa rete ritrovata fra un mese ricade sulla stessa sezione senza
+# dover tenere un indice da nessuna parte.
+portal_section_name() {
+	printf 'portal_%s' "$(printf '%s' "$1" | md5sum | cut -c 1-10)"
+}
+
+# Ogni quanto si riscrive "qui c'e' un portale", e per quanto tempo dopo averlo
+# visto un ritorno a Internet vale come accesso riuscito.
+PORTAL_SEEN_AGAIN=300
+PORTAL_LOGIN_WINDOW=3600
+
+# Memoria dei portali incontrati, in /etc/config/travel.
+#
+# Si scrive in flash solo quando cambia qualcosa che vale la pena ricordare: la
+# prima volta che una rete si rivela dietro un portale, e il momento in cui
+# l'accesso e' riuscito. Gli stati che vanno e vengono - una WAN che perde il
+# collegamento e lo riprende - non si scrivono affatto: sarebbero scritture
+# continue per un'informazione che vive gia' in RAM nel daemon.
+portal_remember() {
+	local state="$1" key="$2" label="$3" network="$4" url="$5"
+	local section now seen login
+
+	[ -n "$key" ] || return 0
+	section=$(portal_section_name "$key")
+	now=$(date +%s)
+	seen=$(uci -q get "travel.$section.last_seen")
+	seen="${seen:-0}"
+
+	if [ "$state" = "portal" ]; then
+		if [ -z "$(uci -q get "travel.$section")" ]; then
+			uci set "travel.$section=portal"
+			uci set "travel.$section.key=$key"
+		fi
+		[ $((now - seen)) -lt "$PORTAL_SEEN_AGAIN" ] && return 0
+
+		uci set "travel.$section.label=$label"
+		uci set "travel.$section.network=$network"
+		uci set "travel.$section.last_seen=$now"
+		[ -n "$url" ] && uci set "travel.$section.url=$url"
+		uci commit travel
+		return 0
+	fi
+
+	# Il passaggio da portale a Internet raggiungibile e' l'unico momento in cui
+	# si puo' affermare che l'accesso e' riuscito: si registra solo se un portale
+	# era stato visto di recente su questa stessa rete.
+	[ "$state" = "online" ] || return 0
+	[ "$seen" -gt 0 ] || return 0
+	[ $((now - seen)) -lt "$PORTAL_LOGIN_WINDOW" ] || return 0
+
+	login=$(uci -q get "travel.$section.last_login")
+	login="${login:-0}"
+	[ "$login" -ge "$seen" ] && return 0
+
+	uci set "travel.$section.last_login=$now"
+	uci commit travel
+}
+
+# Verifica una WAN e dice in che stato e' davvero la sua uscita verso Internet.
+#
+# Quattro esiti, con rimedi diversi:
+#   online   la pagina attesa e' arrivata intatta: Internet passa davvero
+#   portal   ha risposto qualcos'altro: c'e' un portale che intercetta
+#   blocked  non ha risposto nessuno: indirizzo si', uscita no
+#   unknown  non si e' potuto misurare, e il motivo sta nella risposta
+method_portal_probe() {
+	local input candidate network netstat device gateway address ssid section
+	local url marker dest response code location state reason tool started
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var candidate network
+
+	network=$(valid_wan "$candidate") || { fail_json "WAN sconosciuta"; return; }
+
+	url=$(portal_setting portal_url "$PORTAL_DEFAULT_URL")
+	marker=$(portal_setting portal_marker "$PORTAL_DEFAULT_MARKER")
+
+	state="unknown"; reason=""; tool=""; code=""; location=""; dest=""
+	started=$(date +%s)
+
+	netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
+	device=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
+	address=$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')
+	gateway=$(default_gateway "$netstat")
+
+	if ! portal_split "$url"; then
+		reason="url-non-http"
+	elif [ -z "$device" ] || [ -z "$address" ]; then
+		# Senza indirizzo non c'e' niente da verificare: lo stato della WAN lo
+		# dice gia' la dashboard, e un portale non c'entra.
+		reason="no-address"
+	elif ! command -v ip >/dev/null 2>&1; then
+		reason="no-ip"
+	elif ! portal_lock; then
+		reason="occupato"
+	else
+		trap portal_cleanup EXIT INT TERM
+
+		dest=$(portal_resolve "$PORTAL_HOST")
+		if [ -z "$dest" ]; then
+			# Il nome non si risolve: DNS rotto o rete morta, non un portale. I
+			# portali il DNS lo rispondono - e' come attirano il browser sulla
+			# loro pagina - quindi qui non si puo' concludere niente.
+			reason="dns"
+		elif ! portal_route_up "$device" "$gateway" "$dest"; then
+			reason="no-policy-routing"
+		else
+			response=$(portal_fetch_nc "$dest")
+			tool="nc"
+
+			if [ -z "$response" ]; then
+				response=$(portal_fetch_uclient "$url")
+				tool="uclient-fetch"
+			fi
+
+			if [ -z "$response" ]; then
+				tool=""
+				if ! command -v nc >/dev/null 2>&1 && ! command -v uclient-fetch >/dev/null 2>&1; then
+					# Nessuno dei due strumenti c'e': non e' la rete a non
+					# rispondere, e' che non e' stato chiesto niente. Chiamarlo
+					# "bloccato" manderebbe a cercare un guasto inesistente.
+					reason="no-http-client"
+				else
+					state="blocked"
+					# Con la validazione della sorgente accesa il kernel butta
+					# via le risposte che rientrano da una WAN diversa da quella
+					# della rotta predefinita: ogni probe fuori dalla WAN attiva
+					# risulterebbe bloccato senza esserlo.
+					[ "$(uci -q get firewall.@defaults[0].src_validation)" = "1" ] && reason="src_validation"
+				fi
+			else
+				code=$(printf '%s\n' "$response" | sed -n '1s|^HTTP/[0-9.]\{1,\} \([0-9]\{3\}\).*|\1|p')
+				location=$(printf '%s\n' "$response" | sed -n 's/^[Ll]ocation:[[:space:]]*\([^[:space:]]\{1,\}\).*$/\1/p' | head -n 1)
+
+				if printf '%s' "$response" | grep -qi "$marker"; then
+					state="online"
+				else
+					state="portal"
+				fi
+			fi
+		fi
+
+		portal_cleanup
+		trap - EXIT INT TERM
+	fi
+
+	# L'indirizzo da aprire nel browser. Quando il portale rimanda altrove e'
+	# quello il posto giusto; quando invece serve la propria pagina al posto di
+	# quella richiesta, riaprire l'endpoint di verifica ci riporta esattamente
+	# li'. Fuori dallo stato "portal" non c'e' nessuna pagina da aprire.
+	[ "$state" = "portal" ] && [ -z "$location" ] && location="$url"
+	[ "$state" = "portal" ] || location=""
+
+	# La chiave della memoria e' l'SSID quando c'e': il portale appartiene alla
+	# rete dell'albergo, non all'interfaccia che ci si e' collegata. Per le WAN
+	# via cavo e per il tethering resta il nome dell'interfaccia, che li' e'
+	# l'unica cosa stabile.
+	section=$(sta_section_of_network "$network")
+	ssid=""
+	[ -n "$section" ] && ssid=$(uci -q get "wireless.$section.ssid")
+	portal_remember "$state" "${ssid:-$network}" "${ssid:-$network}" "$network" "$location"
+
+	json_init
+	json_add_string  network   "$network"
+	json_add_string  state     "$state"
+	# Perche' non si e' potuto misurare, quando non si e' potuto: uno stato
+	# "sconosciuto" senza motivo manda a indovinare.
+	json_add_string  reason    "$reason"
+	json_add_string  url       "$location"
+	json_add_string  probe_url "$url"
+	json_add_string  ip        "$dest"
+	# Con quale strumento: `uclient-fetch` segue i rimandi, quindi non puo' dire
+	# dove sta la pagina di accesso. Saperlo spiega una risposta piu' povera.
+	json_add_string  tool      "$tool"
+	json_add_int     http      "${code:-0}"
+	json_add_int     at        "$(date +%s)"
+	json_add_int     took      "$(( $(date +%s) - started ))"
+	json_dump
+}
+
+# Le reti su cui e' stato incontrato un portale, con l'ultimo accesso riuscito.
+method_portal_networks() {
+	local section
+
+	json_init
+	json_add_array portals
+
+	for section in $(portal_sections); do
+		json_add_object
+		json_add_string section    "$section"
+		json_add_string key        "$(uci -q get "travel.$section.key")"
+		json_add_string label      "$(uci -q get "travel.$section.label")"
+		json_add_string network    "$(uci -q get "travel.$section.network")"
+		json_add_string url        "$(uci -q get "travel.$section.url")"
+		json_add_int    last_seen  "$(uci -q get "travel.$section.last_seen" || echo 0)"
+		json_add_int    last_login "$(uci -q get "travel.$section.last_login" || echo 0)"
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+}
+
+method_portal_forget() {
+	local input candidate section valid
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var candidate section
+
+	section=""
+	for valid in $(portal_sections); do
+		[ "$valid" = "$candidate" ] && section="$valid"
+	done
+	[ -n "$section" ] || { fail_json "voce sconosciuta"; return; }
+
+	uci delete "travel.$section"
+	uci commit travel
+
+	json_init
+	json_add_boolean deleted 1
+	json_dump
+}
+
+# --- Chi decide da dove esce il traffico (Fase 6b) ----------------------------
+#
+# Tre cose, e **al massimo una alla volta**:
+#
+#   balance    il bilanciamento multi-WAN sparpaglia le connessioni su piu' WAN
+#   ts_exit    un exit node Tailscale porta tutto dentro il tailnet
+#   wireguard  un tunnel WireGuard porta tutto dall'altra parte
+#
+# Sembrano quattro vincoli distinti - "in bilanciamento niente exit node", "con
+# WireGuard niente bilanciamento", "WireGuard ed exit node si escludono"... - e
+# invece sono lo stesso enunciato visto da tre lati: **sono tre modi di
+# decidere la stessa cosa, e due decisioni contemporanee sulla stessa cosa non
+# esistono.**
+#
+# Il perche', per ciascuna coppia:
+#
+# - **balance con un tunnel completo** non ha niente da bilanciare e tutto da
+#   rompere. Il tunnel e' una connessione sola: mwan3 non la puo' sparpagliare,
+#   ma la puo' spostare, e a ogni spostamento cambia l'indirizzo di partenza e
+#   costringe a un handshake nuovo su *tutto* il traffico, perche' tutto e' li'
+#   dentro (il ragionamento lungo sta piu' su, nella Fase 6);
+# - **due tunnel completi insieme** vorrebbe dire due rotte predefinite dentro
+#   due tunnel diversi. Vincerebbe quella con la priorita' piu' alta e l'altra
+#   resterebbe li' a non fare niente, con l'interfaccia che ne mostra due
+#   accesi: uno stato che sembra una configurazione e invece e' un errore
+#   silenzioso.
+#
+# Scritta una volta sola, qui. La UI la rilegge da `travel.vpn` per spegnere le
+# opzioni giuste, e i metodi che applicano la ricontrollano prima di agire: se
+# l'interfaccia venisse scavalcata - LuCI, ssh, un backup importato - il vincolo
+# regge lo stesso, perche' vive nel punto in cui la modifica prende effetto e
+# non in quello in cui viene chiesta.
+
+# Vero se il multi-WAN e' in bilanciamento.
+policy_balance() {
+	[ "$(uci -q get mwan3.travel_default.use_policy)" = "travel_balance" ]
+}
+
+# Vero se un exit node Tailscale e' configurato. Conta la CONFIGURAZIONE, non
+# se il tunnel sta funzionando in questo momento: il vincolo deve valere anche
+# mentre la rete e' giu', altrimenti basterebbe un momento di disconnessione per
+# infilare una configurazione incompatibile che poi torna su da sola.
+policy_ts_exit() {
+	[ -n "$(uci -q get travel.tailscale.exit_node)" ]
+}
+
+# Vero se il tunnel WireGuard e' acceso.
+policy_wireguard() {
+	[ -n "$(uci -q get network.travel_wg)" ] &&
+		[ "$(uci -q get network.travel_wg.disabled)" != "1" ]
+}
+
+# Chi sta gia' decidendo, escludendo quello che si sta per accendere.
+#
+# Torna il nome dell'occupante, o niente se la strada e' libera. Il chiamante
+# passa cio' che vuole accendere, cosi' la stessa funzione risponde a tutte e
+# tre le domande senza tre elenchi da tenere allineati.
+policy_holder() {
+	local want="$1"
+
+	[ "$want" != "balance" ]   && policy_balance   && { printf 'balance';   return 0; }
+	[ "$want" != "ts_exit" ]   && policy_ts_exit   && { printf 'ts_exit';   return 0; }
+	[ "$want" != "wireguard" ] && policy_wireguard && { printf 'wireguard'; return 0; }
+
+	return 1
+}
+
+# La stessa frase per tutti: la scrive il router, non tre schermate diverse.
+policy_reason() {
+	case "$1" in
+		balance)
+			printf 'il multi-WAN e in bilanciamento: sparpaglia le connessioni su piu WAN, e un tunnel non si puo sparpagliare' ;;
+		ts_exit)
+			printf 'un exit node Tailscale sta gia portando fuori tutto il traffico' ;;
+		wireguard)
+			printf 'il tunnel WireGuard sta gia portando fuori tutto il traffico' ;;
+		*)
+			printf '' ;;
+	esac
+}
+
+# Lo stato completo, per l'interfaccia: i tre atomi e cosa e' bloccato da chi.
+#
+# La UI non ricalcola niente e non conosce le regole: legge quale opzione e'
+# bloccata e da cosa, e spegne quella. Una seconda copia della logica nel
+# frontend sarebbe una copia che prima o poi diverge, e divergerebbe proprio nel
+# caso raro - che qui vuol dire: in albergo.
+policy_json() {
+	json_add_object policy
+	json_add_boolean balance   "$(policy_balance   && echo 1 || echo 0)"
+	json_add_boolean ts_exit   "$(policy_ts_exit   && echo 1 || echo 0)"
+	json_add_boolean wireguard "$(policy_wireguard && echo 1 || echo 0)"
+
+	json_add_object blocked_by
+	for _want in balance ts_exit wireguard; do
+		json_add_string "$_want" "$(policy_holder "$_want" || true)"
+	done
+	json_close_object
+
+	json_add_object reason
+	for _want in balance ts_exit wireguard; do
+		json_add_string "$_want" "$(policy_reason "$(policy_holder "$_want" || true)")"
+	done
+	json_close_object
+	json_close_object
+}
+
+# --- VPN: Tailscale e kill switch (requisito F) -------------------------------
+#
+# Due meta' che restano distinte: `tailscale status --json` dice cosa sta
+# succedendo, `/etc/config/travel` dice cosa vogliamo. La UI ha bisogno di
+# entrambe - e di sapere quando divergono, che e' il caso in cui qualcosa non
+# ha preso effetto.
+#
+# Il kill switch invece non passa da qui: e' una sola opzione `enabled` su una
+# regola di firewall gia' esistente, quindi la scrive il browser con `uci` e
+# l'applica con il ritorno indietro automatico, come ogni altra modifica
+# rischiosa. Qui si dice soltanto com'e' messa.
+
+TS_PEERS=/tmp/travel-ts-peers
+TS_AUTHKEY=/tmp/travel-ts-authkey
+# Dove finiscono messaggio ed esito di un `tailscale up` staccato. Il login
+# interattivo non si puo' aspettare - il comando resta appeso finche' qualcuno
+# non apre il link - quindi l'unico modo di sapere com'e' andato e' fargli
+# lasciare tutto scritto da qualche parte.
+TS_UP_LOG=/tmp/travel-ts-up.log
+TS_UP_RC=/tmp/travel-ts-up.rc
+
+# Il binario, se c'e'. Non si da' per scontato il percorso: cambia fra le
+# versioni del pacchetto.
+ts_bin() {
+	local candidate
+	for candidate in /usr/sbin/tailscale /usr/bin/tailscale; do
+		[ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+	done
+	return 1
+}
+
+ts_running() {
+	[ -n "$(pidof tailscaled 2>/dev/null)" ]
+}
+
+# Le opzioni con cui alzare il tunnel, prese da /etc/config/travel.
+#
+# Si passano TUTTE a ogni giro, anche quelle spente: `tailscale up` conserva le
+# opzioni che non gli ripeti, quindi passarne un sottoinsieme lascerebbe in
+# piedi scelte che dall'interfaccia risultano tolte. Quello che si vede deve
+# essere quello che c'e'.
+ts_flags() {
+	local exit_node accept_routes accept_dns advertise_lan advertise_exit cidr
+
+	exit_node=$(uci -q get travel.tailscale.exit_node)
+	accept_routes=$(uci -q get travel.tailscale.accept_routes)
+	accept_dns=$(uci -q get travel.tailscale.accept_dns)
+	advertise_lan=$(uci -q get travel.tailscale.advertise_lan)
+	advertise_exit=$(uci -q get travel.tailscale.advertise_exit)
+
+	printf ' --accept-routes=%s' "$([ "$accept_routes" = "1" ] && echo true || echo false)"
+	printf ' --accept-dns=%s' "$([ "$accept_dns" = "1" ] && echo true || echo false)"
+	# Il router si offre come uscita per gli altri nodi del tailnet: e' il
+	# rovescio esatto di `--exit-node`, e i due possono stare accesi insieme
+	# senza contraddirsi - si esce da un'altra parte e nel frattempo si fa
+	# uscire qualcun altro da qui.
+	printf ' --advertise-exit-node=%s' "$([ "$advertise_exit" = "1" ] && echo true || echo false)"
+
+	if [ -n "$exit_node" ]; then
+		printf ' --exit-node=%s' "$exit_node"
+		# Senza questa, usando un exit node il router perde la propria LAN - e
+		# con lei l'interfaccia di gestione vista dai client. Su un router e'
+		# una regressione, non una misura di sicurezza.
+		printf ' --exit-node-allow-lan-access=true'
+	else
+		printf ' --exit-node='
+		# **Va nominata anche da spenta, ed e' l'unico modo di spegnerla.**
+		#
+		# `tailscale up` si rifiuta di partire se nei prefs e' rimasta accesa
+		# un'opzione diversa dal valore predefinito che non gli si sta
+		# ripetendo. Togliendo l'exit node, `ExitNodeAllowLANAccess` restava a
+		# `true` - e' `tailscale set` a lasciarcela - mentre questa riga
+		# smetteva di nominarla: da li' in poi ogni `up` moriva con "requires
+		# mentioning all non-default flags" e il tunnel non saliva piu'.
+		# Verificato sul dispositivo: e' il guasto per cui *Accendi* provava e
+		# ricadeva giu' senza dire niente.
+		#
+		# Nominarla a `true` non si puo' - tailscale la accetta solo insieme a
+		# `--exit-node` - ma a `false` si': la si spegne e la si dichiara con lo
+		# stesso gesto, che e' esattamente cio' che serve. Senza exit node non
+		# toglie niente a nessuno, perche' quello che concede e' l'accesso alla
+		# LAN *mentre si esce da un altro nodo*, e da un altro nodo non si sta
+		# uscendo.
+		printf ' --exit-node-allow-lan-access=false'
+	fi
+
+	if [ "$advertise_lan" = "1" ]; then
+		cidr=$(lan_cidr)
+		[ -n "$cidr" ] && printf ' --advertise-routes=%s' "$cidr"
+	else
+		printf ' --advertise-routes='
+	fi
+}
+
+# `tailscale up`, con un secondo tentativo quando si rifiuta di partire.
+#
+# Il rifiuto e' sempre lo stesso: nei prefs c'e' un'opzione diversa dal valore
+# predefinito che non gli stiamo ripetendo, e il comando non parte finche' non
+# la si nomina. Il caso vero era `--exit-node-allow-lan-access` (vedi
+# `ts_flags`), ed e' chiuso; ma i prefs sono scrivibili anche da fuori - ssh,
+# un'opzione nuova in una versione nuova di tailscale - e da fuori tornerebbe
+# identico, con lo stesso sintomo muto: il tunnel prova a salire e ricade giu'.
+#
+# `--reset` riporta al valore predefinito tutto cio' che non stiamo nominando,
+# che e' precisamente la promessa gia' scritta sopra `ts_flags`: si passano
+# TUTTE le opzioni a ogni giro, quindi quello che si vede nell'interfaccia e'
+# quello che c'e'. Si usa solo come secondo tentativo, e solo su quell'errore:
+# un `--reset` sistematico butterebbe via anche le scelte fatte altrove quando
+# non c'e' nessun bisogno di toccarle.
+ts_up_run() {
+	local ts="$1" out rc
+	shift
+
+	out=$("$ts" up "$@" 2>&1)
+	rc=$?
+
+	if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'requires mentioning all'; then
+		out=$("$ts" up --reset "$@" 2>&1)
+		rc=$?
+	fi
+
+	printf '%s' "$out"
+	return "$rc"
+}
+
+# La sottorete della LAN in forma CIDR, per annunciarla al tailnet.
+#
+# Il calcolo lo fa `ipcalc.sh`, che sta nei base-files: rifarlo a mano in shell
+# significa sbagliare le maschere che non sono /24, ed e' proprio il caso in cui
+# nessuno se ne accorge finche' non serve. Se non risponde si torna a mani vuote
+# e l'annuncio non parte, invece di partire con una sottorete inventata.
+lan_cidr() {
+	local addr mask out network bits
+
+	addr=$(uci -q get network.lan.ipaddr | cut -d' ' -f1)
+	[ -n "$addr" ] || return 0
+	mask=$(uci -q get network.lan.netmask)
+
+	# L'indirizzo puo' gia' essere in forma CIDR: e' come lo scrive la scheda
+	# LAN mentre tiene due indirizzi durante una finestra di conferma.
+	case "$addr" in
+		*/*) out=$(ipcalc.sh "$addr" 2>/dev/null) ;;
+		*)   out=$(ipcalc.sh "$addr" "${mask:-255.255.255.0}" 2>/dev/null) ;;
+	esac
+
+	network=$(printf '%s\n' "$out" | sed -n 's/^NETWORK=//p')
+	bits=$(printf '%s\n' "$out" | sed -n 's/^PREFIX=//p')
+	[ -n "$network" ] && [ -n "$bits" ] && printf '%s/%s' "$network" "$bits"
+}
+
+# Stato della VPN: cosa c'e', cosa sta facendo, e cosa abbiamo chiesto noi.
+method_vpn() {
+	local ts status state auth_url self_name self_ip self_online version
+	local exit_id exit_online peer name id online offer
+	local killswitch resume_at rule_enabled forward_raw
+
+	ts=$(ts_bin) || ts=""
+	status=""
+	[ -n "$ts" ] && status=$("$ts" status --json 2>/dev/null)
+
+	state=$(printf '%s' "$status" | jsonfilter -e '@.BackendState')
+	auth_url=$(printf '%s' "$status" | jsonfilter -e '@.AuthURL')
+	self_name=$(printf '%s' "$status" | jsonfilter -e '@.Self.DNSName')
+	self_ip=$(printf '%s' "$status" | jsonfilter -e '@.Self.TailscaleIPs[0]')
+	self_online=$(printf '%s' "$status" | jsonfilter -e '@.Self.Online')
+	version=$(printf '%s' "$status" | jsonfilter -e '@.Version')
+	exit_id=$(printf '%s' "$status" | jsonfilter -e '@.ExitNodeStatus.ID')
+	exit_online=$(printf '%s' "$status" | jsonfilter -e '@.ExitNodeStatus.Online')
+
+	# Il nome finisce con un punto (e' un nome DNS assoluto): toglierlo qui
+	# evita di doverlo ricordare in ogni punto dell'interfaccia.
+	self_name="${self_name%.}"
+
+	json_init
+
+	json_add_object tailscale
+	json_add_boolean installed "$([ -n "$ts" ] && echo 1 || echo 0)"
+	json_add_boolean running   "$(ts_running && echo 1 || echo 0)"
+	# Abilitato al boot: e' una cosa diversa da "sta girando adesso", e la
+	# differenza si vede solo dopo un riavvio - cioe' troppo tardi.
+	json_add_boolean boot      "$([ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enabled 2>/dev/null && echo 1 || echo 0)"
+	json_add_string  state     "$state"
+	# L'indirizzo da aprire per autenticarsi. C'e' solo mentre il daemon lo
+	# aspetta, e sparisce da solo appena il login e' fatto.
+	json_add_string  auth_url  "$auth_url"
+	json_add_string  version   "$version"
+	json_add_string  self_name "$self_name"
+	# Il nome corto, cioe' la prima etichetta del nome DNS. E' cosi' che i nodi
+	# si chiamano fra loro; il resto e' il suffisso del tailnet, uguale per
+	# tutti, e ripeterlo in ogni riga di un elenco occupa spazio senza dire
+	# niente - su un telefono manda anche il nome vero fuori dallo schermo.
+	json_add_string  self_short "${self_name%%.*}"
+	json_add_string  self_ip   "$self_ip"
+	json_add_boolean self_online "$([ "$self_online" = "true" ] && echo 1 || echo 0)"
+	json_add_string  exit_node_id "$exit_id"
+	json_add_boolean exit_node_online "$([ "$exit_online" = "true" ] && echo 1 || echo 0)"
+	# Il tailnet ci considera un'uscita utilizzabile. E' cosa diversa
+	# dall'averlo chiesto: un exit node annunciato non funziona finche' non
+	# viene autorizzato dalla console, ed e' il passaggio che tutti dimenticano.
+	json_add_boolean self_exit_node "$(printf '%s' "$status" | jsonfilter -e '@.Self.ExitNodeOption' | grep -q true && echo 1 || echo 0)"
+	# Senza inoltro IP il router non puo' fare da uscita per nessuno: l'exit node
+	# risulterebbe a posto ovunque senza far passare niente.
+	#
+	# Si legge con `cat` e non con `first_line`. Sul dispositivo quella lettura
+	# ha dato zero mentre `cat` sullo stesso file dava uno, e **non sappiamo
+	# perche'**: `first_line` passa da `read`, che altrove sugli stessi /proc
+	# funziona. Invece di inventare una spiegazione si usa il comando che li'
+	# ha funzionato, e si pubblica anche il valore grezzo: se il booleano e la
+	# stringa non combaciano, la prossima volta si vede da che parte sta il
+	# difetto invece di ricominciare a indovinare.
+	forward_raw=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
+	json_add_boolean ip_forward "$([ "$forward_raw" = "1" ] && echo 1 || echo 0)"
+	json_add_string  ip_forward_raw "$forward_raw"
+
+	# Tutto cio' che decide se l'exit node funziona DAVVERO, un fatto per riga.
+	#
+	# "Annunciato e autorizzato" e' solo l'ultimo anello: prima ci sono
+	# l'inoltro sull'interfaccia del tunnel, l'inoltro del firewall verso la
+	# WAN, e la zona fw4 che deve aver visto `tailscale0`. Ognuno puo' mancare
+	# per conto suo, e dall'esterno il sintomo e' sempre lo stesso - il telefono
+	# sceglie il router, e non passa niente. La scheda mostra la lista e segna
+	# l'anello rotto, invece di far provare a caso.
+	json_add_object exit_check
+	json_add_boolean iface_present "$([ -e /sys/class/net/tailscale0 ] && echo 1 || echo 0)"
+	# L'inoltro conta sull'interfaccia da cui il pacchetto ENTRA: quella del
+	# tunnel, non la WAN. Il valore globale dovrebbe propagarsi, ma "dovrebbe"
+	# e' esattamente la parola che ha gia' fatto perdere un giro.
+	json_add_boolean iface_forward "$([ "$(cat /proc/sys/net/ipv4/conf/tailscale0/forwarding 2>/dev/null)" = "1" ] && echo 1 || echo 0)"
+	json_add_boolean fw_out "$([ "$(uci -q get firewall.travel_vpn_out.enabled)" = "1" ] && echo 1 || echo 0)"
+	# fw4 ha caricato regole che nominano il device: se manca, la zona e' scritta
+	# in uci ma il firewall in esecuzione non la conosce ancora.
+	json_add_boolean fw_loaded "$(command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q tailscale0 && echo 1 || echo 0)"
+	# La regola che sta sopra mwan3 e rimanda nel tunnel le risposte ai nodi
+	# del tailnet. Senza, con mwan3 attivo, ogni risposta a un telefono che ci
+	# usa come uscita esce di nuovo dalla WAN: e' l'anello che mancava quando
+	# tutti gli altri erano a posto e non passava niente lo stesso.
+	json_add_boolean route_rule "$(ip rule 2>/dev/null | grep -q '^900:' && echo 1 || echo 0)"
+	# La rotta verso il tailnet nella tabella di Tailscale. Sul dispositivo
+	# mancava del tutto - tailscaled non l'aveva installata - e senza, la regola
+	# qui sopra punta a una tabella vuota: e' l'anello che era rotto quando
+	# tutti gli altri, regola compresa, risultavano a posto.
+	json_add_boolean route_present "$(ip route show table 52 2>/dev/null | grep -q '^100.64.0.0/10 ' && echo 1 || echo 0)"
+
+	# --- L'uscita che passa dentro WireGuard ---------------------------------
+	#
+	# Quando il tunnel WireGuard e' su, chi ci usa come uscita non esce piu'
+	# dalla WAN: l'instradamento lo manda nel tunnel, e l'indirizzo che vede
+	# Internet diventa quello di WireGuard. E' la combinazione che si vuole in
+	# viaggio - il telefono esce dal router, il router esce dal fornitore VPN -
+	# e ha due anelli suoi, che si mostrano solo quando il tunnel c'e'.
+	json_add_boolean wg_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	# L'inoltro fra i due tunnel: senza, il pacchetto arriva, viene instradato
+	# verso WireGuard e li' la zona lo rifiuta, perche' i due tunnel stanno
+	# nella stessa zona e le zone non inoltrano su se stesse.
+	json_add_boolean wg_fw "$([ "$(uci -q get firewall.travel_vpn_wg.enabled)" = "1" ] && echo 1 || echo 0)"
+	# E che fw4 l'abbia davvero caricata. Una regola con partenza e
+	# destinazione nella stessa zona e' un caso poco battuto: se una versione di
+	# fw4 la scartasse, in uci resterebbe scritta e nel firewall non ci sarebbe
+	# - cioe' la schermata direbbe che tutto e' a posto mentre non passa niente.
+	json_add_boolean wg_fw_loaded "$(command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q 'travel-exit-via-wg' && echo 1 || echo 0)"
+	# La regola che manda nel tunnel WireGuard tutto quello che sarebbe uscito
+	# dalla WAN. Senza, il traffico esce lo stesso - ma dalla WAN, e l'indirizzo
+	# finale del telefono e' quello dell'albergo invece che quello della VPN.
+	json_add_boolean wg_route_rule "$(ip rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
+	json_close_object
+
+	# Tutti i nodi del tailnet, non solo quelli che si offrono come uscita: sono
+	# la stessa lettura, e sapere quali dei propri dispositivi si raggiungono in
+	# questo momento e' meta' del motivo per cui Tailscale sta su un router da
+	# viaggio.
+	#
+	# Vanno letti uno per uno perche' serve incrociare piu' campi dello stesso
+	# oggetto, e passano da un file invece che da una pipe: dentro una pipe il
+	# ciclo girerebbe in una subshell e le righe json aggiunte li' dentro
+	# sparirebbero all'uscita.
+	json_add_array nodes
+	if [ -n "$status" ]; then
+		printf '%s' "$status" | jsonfilter -e '@.Peer[*]' > "$TS_PEERS" 2>/dev/null
+		while read -r peer; do
+			[ -n "$peer" ] || continue
+
+			name=$(printf '%s' "$peer" | jsonfilter -e '@.DNSName')
+			name="${name%.}"
+			id=$(printf '%s' "$peer" | jsonfilter -e '@.ID')
+			online=$(printf '%s' "$peer" | jsonfilter -e '@.Online')
+			offer=$(printf '%s' "$peer" | jsonfilter -e '@.ExitNodeOption')
+
+			json_add_object
+			json_add_string  short  "${name%%.*}"
+			json_add_string  name   "$name"
+			json_add_string  id     "$id"
+			json_add_string  ip     "$(printf '%s' "$peer" | jsonfilter -e '@.TailscaleIPs[0]')"
+			# Chi e' in linea lo dice il coordinamento di Tailscale, che lo sa
+			# gia': e' un campo della risposta, non una misura. Riscoprirlo con
+			# un ping per nodo vorrebbe dire mandare pacchetti su una
+			# connessione che puo' essere a consumo, per sapere una cosa che ci
+			# era gia' stata detta.
+			json_add_boolean online "$([ "$online" = "true" ] && echo 1 || echo 0)"
+			json_add_boolean exit   "$([ "$offer" = "true" ] && echo 1 || echo 0)"
+			json_close_object
+		done < "$TS_PEERS"
+		rm -f "$TS_PEERS"
+	fi
+	json_close_array
+	json_close_object
+
+	# Cosa abbiamo chiesto noi. Puo' divergere da cio' che il tunnel sta
+	# facendo davvero - un exit node scelto e poi spento, per dire - e la
+	# differenza va mostrata, non appianata.
+	json_add_object settings
+	json_add_string  exit_node      "$(uci -q get travel.tailscale.exit_node)"
+	json_add_boolean accept_routes  "$([ "$(uci -q get travel.tailscale.accept_routes)" = "1" ] && echo 1 || echo 0)"
+	json_add_boolean accept_dns     "$([ "$(uci -q get travel.tailscale.accept_dns)" = "1" ] && echo 1 || echo 0)"
+	json_add_boolean advertise_lan  "$([ "$(uci -q get travel.tailscale.advertise_lan)" = "1" ] && echo 1 || echo 0)"
+	json_add_boolean advertise_exit "$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)"
+	json_add_string  lan_cidr       "$(lan_cidr)"
+	json_close_object
+
+	policy_json
+
+	killswitch=$(uci -q get travel.vpn.killswitch)
+	resume_at=$(uci -q get travel.vpn.resume_at)
+	rule_enabled=$(uci -q get firewall.travel_killswitch.enabled)
+
+	json_add_object killswitch
+	# Cosa vuole l'utente.
+	json_add_boolean on       "$([ "$killswitch" = "1" ] && echo 1 || echo 0)"
+	# Cosa sta facendo il firewall adesso. I due divergono durante una
+	# sospensione, ed e' esattamente la cosa che l'interfaccia deve saper dire.
+	json_add_boolean blocking "$([ "$rule_enabled" = "1" ] && echo 1 || echo 0)"
+	json_add_int     resume_at "${resume_at:-0}"
+	# La regola esiste? Se `vpn-setup.sh` non e' mai passato non c'e' niente da
+	# accendere, e va detto invece di offrire un interruttore inerte.
+	json_add_boolean ready    "$([ -n "$(uci -q get firewall.travel_killswitch)" ] && echo 1 || echo 0)"
+	json_close_object
+
+	json_dump
+}
+
+# Avvia il servizio e fa partire l'autenticazione.
+#
+# Due strade, perche' sul telefono non sono equivalenti:
+#
+#  - con una **auth key** incollata: un colpo solo, senza uscire dalla pagina.
+#    E' quello che si fa se la chiave ce l'hai gia';
+#  - senza: si avvia il login interattivo e si aspetta che tailscaled produca
+#    l'indirizzo da aprire. Tocchi il link, ti autentichi dove sei gia' loggato,
+#    torni indietro. Non serve copiare niente.
+#
+# L'indirizzo non lo inventiamo noi: si rilegge da `tailscale status`, che e' la
+# stessa fonte che poi lo fa sparire quando il login e' andato a buon fine.
+method_ts_login() {
+	local input authkey ts flags out rc auth_url tries status state
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var authkey authkey
+
+	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+
+	# Da qui in poi il servizio serve acceso, e deve restarlo dopo un riavvio:
+	# una VPN che non torna su da sola dopo un blackout in albergo e' peggio di
+	# non averla.
+	/etc/init.d/tailscale enable  >/dev/null 2>&1
+	/etc/init.d/tailscale start   >/dev/null 2>&1
+
+	tries=0
+	while [ "$tries" -lt 10 ]; do
+		ts_running && break
+		sleep 1
+		tries=$((tries + 1))
+	done
+
+	if ! ts_running; then
+		fail_json "tailscaled non si e' avviato: guarda logread | grep tailscale"
+		return
+	fi
+
+	flags=$(ts_flags)
+
+	if [ -n "$authkey" ]; then
+		# La chiave non finisce sulla riga di comando: passa da un file che
+		# solo root puo' leggere e che sparisce subito. Su `ps` comparirebbe in
+		# chiaro, e un segreto che si vede in un elenco di processi e' un
+		# segreto raccontato.
+		umask 077
+		printf '%s' "$authkey" > "$TS_AUTHKEY"
+		# shellcheck disable=SC2086
+		out=$(ts_up_run "$ts" --auth-key="file:$TS_AUTHKEY" $flags 2>&1)
+		rc=$?
+		if [ "$rc" -ne 0 ]; then
+			# Le versioni piu' vecchie non conoscono la forma `file:`. Si
+			# riprova nell'altro modo invece di fallire: meglio un segreto
+			# visibile per un istante che una VPN che non si configura.
+			# shellcheck disable=SC2086
+			out=$(ts_up_run "$ts" --auth-key="$authkey" $flags 2>&1)
+			rc=$?
+		fi
+		rm -f "$TS_AUTHKEY"
+	else
+		# `tailscale up` resta in attesa finche' qualcuno non apre il link:
+		# lanciarlo in primo piano bloccherebbe rpcd fino al timeout. Si stacca,
+		# e l'indirizzo si va a leggere dallo stato.
+		#
+		# Messaggio ed esito pero' si tengono, invece di buttarli in
+		# /dev/null. Buttandoli via, un `up` che fallisce subito diventava
+		# indistinguibile da uno che sta aspettando il link: la UI mostrava
+		# "Accendo...", il tunnel restava giu' e non lo spiegava niente. E'
+		# cosi' che un errore di una riga - il flag mancante di `ts_flags` - e'
+		# rimasto invisibile.
+		rm -f "$TS_UP_LOG" "$TS_UP_RC"
+		# shellcheck disable=SC2086
+		( ( ts_up_run "$ts" $flags > "$TS_UP_LOG" 2>&1; printf '%s' "$?" > "$TS_UP_RC" ) & )
+		out=""
+		rc=0
+	fi
+
+	# L'indirizzo puo' metterci un attimo a comparire. Si aspetta qualche
+	# secondo qui invece di far tornare la UI a mani vuote: senza link, la
+	# schermata non avrebbe niente da mostrare proprio nel momento in cui hai
+	# appena premuto il pulsante.
+	auth_url=""
+	state=""
+	tries=0
+	while [ "$tries" -lt 8 ]; do
+		status=$("$ts" status --json 2>/dev/null)
+		auth_url=$(printf '%s' "$status" | jsonfilter -e '@.AuthURL')
+		[ -n "$auth_url" ] && break
+		# Login gia' fatto (auth key, o sessione ancora valida): niente da aprire.
+		state=$(printf '%s' "$status" | jsonfilter -e '@.BackendState')
+		[ "$state" = "Running" ] && break
+		# Il comando staccato ha gia' finito male: gli altri secondi di attesa
+		# non cambierebbero niente, e il motivo e' gia' scritto.
+		[ -s "$TS_UP_RC" ] && [ "$(cat "$TS_UP_RC")" != "0" ] && break
+		sleep 1
+		tries=$((tries + 1))
+	done
+
+	ts_runtime
+
+	# Il verdetto, per il caso staccato: quello che il comando ha detto e come
+	# e' finito stanno nei due file, e vanno letti adesso che l'attesa e' finita.
+	if [ -z "$out" ] && [ -s "$TS_UP_RC" ]; then
+		rc=$(cat "$TS_UP_RC")
+		out=$(cat "$TS_UP_LOG" 2>/dev/null)
+	fi
+
+	json_init
+	# Fallito e' fallito, e si dice. Prima qui c'era `started 1` in ogni caso:
+	# l'interfaccia non aveva modo di accorgersi di niente e restava a mostrare
+	# uno stato che non era mai arrivato.
+	#
+	# Un `up` ancora in corso non e' un fallimento: senza esito scritto - il
+	# login interattivo che aspetta il link - `rc` vale zero e si va avanti.
+	if [ "${rc:-0}" -ne 0 ] && [ -z "$auth_url" ] && [ "$state" != "Running" ]; then
+		json_add_boolean started 0
+		json_add_string  error "$(printf '%s' "$out" | grep -v '^Warning:' | grep . | head -n 3)"
+	else
+		json_add_boolean started 1
+	fi
+	json_add_string  auth_url "$auth_url"
+	# Cosa ha detto `tailscale up`: se qualcosa non e' andato, il suo messaggio
+	# e' molto piu' utile di qualunque cosa potremmo scrivere noi.
+	json_add_string  output   "$(printf '%s' "$out" | head -n 3)"
+	json_dump
+}
+
+# Fa prendere effetto alle impostazioni che il browser ha gia' scritto in uci.
+#
+# Stesso schema di `mwan_apply` e `usb_mode`: la scrittura passa da uci, il
+# comando che la mette in atto sta qui. `tailscale set` non richiede di rifare
+# il login, quindi cambiare exit node non scollega.
+# Cio' che della VPN vive in RAM e va riscritto ogni volta che il tunnel viene
+# alzato o riconfigurato: l'inoltro sull'interfaccia del tunnel e la regola
+# che rimanda nel tunnel le risposte ai nodi del tailnet, senza la quale mwan3
+# le manda fuori dalla WAN. L'implementazione sta in un posto solo,
+# vpn-setup.sh, che la stessa cosa la fa anche al boot: qui la si richiama, come
+# per la modalita' della porta USB.
+ts_runtime() {
+	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
+}
+
+# Accende o spegne un inoltro del firewall, se serve.
+#
+# Torna 0 se ha cambiato qualcosa, cosi' il chiamante ricarica fw4 una volta
+# sola invece che a ogni sezione - o non lo ricarica affatto quando non c'e'
+# niente da cambiare, che e' il caso normale.
+# L'uscita del tailnet dentro il tunnel WireGuard, accesa o spenta.
+#
+# Vive accanto a `travel_vpn_out` e si accende con lo stesso interruttore -
+# l'annuncio come uscita - perche' sono la stessa cosa vista da due strade: se
+# WireGuard e' giu' il traffico di chi ci usa come uscita esce dalla WAN e serve
+# l'inoltro `vpn -> wan`; se e' su, l'instradamento lo manda nel tunnel e serve
+# questo. Tenerli separati vorrebbe dire un interruttore in piu' da spiegare per
+# una scelta che nessuno vuole fare.
+#
+# Torna 0 se ha cambiato qualcosa, come `ts_forwarding`: chi chiama decide se
+# ricaricare il firewall.
+ts_exit_wg_rule() {
+	local want="$1"
+
+	# Puo' mancare su un router configurato prima che questa regola esistesse:
+	# si crea qui invece di pretendere un altro deploy.
+	if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
+		uci set firewall.travel_vpn_wg=rule
+		uci set firewall.travel_vpn_wg.name='travel-exit-via-wg'
+		uci set firewall.travel_vpn_wg.src='vpn'
+		uci set firewall.travel_vpn_wg.dest='vpn'
+		uci set firewall.travel_vpn_wg.src_ip='100.64.0.0/10'
+		uci set firewall.travel_vpn_wg.family='ipv4'
+		uci set firewall.travel_vpn_wg.target='ACCEPT'
+		uci set firewall.travel_vpn_wg.enabled="$want"
+		return 0
+	fi
+
+	[ "$(uci -q get firewall.travel_vpn_wg.enabled)" = "$want" ] && return 1
+	uci set firewall.travel_vpn_wg.enabled="$want"
+	return 0
+}
+
+ts_forwarding() {
+	local section="$1" want="$2" src="$3" dest="$4"
+
+	# Puo' mancare su un router configurato prima che questa opzione esistesse:
+	# si crea qui invece di pretendere un altro deploy.
+	if [ -z "$(uci -q get "firewall.$section")" ]; then
+		uci set "firewall.$section=forwarding"
+		uci set "firewall.$section.src=$src"
+		uci set "firewall.$section.dest=$dest"
+		uci set "firewall.$section.enabled=$want"
+		return 0
+	fi
+
+	[ "$(uci -q get "firewall.$section.enabled")" = "$want" ] && return 1
+	uci set "firewall.$section.enabled=$want"
+	return 0
+}
+
+# Fa prendere effetto alle impostazioni: quelle di tailscale e i due inoltri del
+# firewall che le accompagnano.
+#
+# Stanno insieme di proposito. Annunciarsi come exit node e' **una cosa sola**
+# fatta di due scritture - il flag a tailscale e l'inoltro in fw4 - e separarle
+# fra browser e router lascerebbe che divergano: un router che dice al tailnet
+# "passate da me" e poi butta via il traffico, senza che niente lo spieghi. E'
+# lo stesso motivo per cui la porta ethernet e la LAN si scrivono in un colpo
+# solo.
+method_ts_apply() {
+	local ts flags out rc holder want_exit changed=0
+
+	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	ts_running || { fail_json "tailscaled non e' in esecuzione"; return; }
+
+	# Il cancello, dalla parte dell'exit node. Se qualcosa sta gia' decidendo
+	# dove esce il traffico, l'exit node non si applica - e l'impostazione viene
+	# riportata a "nessuno" invece di restare scritta: una configurazione
+	# rifiutata che sopravvive e' una configurazione che tornera' su da sola al
+	# prossimo riavvio, senza che nessuno ricordi perche'.
+	if policy_ts_exit; then
+		holder=$(policy_holder ts_exit) && {
+			uci set travel.tailscale.exit_node=''
+			uci commit travel
+			fail_json "non posso usare un exit node: $(policy_reason "$holder")"
+			return
+		}
+	fi
+
+	want_exit=$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)
+
+	ts_forwarding travel_vpn_out "$want_exit" vpn wan && changed=1
+	# Le due strade dell'uscita, accese insieme: la WAN quando WireGuard non
+	# c'e', il tunnel quando c'e'. Quale delle due prende il pacchetto lo decide
+	# l'instradamento, non il firewall.
+	ts_exit_wg_rule "$want_exit" && changed=1
+	ts_forwarding travel_vpn_lan "$([ "$(uci -q get travel.tailscale.advertise_lan)" = "1" ] && echo 1 || echo 0)" vpn lan && changed=1
+
+	if [ "$changed" = "1" ]; then
+		uci commit firewall
+		/etc/init.d/firewall reload >/dev/null 2>&1
+	fi
+
+	flags=$(ts_flags)
+	# shellcheck disable=SC2086
+	out=$("$ts" set $flags 2>&1)
+	# L'esito si legge subito: `json_init` e' un comando come un altro e
+	# azzererebbe $?, che e' il modo piu' silenzioso di dire "riuscito" a
+	# qualcosa che e' fallito.
+	rc=$?
+
+	ts_runtime
+
+	json_init
+	if [ "$rc" -eq 0 ]; then
+		json_add_boolean applied 1
+	else
+		json_add_boolean applied 0
+		json_add_string  error "$(printf '%s' "$out" | head -n 2)"
+	fi
+	json_add_string output "$(printf '%s' "$out" | head -n 3)"
+	json_dump
+}
+
+# Stacca il tunnel senza perdere l'autenticazione: si torna su con un tocco.
+method_ts_down() {
+	local ts out
+
+	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	out=$("$ts" down 2>&1)
+
+	json_init
+	json_add_boolean down 1
+	json_add_string  output "$(printf '%s' "$out" | head -n 2)"
+	json_dump
+}
+
+# Esce dall'account e ferma il servizio.
+#
+# Anche il boot viene disabilitato: un daemon che riparte da solo dopo che hai
+# detto di uscire e' il genere di cosa che fa perdere fiducia in un
+# interruttore.
+method_ts_logout() {
+	local ts out
+
+	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	out=$("$ts" logout 2>&1)
+	/etc/init.d/tailscale stop    >/dev/null 2>&1
+	/etc/init.d/tailscale disable >/dev/null 2>&1
+
+	json_init
+	json_add_boolean logout 1
+	json_add_string  output "$(printf '%s' "$out" | head -n 2)"
+	json_dump
+}
+
+# --- WireGuard (Fase 6b) ------------------------------------------------------
+#
+# **Un tunnel solo**, `travel_wg`, e non un elenco. Il piano ne prevedeva molti;
+# su un router da viaggio non serve, e soprattutto non e' rappresentabile: i
+# vincoli qui sopra dicono che al massimo un tunnel completo puo' essere acceso,
+# quindi un elenco sarebbe un elenco in cui una voce sola conta. Cambiare
+# provider significa reimportare la configurazione, che e' un incolla.
+#
+# Il tunnel vive in `/etc/config/network` come interfaccia netifd con
+# `proto wireguard`, non in `/etc/config/travel`: netifd sa gia' gestirlo, e
+# duplicarne la configurazione altrove vorrebbe dire due scritture da tenere
+# allineate. Vale la regola D1 - `network` resta canonico.
+#
+# La chiave privata sta li' dentro come la password del WiFi sta in `wireless`:
+# i nostri metodi non la restituiscono mai (si dice solo `has_private_key`),
+# che e' la regola D3.
+
+WG_IFACE=travel_wg
+WG_PEER=travel_wg_peer
+
+# Il marchio sui pacchetti che WireGuard manda al peer.
+#
+# Serve alla regola di instradamento (vedi vpn-setup.sh): tutto va nel tunnel
+# *tranne* i pacchetti del tunnel stesso, che altrimenti proverebbero a entrare
+# in se' e non uscirebbero mai. E' lo stesso meccanismo con cui Tailscale marca
+# i suoi (0x80000), su un bit diverso per non confondersi - e nemmeno con
+# mwan3, che sta sotto lo 0x3f00.
+WG_MARK=0x1000000
+
+# Il pacchetto c'e'? Senza, la configurazione si scrive ma non si alza.
+wg_installed() {
+	[ -x /usr/bin/wg ] && [ -f /lib/netifd/proto/wireguard.sh ]
+}
+
+# Stato del tunnel: cosa e' configurato, e cosa sta succedendo davvero.
+#
+# `has_private_key` e non la chiave: un segreto che entra non torna indietro.
+method_wg_get() {
+	local netstat device up handshake rx tx endpoint
+
+	json_init
+
+	json_add_boolean installed "$(wg_installed && echo 1 || echo 0)"
+	json_add_boolean configured "$([ -n "$(uci -q get "network.$WG_IFACE")" ] && echo 1 || echo 0)"
+	json_add_boolean enabled "$(policy_wireguard && echo 1 || echo 0)"
+
+	json_add_object config
+	json_add_string  addresses  "$(uci -q get "network.$WG_IFACE.addresses" | tr '\n' ' ')"
+	json_add_string  mtu        "$(uci -q get "network.$WG_IFACE.mtu")"
+	json_add_string  dns        "$(uci -q get "network.$WG_IFACE.dns" | tr '\n' ' ')"
+	json_add_boolean has_private_key "$([ -n "$(uci -q get "network.$WG_IFACE.private_key")" ] && echo 1 || echo 0)"
+	json_add_string  peer_key   "$(uci -q get "network.$WG_PEER.public_key")"
+	json_add_boolean has_preshared "$([ -n "$(uci -q get "network.$WG_PEER.preshared_key")" ] && echo 1 || echo 0)"
+	json_add_string  endpoint   "$(uci -q get "network.$WG_PEER.endpoint_host")"
+	json_add_string  port       "$(uci -q get "network.$WG_PEER.endpoint_port")"
+	json_add_string  allowed_ips "$(uci -q get "network.$WG_PEER.allowed_ips" | tr '\n' ' ')"
+	json_add_string  keepalive  "$(uci -q get "network.$WG_PEER.persistent_keepalive")"
+	json_close_object
+
+	# Lo stato vero, da `wg show`. Un handshake che non arriva mai e' il sintomo
+	# di chiave o endpoint sbagliati; uno vecchio di ore, di una rete che non
+	# passa piu'. Sono due guasti diversi e vanno distinti.
+	json_add_object status
+	if wg_installed && [ -d "/sys/class/net/$WG_IFACE" ]; then
+		json_add_boolean device_up 1
+		handshake=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+		rx=$(wg show "$WG_IFACE" transfer 2>/dev/null | awk '{print $2; exit}')
+		tx=$(wg show "$WG_IFACE" transfer 2>/dev/null | awk '{print $3; exit}')
+		endpoint=$(wg show "$WG_IFACE" endpoints 2>/dev/null | awk '{print $2; exit}')
+		json_add_int    last_handshake "${handshake:-0}"
+		json_add_int    rx "${rx:-0}"
+		json_add_int    tx "${tx:-0}"
+		json_add_string peer_endpoint "$endpoint"
+		json_add_int    now "$(date +%s)"
+	else
+		json_add_boolean device_up 0
+		json_add_int    last_handshake 0
+		json_add_int    rx 0
+		json_add_int    tx 0
+		json_add_string peer_endpoint ""
+		json_add_int    now "$(date +%s)"
+	fi
+	json_close_object
+
+	# La catena che porta il traffico dei client dentro il tunnel, un fatto per
+	# riga. Stessa idea della checklist dell'exit node, e per la stessa ragione:
+	# dall'esterno ogni anello rotto ha il sintomo identico - il tunnel fa
+	# handshake, la scheda dice "attivo", e i client escono lo stesso dalla WAN.
+	# E' esattamente cio' che e' successo.
+	json_add_object routing
+	json_add_boolean device_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	# La regola che manda il traffico nella tabella del tunnel: quella che
+	# mancava, perche' veniva scritta prima che l'interfaccia esistesse.
+	json_add_boolean rule "$(ip rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
+	json_add_boolean route "$(ip route show table 53 2>/dev/null | grep -q '^default ' && echo 1 || echo 0)"
+	# Nella zona del tunnel: senza, il firewall scarta il traffico inoltrato
+	# anche quando l'instradamento e' perfetto.
+	json_add_boolean in_zone "$(uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$WG_IFACE" && echo 1 || echo 0)"
+	json_close_object
+
+	policy_json
+	json_dump
+}
+
+# Accende o spegne il tunnel.
+#
+# **Qui sta il cancello.** L'interfaccia spegne gia' il pulsante quando non si
+# puo', ma il vincolo non puo' vivere solo li': LuCI, un `uci set` da ssh o un
+# backup importato arriverebbero a una configurazione che l'interfaccia non sa
+# nemmeno rappresentare. Il controllo sta nel punto in cui la modifica prende
+# effetto, che e' l'unico posto da cui non si passa per sbaglio.
+method_wg_toggle() {
+	local input want holder tries
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var want enabled
+
+	[ -n "$(uci -q get "network.$WG_IFACE")" ] || { fail_json "nessun tunnel configurato"; return; }
+
+	if [ "$want" = "1" ] || [ "$want" = "true" ]; then
+		wg_installed || { fail_json "wireguard-tools non e' installato"; return; }
+
+		holder=$(policy_holder wireguard) && {
+			fail_json "non posso accendere WireGuard: $(policy_reason "$holder")"
+			return
+		}
+		uci set "network.$WG_IFACE.disabled=0"
+	else
+		uci set "network.$WG_IFACE.disabled=1"
+	fi
+
+	uci commit network
+	ubus call network reload >/dev/null 2>&1
+	ubus call network.interface."$WG_IFACE" up >/dev/null 2>&1
+
+	# **Aspettare che il device esista prima di instradarlo.**
+	#
+	# `network reload` torna subito: netifd alza l'interfaccia per conto suo,
+	# qualche istante dopo. La prima versione lanciava l'instradamento appena
+	# tornata la chiamata, non trovava `travel_wg` in /sys, e - peggio -
+	# concludeva che il tunnel fosse giu': cancellava la regola invece di
+	# scriverla. Il tunnel saliva un secondo dopo, faceva handshake, e il
+	# traffico dei client continuava a uscire dalla WAN. Tutto sembrava a posto
+	# tranne l'unica cosa che contava.
+	if [ "$(uci -q get "network.$WG_IFACE.disabled")" != "1" ]; then
+		tries=0
+		while [ "$tries" -lt 15 ]; do
+			[ -e "/sys/class/net/$WG_IFACE" ] && break
+			sleep 1
+			tries=$((tries + 1))
+		done
+	fi
+
+	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
+
+	json_init
+	json_add_boolean enabled "$([ "$(uci -q get "network.$WG_IFACE.disabled")" = "1" ] && echo 0 || echo 1)"
+	json_add_boolean device_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+# Importa una configurazione WireGuard incollata.
+#
+# E' il formato in cui un provider la consegna, ed e' l'unico modo per non far
+# ridigitare due chiavi base64 da 44 caratteri su un telefono, in piedi, con una
+# mano. Si accetta il blocco `[Interface]`/`[Peer]` cosi' com'e'.
+#
+# Il parsing sta sul router e non nel browser di proposito: la chiave privata
+# non deve fare il giro due volte, e soprattutto la validazione deve stare dalla
+# stessa parte del cancello - se la facesse solo la UI, un client scritto a mano
+# potrebbe scrivere qualunque cosa in `network`.
+#
+# Nasce sempre **spento**: importare non e' accendere. Cosi' l'accensione passa
+# dal cancello dei vincoli anche la prima volta, e non c'e' una scorciatoia che
+# li aggira.
+method_wg_import() {
+	local input conf line key value section
+	local priv addr dns mtu peer_key psk endpoint host port allowed keepalive
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var conf config
+
+	[ -n "$conf" ] || { fail_json "configurazione vuota"; return; }
+
+	section=""
+	priv=""; addr=""; dns=""; mtu=""
+	peer_key=""; psk=""; endpoint=""; allowed=""; keepalive=""
+
+	# Un `while read` su una qui-stringa: niente pipe, altrimenti il ciclo
+	# girerebbe in una subshell e le variabili tornerebbero vuote all'uscita.
+	while IFS= read -r line; do
+		# Via i commenti e gli spazi: i file dei provider ne sono pieni.
+		line="${line%%#*}"
+		line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+		[ -n "$line" ] || continue
+
+		case "$line" in
+			'[Interface]'|'[interface]') section=iface; continue ;;
+			'[Peer]'|'[peer]')           section=peer;  continue ;;
+			\[*\])                       section="";    continue ;;
+		esac
+
+		key=$(printf '%s' "${line%%=*}" | sed 's/[[:space:]]*$//' | tr 'A-Z' 'a-z')
+		value=$(printf '%s' "${line#*=}" | sed 's/^[[:space:]]*//')
+		[ "$key" = "$line" ] && continue
+
+		if [ "$section" = "iface" ]; then
+			case "$key" in
+				privatekey) priv="$value" ;;
+				address)    addr="$value" ;;
+				dns)        dns="$value" ;;
+				mtu)        mtu="$value" ;;
+			esac
+		elif [ "$section" = "peer" ]; then
+			case "$key" in
+				publickey)           peer_key="$value" ;;
+				presharedkey)        psk="$value" ;;
+				endpoint)            endpoint="$value" ;;
+				allowedips)          allowed="$value" ;;
+				persistentkeepalive) keepalive="$value" ;;
+			esac
+		fi
+	done <<EOF
+$conf
+EOF
+
+	# Cio' senza cui il tunnel non puo' esistere. Meglio rifiutare adesso con
+	# un motivo che scrivere una configurazione monca e far cercare il guasto
+	# nel log di netifd.
+	[ -n "$priv" ]     || { fail_json "manca PrivateKey nella sezione [Interface]"; return; }
+	[ -n "$peer_key" ] || { fail_json "manca PublicKey nella sezione [Peer]"; return; }
+	[ -n "$endpoint" ] || { fail_json "manca Endpoint nella sezione [Peer]"; return; }
+	[ -n "$addr" ]     || { fail_json "manca Address nella sezione [Interface]"; return; }
+
+	host="${endpoint%:*}"
+	port="${endpoint##*:}"
+	[ "$host" = "$port" ] && port=51820
+
+	# L'interfaccia: si riscrive da zero, cosi' un import non si porta dietro
+	# i campi del provider precedente - lo stesso motivo per cui la sezione
+	# della STA WiFi viene ricreata invece che aggiornata.
+	uci -q delete "network.$WG_IFACE"
+	uci set "network.$WG_IFACE=interface"
+	uci set "network.$WG_IFACE.proto=wireguard"
+	uci set "network.$WG_IFACE.private_key=$priv"
+	# Spento: importare non e' accendere.
+	uci set "network.$WG_IFACE.disabled=1"
+	# Un marchio sui propri pacchetti, cosi' la regola di instradamento li
+	# lascia passare e il tunnel stesso continua a seguire il failover di mwan3
+	# invece di provare a entrare in se stesso.
+	uci set "network.$WG_IFACE.fwmark=$WG_MARK"
+	# Le rotte le mettiamo noi, in una tabella nostra: lasciarle installare a
+	# netifd metterebbe uno 0.0.0.0/0 nella tabella principale, dove finirebbe
+	# a litigare con mwan3.
+	uci set "network.$WG_IFACE.route_allowed_ips=0"
+	[ -n "$mtu" ] && uci set "network.$WG_IFACE.mtu=$mtu"
+
+	for entry in $(printf '%s' "$addr" | tr ',' ' '); do
+		uci add_list "network.$WG_IFACE.addresses=$entry"
+	done
+	for entry in $(printf '%s' "$dns" | tr ',' ' '); do
+		[ -n "$entry" ] && uci add_list "network.$WG_IFACE.dns=$entry"
+	done
+
+	uci -q delete "network.$WG_PEER"
+	uci set "network.$WG_PEER=wireguard_$WG_IFACE"
+	uci set "network.$WG_PEER.public_key=$peer_key"
+	uci set "network.$WG_PEER.endpoint_host=$host"
+	uci set "network.$WG_PEER.endpoint_port=$port"
+	[ -n "$psk" ] && uci set "network.$WG_PEER.preshared_key=$psk"
+	# Senza keepalive un tunnel dietro NAT si addormenta e il ritorno non passa
+	# piu'. Venticinque secondi e' il valore che usano tutti, e i provider che
+	# lo vogliono diverso lo scrivono nel file.
+	uci set "network.$WG_PEER.persistent_keepalive=${keepalive:-25}"
+
+	[ -n "$allowed" ] || allowed="0.0.0.0/0"
+	for entry in $(printf '%s' "$allowed" | tr ',' ' '); do
+		uci add_list "network.$WG_PEER.allowed_ips=$entry"
+	done
+
+	uci commit network
+
+	# Nella zona del tunnel, insieme a Tailscale: cosi' il kill switch e gli
+	# inoltri valgono per tutti e due senza doppioni.
+	if ! uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$WG_IFACE"; then
+		uci add_list "firewall.travel_vpn.network=$WG_IFACE"
+		uci commit firewall
+		/etc/init.d/firewall reload >/dev/null 2>&1
+	fi
+
+	json_init
+	json_add_boolean imported 1
+	json_add_string  endpoint "$host:$port"
+	json_add_string  allowed_ips "$allowed"
+	# Il tunnel resta spento: lo dice la risposta, cosi' l'interfaccia non deve
+	# indovinarlo per sapere cosa mostrare dopo.
+	json_add_boolean enabled 0
+	json_dump
+}
+
+# --- Profili (requisito H) ---------------------------------------------------
+#
+# Un profilo e' un nome dato a COME deve comportarsi il router in un posto:
+# "hotel", "casa di amici", "coworking". Non e' un backup e non e' una
+# configurazione completa - e' la manciata di scelte che cambiano con il luogo,
+# e nient'altro.
+#
+# **Cosa NON entra in un profilo, e perche'.** Indirizzo della LAN, pool DHCP,
+# access point, ruolo delle porte ethernet, reti WiFi salvate, chiavi della VPN.
+# Sono le cose da cui si ENTRA nel router e i segreti: un profilo che le
+# toccasse potrebbe chiudere fuori chi lo applica, e lo farebbe con un tocco
+# solo, senza applica-e-conferma. E' la stessa regola per cui travelD non
+# spegne mai un access point - se sbaglia, deve sbagliare dalla parte in cui il
+# danno e' recuperabile.
+#
+# Cio' che resta - modalita' multi-WAN, ordine e pesi delle WAN, riconnessione
+# automatica, verifica dei portali, kill switch - non puo' chiudere fuori
+# nessuno: il router resta raggiungibile al suo indirizzo comunque vada. Per
+# questo applicare un profilo non passa da applica-e-conferma, e per questo puo'
+# essere un pulsante solo.
+
+PROFILE_TYPE=profile
+
+# Le WAN che hanno una sezione mwan3, nell'ordine del file: lo stesso criterio
+# di `travel.mwan`, cosi' un profilo salvato e uno stato letto parlano della
+# stessa lista nello stesso ordine.
+profile_wans() {
+	local net
+	for net in $(wan_networks); do
+		[ -n "$(uci -q get "mwan3.$net")" ] || continue
+		printf '%s ' "$net"
+	done
+}
+
+# Legge nelle P_* lo stato ATTUALE del router.
+profile_read_live() {
+	local net entry
+
+	P_AUTO=$(uci -q get travel.globals.autoreconnect || echo 0)
+	P_RSSI=$(uci -q get travel.globals.rssi_min || echo -78)
+	P_ROAM=$(uci -q get travel.globals.roam_mode || echo stay)
+	P_SCAN=$(uci -q get travel.globals.scan_interval || echo 60)
+	P_PORTAL=$(uci -q get travel.globals.portal_check)
+	[ -n "$P_PORTAL" ] || P_PORTAL=1
+	P_KILL=$(uci -q get travel.vpn.killswitch || echo 0)
+
+	case "$(uci -q get mwan3.travel_default.use_policy)" in
+		travel_balance) P_MODE=balance ;;
+		travel_failover) P_MODE=failover ;;
+		*) P_MODE=off ;;
+	esac
+	P_STICKY=$(uci -q get mwan3.travel_default.sticky || echo 0)
+	P_TIMEOUT=$(uci -q get mwan3.travel_default.timeout || echo 600)
+
+	P_WANS=""
+	for net in $(profile_wans); do
+		entry="$net|$([ "$(uci -q get "mwan3.$net.enabled")" = "0" ] && echo 0 || echo 1)"
+		entry="$entry|$(uci -q get "mwan3.${net}_f.metric" || echo 0)"
+		entry="$entry|$(uci -q get "mwan3.${net}_b.weight" || echo 1)"
+		P_WANS="$P_WANS$entry "
+	done
+}
+
+# Legge nelle P_* i valori salvati in un profilo.
+profile_read_section() {
+	local section="$1" entry
+
+	P_AUTO=$(uci -q get "travel.$section.autoreconnect" || echo 0)
+	P_RSSI=$(uci -q get "travel.$section.rssi_min" || echo -78)
+	P_ROAM=$(uci -q get "travel.$section.roam_mode" || echo stay)
+	P_SCAN=$(uci -q get "travel.$section.scan_interval" || echo 60)
+	P_PORTAL=$(uci -q get "travel.$section.portal_check")
+	[ -n "$P_PORTAL" ] || P_PORTAL=1
+	P_KILL=$(uci -q get "travel.$section.killswitch" || echo 0)
+	P_MODE=$(uci -q get "travel.$section.mode" || echo failover)
+	P_STICKY=$(uci -q get "travel.$section.sticky" || echo 0)
+	P_TIMEOUT=$(uci -q get "travel.$section.timeout" || echo 600)
+
+	P_WANS=""
+	for entry in $(uci -q get "travel.$section.wans"); do
+		P_WANS="$P_WANS$entry "
+	done
+}
+
+# Una riga sola con tutto: due firme uguali sono due stati uguali.
+#
+# Serve a dire quale profilo e' quello in cui il router si trova adesso. Il
+# confronto si fa qui e non nel browser per la stessa ragione dei vincoli fra
+# VPN e multi-WAN: una seconda copia della regola prima o poi diverge.
+profile_signature() {
+	printf '%s;%s;%s;%s;%s;%s;%s;%s;%s;%s' \
+		"$P_AUTO" "$P_RSSI" "$P_ROAM" "$P_SCAN" "$P_PORTAL" "$P_KILL" \
+		"$P_MODE" "$P_STICKY" "$P_TIMEOUT" "$P_WANS"
+}
+
+# Scrive nel profilo lo stato attuale.
+profile_write() {
+	local section="$1" name="$2" entry
+
+	profile_read_live
+
+	uci set "travel.$section=$PROFILE_TYPE"
+	uci set "travel.$section.name=$name"
+	uci set "travel.$section.saved=$(date +%s)"
+	uci set "travel.$section.autoreconnect=$P_AUTO"
+	uci set "travel.$section.rssi_min=$P_RSSI"
+	uci set "travel.$section.roam_mode=$P_ROAM"
+	uci set "travel.$section.scan_interval=$P_SCAN"
+	uci set "travel.$section.portal_check=$P_PORTAL"
+	uci set "travel.$section.killswitch=$P_KILL"
+	uci set "travel.$section.mode=$P_MODE"
+	uci set "travel.$section.sticky=$P_STICKY"
+	uci set "travel.$section.timeout=$P_TIMEOUT"
+
+	uci -q delete "travel.$section.wans"
+	for entry in $P_WANS; do
+		uci add_list "travel.$section.wans=$entry"
+	done
+
+	uci commit travel
+}
+
+profile_sections() {
+	uci show travel 2>/dev/null | sed -n "s/^travel\.\([^.]*\)=$PROFILE_TYPE\$/\1/p"
+}
+
+# I profili salvati, piu' quale corrisponde allo stato di adesso.
+method_profile_list() {
+	local section current live entry net enabled metric weight
+
+	profile_read_live
+	live=$(profile_signature)
+
+	current=""
+	for section in $(profile_sections); do
+		profile_read_section "$section"
+		[ "$(profile_signature)" = "$live" ] && { current="$section"; break; }
+	done
+
+	json_init
+	# Vuoto quando nessun profilo combacia: e' uno stato normale - si e'
+	# cambiata una cosa a mano dopo aver applicato un profilo, e dirlo e'
+	# meglio che mostrare selezionato un profilo che non e' piu' quello.
+	json_add_string current "$current"
+
+	json_add_array profiles
+	for section in $(profile_sections); do
+		profile_read_section "$section"
+		json_add_object
+		json_add_string  section "$section"
+		json_add_string  name    "$(uci -q get "travel.$section.name")"
+		json_add_int     saved   "$(uci -q get "travel.$section.saved" || echo 0)"
+		json_add_string  mode    "$P_MODE"
+		json_add_boolean autoreconnect "$([ "$P_AUTO" = "1" ] && echo 1 || echo 0)"
+		json_add_boolean portal_check  "$([ "$P_PORTAL" = "1" ] && echo 1 || echo 0)"
+		json_add_boolean killswitch    "$([ "$P_KILL" = "1" ] && echo 1 || echo 0)"
+		json_add_boolean sticky        "$([ "$P_STICKY" = "1" ] && echo 1 || echo 0)"
+
+		# L'ordine delle WAN e' meta' del profilo: senza, due profili che
+		# cambiano solo la priorita' sembrerebbero identici nell'elenco.
+		json_add_array wans
+		for entry in $P_WANS; do
+			net="${entry%%|*}"
+			enabled="${entry#*|}"; enabled="${enabled%%|*}"
+			metric="${entry#*|*|}"; metric="${metric%%|*}"
+			weight="${entry##*|}"
+			json_add_object
+			json_add_string  network "$net"
+			json_add_boolean enabled "$enabled"
+			json_add_int     priority "$metric"
+			json_add_int     weight   "$weight"
+			json_close_object
+		done
+		json_close_array
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+# Il nome arriva dal browser e finisce in un file di configurazione: si accetta
+# quello che si sa scrivere, non si prova a ripulire quello che arriva.
+valid_profile_name() {
+	local name="$1"
+	[ -n "$name" ] || return 1
+	[ "${#name}" -le 24 ] || return 1
+	case "$name" in
+		*[!A-Za-z0-9\ _-]*) return 1 ;;
+	esac
+	return 0
+}
+
+# Salva lo stato di adesso in un profilo, nuovo o esistente.
+method_profile_save() {
+	local input name section found entry
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var name name
+	json_get_var section section
+
+	valid_profile_name "$name" || { fail_json "nome non valido: lettere, cifre, spazi, - e _, fino a 24 caratteri"; return; }
+
+	if [ -n "$section" ]; then
+		found=""
+		for entry in $(profile_sections); do
+			[ "$entry" = "$section" ] && found="$entry"
+		done
+		[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+	else
+		# Il nome della sezione non e' il nome del profilo: quello lo scrive
+		# una persona, con spazi e accenti, e uci non li accetta.
+		section="prof_$(date +%s)"
+	fi
+
+	profile_write "$section" "$name"
+
+	json_init
+	json_add_boolean saved 1
+	json_add_string  section "$section"
+	json_add_string  name "$name"
+	json_dump
+}
+
+method_profile_delete() {
+	local input section entry found
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var section section
+
+	found=""
+	for entry in $(profile_sections); do
+		[ "$entry" = "$section" ] && found="$entry"
+	done
+	[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+
+	uci -q delete "travel.$section"
+	uci commit travel
+
+	json_init
+	json_add_boolean deleted 1
+	json_dump
+}
+
+# Applica un profilo.
+#
+# Il cancello del bilanciamento vale anche qui, e per il motivo di sempre:
+# l'interfaccia e' solo una delle strade che portano a uci, e il controllo deve
+# stare nel punto in cui la modifica prende effetto. Un profilo salvato quando
+# la VPN era spenta chiede il bilanciamento; applicarlo con un tunnel acceso
+# lo riporta a failover e lo dice, invece di lasciare scritta una modalita' che
+# il router non sta usando.
+method_profile_apply() {
+	local input section entry found net enabled metric weight note holder
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var section section
+
+	found=""
+	for entry in $(profile_sections); do
+		[ "$entry" = "$section" ] && found="$entry"
+	done
+	[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+
+	profile_read_section "$section"
+	note=""
+
+	if [ "$P_MODE" = "balance" ] && holder=$(policy_holder balance); then
+		P_MODE=failover
+		note="il profilo chiedeva il bilanciamento: $(policy_reason "$holder")"
+	fi
+
+	# Le sezioni potrebbero non esserci ancora: `travel.vpn` la crea lo script
+	# della VPN, che senza Internet esce prima di arrivarci. `uci set` su una
+	# sezione che non esiste fallisce, e un profilo applicato a meta' e' peggio
+	# di uno non applicato.
+	[ -n "$(uci -q get travel.globals)" ] || uci set travel.globals=globals
+	[ -n "$(uci -q get travel.vpn)" ] || uci set travel.vpn=vpn
+
+	uci set travel.globals.autoreconnect="$P_AUTO"
+	uci set travel.globals.rssi_min="$P_RSSI"
+	uci set travel.globals.roam_mode="$P_ROAM"
+	uci set travel.globals.scan_interval="$P_SCAN"
+	uci set travel.globals.portal_check="$P_PORTAL"
+	uci set travel.vpn.killswitch="$P_KILL"
+	# Una sospensione in corso non sopravvive a un profilo: il kill switch
+	# torna a dire quello che il profilo dice, senza scadenze ereditate da
+	# prima.
+	uci set travel.vpn.resume_at=0
+	uci commit travel
+
+	if [ -n "$(uci -q get mwan3.travel_default)" ]; then
+		uci set mwan3.travel_default.use_policy="$([ "$P_MODE" = "balance" ] && echo travel_balance || echo travel_failover)"
+		uci set mwan3.travel_default.sticky="$P_STICKY"
+		uci set mwan3.travel_default.timeout="$P_TIMEOUT"
+	fi
+
+	for entry in $P_WANS; do
+		net="${entry%%|*}"
+		enabled="${entry#*|}"; enabled="${enabled%%|*}"
+		metric="${entry#*|*|}"; metric="${metric%%|*}"
+		weight="${entry##*|}"
+		[ -n "$(uci -q get "mwan3.$net")" ] || continue
+		uci set "mwan3.$net.enabled=$enabled"
+		uci set "mwan3.${net}_f.metric=$metric"
+		uci set "mwan3.${net}_b.weight=$weight"
+		# La metrica della rotta va tenuta allineata a quella del membro di
+		# failover: la prima governa il traffico che il router genera per
+		# conto proprio, la seconda quello dei client. Disallineate vorrebbe
+		# dire un router che preferisce una WAN diversa dai suoi client.
+		uci set "network.$net.metric=$metric"
+	done
+	uci commit mwan3
+	uci commit network
+
+	# Il kill switch e' una regola del firewall: la sola opzione in uci non
+	# blocca niente finche' fw4 non rilegge. Scritto e non applicato sarebbe
+	# il caso peggiore - la configurazione dice che sei protetto e il traffico
+	# continua a uscire.
+	if [ -n "$(uci -q get firewall.travel_killswitch)" ]; then
+		uci set "firewall.travel_killswitch.enabled=$P_KILL"
+		uci commit firewall
+		/etc/init.d/firewall reload >/dev/null 2>&1
+	fi
+
+	/etc/init.d/network reload >/dev/null 2>&1
+	[ -x /etc/init.d/mwan3 ] && /etc/init.d/mwan3 restart >/dev/null 2>&1
+
+	json_init
+	json_add_boolean applied 1
+	json_add_string  section "$section"
+	json_add_string  mode "$P_MODE"
+	json_add_string  note "$note"
+	json_dump
+}
+
+# --- Backup (requisito H) ----------------------------------------------------
+#
+# Il backup vero di OpenWrt, non un formato nostro: `sysupgrade -b` produce lo
+# stesso archivio che fa LuCI, e si rimette con `sysupgrade -r` o da LuCI se
+# questa interfaccia non c'e' piu'. Un formato proprietario sarebbe un file che
+# solo noi sappiamo rimettere, cioe' inutile proprio nel giorno in cui serve.
+#
+# Passa in base64 dentro la risposta ubus perche' il canale e' quello: /ubus
+# parla JSON e non esiste un secondo endpoint da cui scaricare file. Un backup
+# di configurazione sta in poche decine di KB, quindi ci sta.
+
+BACKUP_FILE=/tmp/travel-backup.tar.gz
+BACKUP_RESTORE=/tmp/travel-restore.tar.gz
+
+# Oltre questa soglia non si manda: e' il segno che nell'archivio c'e' finito
+# qualcosa che non e' configurazione, e un telefono non deve scoprirlo
+# aspettando.
+BACKUP_MAX_KB=512
+
+# base64 e' un'applet di busybox e c'e' quasi sempre, ma "quasi" non basta per
+# una cosa che senza di lei produrrebbe un file scaricato e illeggibile.
+have_base64() {
+	command -v base64 >/dev/null 2>&1
+}
+
+method_backup_export() {
+	local size
+
+	if ! have_base64; then
+		fail_json "manca il comando base64: scarica il backup da LuCI"
+		return
+	fi
+
+	rm -f "$BACKUP_FILE"
+	if ! sysupgrade -b "$BACKUP_FILE" >/dev/null 2>&1; then
+		fail_json "creazione del backup fallita"
+		return
+	fi
+
+	size=$(wc -c < "$BACKUP_FILE" 2>/dev/null)
+	case "$size" in
+		''|*[!0-9]*) fail_json "backup non leggibile"; rm -f "$BACKUP_FILE"; return ;;
+	esac
+
+	if [ "$size" -gt $((BACKUP_MAX_KB * 1024)) ]; then
+		rm -f "$BACKUP_FILE"
+		fail_json "backup troppo grande ($((size / 1024)) KB): scaricalo da LuCI"
+		return
+	fi
+
+	json_init
+	json_add_boolean ok 1
+	# Il nome lo compone il router: contiene il nome del dispositivo e la data,
+	# che sono le due cose che si cercano guardando cinque backup nella
+	# cartella dei download sei mesi dopo.
+	json_add_string  name "backup-$(first_line /proc/sys/kernel/hostname)-$(date +%Y%m%d-%H%M).tar.gz"
+	json_add_int     size "$size"
+	json_add_string  data "$(base64 < "$BACKUP_FILE" | tr -d '\n')"
+	json_dump
+
+	rm -f "$BACKUP_FILE"
+}
+
+# Il ripristino arriva a pezzi.
+#
+# uhttpd ha un limite sulla dimensione di una richiesta ubus, e un archivio in
+# base64 lo supera senza fatica. Invece di alzare un limite di sistema - che
+# vale per tutto, non solo per noi - il file arriva in pezzi e il router li
+# accoda: il primo apre, l'ultimo chiude e ripristina.
+method_backup_import() {
+	local input chunk first last size
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var chunk chunk
+	json_get_var first first
+	json_get_var last last
+
+	have_base64 || { fail_json "manca il comando base64: ripristina il backup da LuCI"; return; }
+	[ -n "$chunk" ] || { fail_json "pezzo vuoto"; return; }
+
+	# Solo l'alfabeto del base64: quello che arriva dalla rete non entra in un
+	# decodificatore senza essere prima riconosciuto.
+	case "$chunk" in
+		*[!A-Za-z0-9+/=]*) fail_json "il pezzo non e' base64"; return ;;
+	esac
+
+	# Ogni pezzo deve stare su un confine di quattro caratteri, che e' l'unita'
+	# del base64: tagliato altrove, ogni pezzo decodificato da solo perde i bit
+	# in mezzo e l'archivio esce corrotto in un modo che si scopre solo dopo.
+	[ $(( ${#chunk} % 4 )) -eq 0 ] || { fail_json "pezzo non allineato: dev'essere un multiplo di 4 caratteri"; return; }
+
+	[ "$first" = "1" ] && rm -f "$BACKUP_RESTORE"
+
+	if ! printf '%s' "$chunk" | base64 -d >> "$BACKUP_RESTORE" 2>/dev/null; then
+		rm -f "$BACKUP_RESTORE"
+		fail_json "decodifica del pezzo fallita"
+		return
+	fi
+
+	size=$(wc -c < "$BACKUP_RESTORE" 2>/dev/null)
+
+	if [ "$last" != "1" ]; then
+		json_init
+		json_add_boolean received 1
+		json_add_int     size "${size:-0}"
+		json_dump
+		return
+	fi
+
+	# Un archivio rotto si riconosce PRIMA di sovrascriverci sopra la
+	# configurazione. `sysupgrade -r` su un file monco lascia meta' dei file al
+	# loro posto e meta' no, che e' lo stato da cui si esce solo dal cavo.
+	if ! tar -tzf "$BACKUP_RESTORE" >/dev/null 2>&1; then
+		rm -f "$BACKUP_RESTORE"
+		fail_json "l'archivio non si apre: caricamento incompleto o file sbagliato"
+		return
+	fi
+
+	if ! tar -tzf "$BACKUP_RESTORE" 2>/dev/null | grep -q '^etc/config/'; then
+		rm -f "$BACKUP_RESTORE"
+		fail_json "questo archivio non contiene /etc/config: non e' un backup di OpenWrt"
+		return
+	fi
+
+	if ! sysupgrade -r "$BACKUP_RESTORE" >/dev/null 2>&1; then
+		rm -f "$BACKUP_RESTORE"
+		fail_json "ripristino fallito"
+		return
+	fi
+
+	rm -f "$BACKUP_RESTORE"
+
+	# Il riavvio parte dopo la risposta, non prima: la pagina deve poter dire
+	# cosa sta succedendo, altrimenti il router sparisce mentre il browser sta
+	# ancora aspettando e sembra un errore.
+	(sleep 2; reboot) >/dev/null 2>&1 &
+
+	json_init
+	json_add_boolean restored 1
+	json_add_int     size "${size:-0}"
+	json_add_int     reboot_in 2
+	json_dump
+}
+
+# --- Orologio e NTP (Fase 8) -------------------------------------------------
+#
+# Su questo router non c'e' un orologio a batteria: staccata la corrente,
+# l'ora riparte da quella del firmware. Non e' un dettaglio da pignoli - con
+# l'orologio indietro di mesi ogni certificato HTTPS risulta "non ancora
+# valido", quindi non si aprono le pagine, e la spiegazione che viene in mente
+# e' "la rete dell'albergo non funziona".
+#
+# Per questo la schermata mostra l'ora insieme al fuso e ai server: sono la
+# stessa cosa vista da tre lati, e separarle vorrebbe dire cercarle in tre
+# posti quando qualcosa non torna.
+
+# Il tempo minimo perche' l'ora sia credibile. Non e' una data speciale: e'
+# semplicemente prima di qualunque momento in cui questo router puo' essere
+# acceso, quindi un valore piu' piccolo significa "non l'ha ancora sincronizzata
+# nessuno".
+TIME_PLAUSIBLE=1735689600   # 2025-01-01
+
+have_rtc() {
+	[ -e /dev/rtc0 ] || [ -e /dev/rtc ]
+}
+
+method_time_get() {
+	local section now server
+
+	section=$(anon_section system system)
+	now=$(date +%s)
+
+	json_init
+	json_add_int     now "$now"
+	json_add_string  local "$(date '+%Y-%m-%d %H:%M:%S')"
+	json_add_string  section "$section"
+	json_add_string  zonename "$(uci -q get "system.$section.zonename")"
+	json_add_string  timezone "$(uci -q get "system.$section.timezone")"
+	json_add_boolean ntp_enabled "$([ "$(uci -q get system.ntp.enabled)" = "0" ] && echo 0 || echo 1)"
+	json_add_boolean ntpd_running "$([ -n "$(pidof ntpd)" ] && echo 1 || echo 0)"
+	# Plausibile, non "sincronizzata": nessuno qui ha parlato con un server NTP,
+	# si sta solo guardando se l'ora e' un numero possibile. Dirlo per quello
+	# che e' evita di affermare una sincronizzazione che non e' stata vista.
+	json_add_boolean plausible "$([ "$now" -gt "$TIME_PLAUSIBLE" ] && echo 1 || echo 0)"
+	# Senza orologio a batteria l'ora si perde a ogni distacco di corrente: e'
+	# la ragione per cui questa schermata esiste, e va detta li' dove si guarda.
+	json_add_boolean rtc "$(have_rtc && echo 1 || echo 0)"
+
+	json_add_array servers
+	for server in $(uci -q get system.ntp.server); do
+		json_add_string "" "$server"
+	done
+	json_close_array
+	json_dump
+}
+
+# Un nome di server NTP: lettere, cifre, punti e trattini. Anche qui lista
+# chiusa, perche' finisce in un file di configurazione letto da un demone.
+valid_ntp_server() {
+	local host="$1"
+	[ -n "$host" ] || return 1
+	[ "${#host}" -le 64 ] || return 1
+	case "$host" in
+		*[!A-Za-z0-9.-]*) return 1 ;;
+		.*|-*) return 1 ;;
+	esac
+	return 0
+}
+
+method_time_set() {
+	local input section zonename timezone enabled servers server count=0
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var zonename zonename
+	json_get_var timezone timezone
+	json_get_var enabled enabled
+	# I server arrivano come una stringa separata da spazi e non come lista
+	# JSON: jshn le liste le sa leggere, ma con un giro di `json_select` che
+	# fallisce in silenzio quando l'array manca - e un elenco di server NTP
+	# svuotato per sbaglio e' un router che non sa piu' che ora e'.
+	json_get_var servers servers
+
+	section=$(anon_section system system)
+	[ -n "$section" ] || { fail_json "sezione system non trovata"; return; }
+
+	# La stringa POSIX e' quella che conta davvero: il nome del fuso serve solo
+	# se sul router c'e' il pacchetto zoneinfo, che di solito non c'e'. Si
+	# scrivono tutte e due, e la stringa non e' facoltativa.
+	#
+	# Le parentesi angolari servono ai fusi che si scrivono cosi' (`<+04>-4`), e
+	# stanno fra apici perche' altrimenti la shell le leggerebbe come
+	# redirezioni invece che come caratteri di un insieme.
+	case "$timezone" in
+		''|*[!A-Za-z0-9+,./:_'<>'-]*) fail_json "fuso orario non valido"; return ;;
+	esac
+	case "$zonename" in
+		*[!A-Za-z0-9\ _/+-]*) fail_json "nome del fuso non valido"; return ;;
+	esac
+
+	uci set "system.$section.timezone=$timezone"
+	if [ -n "$zonename" ]; then
+		uci set "system.$section.zonename=$zonename"
+	else
+		uci -q delete "system.$section.zonename"
+	fi
+	uci commit system
+
+	# L'elenco si riscrive per intero: togliere una voce e aggiungerne un'altra
+	# non e' una cosa che si possa fare a meta', e mezza lista di server e' un
+	# orologio che a volte si aggiorna e a volte no.
+	#
+	# Prima si controlla tutto, poi si scrive: un nome sbagliato in fondo non
+	# deve lasciare l'elenco a meta'.
+	#
+	# Niente globbing mentre si spezza la stringa: un `*` arrivato dal browser
+	# diventerebbe l'elenco dei file della cartella corrente, e fra quelli
+	# qualcuno passerebbe pure per un nome di server valido.
+	set -f
+	for server in $servers; do
+		valid_ntp_server "$server" || { set +f; fail_json "server NTP non valido: $server"; return; }
+		count=$((count + 1))
+		[ "$count" -le 8 ] || { set +f; fail_json "troppi server: otto bastano"; return; }
+	done
+
+	[ "$count" -gt 0 ] || { set +f; fail_json "serve almeno un server NTP"; return; }
+
+	uci -q delete system.ntp.server
+	for server in $servers; do
+		uci add_list "system.ntp.server=$server"
+	done
+	set +f
+
+	if [ "$enabled" = "0" ]; then
+		uci set system.ntp.enabled=0
+	else
+		uci set system.ntp.enabled=1
+	fi
+	uci commit system
+
+	/etc/init.d/sysntpd restart >/dev/null 2>&1
+
+	json_init
+	json_add_boolean saved 1
+	json_add_int     servers "$count"
+	json_dump
+}
+
+# --- Riavvio, subito o a un'ora (Fase 8) -------------------------------------
+#
+# Il riavvio pianificato serve a una cosa sola e va detta: un router acceso per
+# settimane in valigia accumula stati strani - una WAN che non torna, un driver
+# USB che si e' arreso - e riavviarlo di notte li toglie prima che si notino.
+# Non e' manutenzione preventiva generica: e' il rimedio a guasti che questo
+# progetto ha gia' incontrato.
+#
+# Vive in cron e non in un timer nostro: un timer nostro vorrebbe dire un
+# processo che deve essere vivo proprio quando qualcosa si e' incantato.
+
+CRON_FILE=/etc/crontabs/root
+CRON_TAG="travel-reboot"
+
+method_reboot_get() {
+	local line minute hour weekday
+
+	line=$(grep -F "$CRON_TAG" "$CRON_FILE" 2>/dev/null | head -n 1)
+
+	json_init
+	if [ -z "$line" ]; then
+		json_add_boolean enabled 0
+		# I valori che comparirebbero nella scheda se la si aprisse adesso: le
+		# quattro del mattino di ogni giorno. Un modulo vuoto costringerebbe a
+		# inventare un orario per poter vedere com'e' fatto.
+		json_add_int hour 4
+		json_add_int minute 0
+		json_add_string weekday "*"
+	else
+		# Niente globbing mentre si spezza la riga: i campi di cron sono pieni
+		# di asterischi, e la shell li espanderebbe nell'elenco dei file.
+		set -f
+		set -- $line
+		set +f
+		minute="$1"; hour="$2"; weekday="$5"
+		json_add_boolean enabled 1
+		json_add_int    hour "${hour:-4}"
+		json_add_int    minute "${minute:-0}"
+		json_add_string weekday "${weekday:-*}"
+	fi
+	json_add_boolean cron_running "$([ -n "$(pidof crond)" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+method_reboot_set() {
+	local input enabled hour minute weekday tmp
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var enabled enabled
+	json_get_var hour hour
+	json_get_var minute minute
+	json_get_var weekday weekday
+
+	case "$hour" in ''|*[!0-9]*) hour=4 ;; esac
+	case "$minute" in ''|*[!0-9]*) minute=0 ;; esac
+	[ "$hour" -le 23 ] || { fail_json "ora non valida"; return; }
+	[ "$minute" -le 59 ] || { fail_json "minuto non valido"; return; }
+	case "$weekday" in
+		''|'*') weekday='*' ;;
+		[0-6]) ;;
+		*) fail_json "giorno non valido"; return ;;
+	esac
+
+	# Il file si riscrive senza la nostra riga e poi si riaggiunge: cosi' non
+	# si accumulano due pianificazioni, e le righe di cron di qualcun altro
+	# restano dove sono.
+	tmp="/tmp/travel-cron.$$"
+	grep -vF "$CRON_TAG" "$CRON_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
+
+	if [ "$enabled" = "1" ]; then
+		printf '%s %s * * %s /sbin/reboot # %s\n' "$minute" "$hour" "$weekday" "$CRON_TAG" >> "$tmp"
+	fi
+
+	mkdir -p "$(dirname "$CRON_FILE")"
+	cat "$tmp" > "$CRON_FILE"
+	rm -f "$tmp"
+
+	# cron rilegge i crontab da solo, ma se non e' mai stato avviato la riga
+	# resterebbe scritta e non applicata - lo stato che questo progetto rifiuta
+	# altrove.
+	if [ "$enabled" = "1" ]; then
+		/etc/init.d/cron enable >/dev/null 2>&1
+		/etc/init.d/cron restart >/dev/null 2>&1
+	fi
+
+	json_init
+	json_add_boolean saved 1
+	json_add_boolean enabled "$([ "$enabled" = "1" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+method_reboot_now() {
+	cat >/dev/null
+
+	# Come per il ripristino: prima la risposta, poi il riavvio. Al browser
+	# serve il tempo di mostrare cosa sta per succedere.
+	(sleep 2; reboot) >/dev/null 2>&1 &
+
+	json_init
+	json_add_boolean rebooting 1
+	json_add_int     reboot_in 2
+	json_dump
+}
+
+case "$1" in
+	list)
+		# Firma dei metodi esposti. Oggetto vuoto = nessun argomento accettato.
+		json_init
+		json_add_object status
+		json_close_object
+		json_add_object system
+		json_close_object
+		json_add_object radios
+		json_close_object
+		json_add_object uplinks
+		json_close_object
+		json_add_object ap
+		json_close_object
+		json_add_object scan
+		json_add_string radio ""
+		json_close_object
+		json_add_object networks
+		json_close_object
+		json_add_object stage_connect_saved
+		json_add_string section ""
+		json_add_string radio ""
+		json_close_object
+		json_add_object mark_used
+		json_add_string section ""
+		json_add_string result ""
+		json_close_object
+		json_add_object lan
+		json_close_object
+		json_add_object ethports
+		json_close_object
+		json_add_object clients
+		json_close_object
+		json_add_object mwan
+		json_close_object
+		json_add_object mwan_apply
+		json_close_object
+		json_add_object usb
+		json_close_object
+		json_add_object usb_devices
+		json_close_object
+		json_add_object usb_mode
+		json_close_object
+		json_add_object usb_reset
+		json_close_object
+		json_add_object portal_probe
+		json_add_string network ""
+		json_close_object
+		json_add_object portal_networks
+		json_close_object
+		json_add_object portal_forget
+		json_add_string section ""
+		json_close_object
+		json_add_object vpn
+		json_close_object
+		json_add_object ts_login
+		json_add_string authkey ""
+		json_close_object
+		json_add_object ts_apply
+		json_close_object
+		json_add_object ts_down
+		json_close_object
+		json_add_object ts_logout
+		json_close_object
+		json_add_object wg_get
+		json_close_object
+		json_add_object wg_toggle
+		json_add_string enabled ""
+		json_close_object
+		json_add_object profile_list
+		json_close_object
+		json_add_object profile_save
+		json_add_string name ""
+		json_add_string section ""
+		json_close_object
+		json_add_object profile_apply
+		json_add_string section ""
+		json_close_object
+		json_add_object profile_delete
+		json_add_string section ""
+		json_close_object
+		json_add_object backup_export
+		json_close_object
+		json_add_object backup_import
+		json_add_string  chunk ""
+		json_add_boolean first 0
+		json_add_boolean last 0
+		json_close_object
+		json_add_object time_get
+		json_close_object
+		json_add_object time_set
+		json_add_string  timezone ""
+		json_add_string  zonename ""
+		json_add_string  servers ""
+		json_add_boolean enabled 1
+		json_close_object
+		json_add_object reboot_get
+		json_close_object
+		json_add_object reboot_set
+		json_add_boolean enabled 0
+		json_add_int     hour 0
+		json_add_int     minute 0
+		json_add_string  weekday ""
+		json_close_object
+		json_add_object reboot_now
+		json_close_object
+		json_add_object wg_import
+		json_add_string config ""
+		json_close_object
+		json_dump
+		;;
+	call)
+		case "$2" in
+			status)              method_status ;;
+			system)              method_system ;;
+			radios)              method_radios ;;
+			uplinks)             method_uplinks ;;
+			ap)                  method_ap ;;
+			scan)                method_scan ;;
+			networks)            method_networks ;;
+			stage_connect_saved) method_stage_connect_saved ;;
+			mark_used)           method_mark_used ;;
+			lan)                 method_lan ;;
+			ethports)            method_ethports ;;
+			clients)             method_clients ;;
+			mwan)                method_mwan ;;
+			mwan_apply)           method_mwan_apply ;;
+			usb)                  method_usb ;;
+			usb_devices)          method_usb_devices ;;
+			usb_mode)             method_usb_mode ;;
+			usb_reset)            method_usb_reset ;;
+			portal_probe)         method_portal_probe ;;
+			portal_networks)      method_portal_networks ;;
+			portal_forget)        method_portal_forget ;;
+			vpn)                  method_vpn ;;
+			ts_login)             method_ts_login ;;
+			ts_apply)             method_ts_apply ;;
+			ts_down)              method_ts_down ;;
+			ts_logout)            method_ts_logout ;;
+			wg_get)               method_wg_get ;;
+			wg_toggle)            method_wg_toggle ;;
+			profile_list)         method_profile_list ;;
+			profile_save)         method_profile_save ;;
+			profile_apply)        method_profile_apply ;;
+			profile_delete)       method_profile_delete ;;
+			backup_export)        method_backup_export ;;
+			backup_import)        method_backup_import ;;
+			time_get)             method_time_get ;;
+			time_set)             method_time_set ;;
+			reboot_get)           method_reboot_get ;;
+			reboot_set)           method_reboot_set ;;
+			reboot_now)           method_reboot_now ;;
+			wg_import)            method_wg_import ;;
+			*)                   echo '{}'; exit 1 ;;
+		esac
+		;;
+	*)
+		echo '{}'
+		exit 1
+		;;
+esac
