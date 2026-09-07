@@ -68,7 +68,7 @@ patch release o build del firmware.
 | **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
 | **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
-| **VPN** | Gestire Tailscale, scegliere un exit node, importare un tunnel WireGuard e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
+| **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
 | **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, gestire USB, orologio e riavvio pianificato. |
 
 Per esempio, in hotel puoi collegare il router al WiFi della struttura,
@@ -85,8 +85,8 @@ verifiche sul dispositivo per i diversi scenari di rete.
   l'integrazione completa di IPv6 resta da realizzare.
 - Bilanciamento multi-WAN, uso di un exit node Tailscale remoto e WireGuard
   attivo sono modalità alternative fra loro. La UI applica questi vincoli.
-- WireGuard gestisce un tunnel con un peer; non offre una gestione completa
-  di più tunnel e split tunneling.
+- WireGuard salva più configurazioni, ognuna con un peer, e ne tiene attiva
+  una alla volta; non offre split tunneling né più tunnel attivi insieme.
 - Il kill switch blocca l'inoltro dalla LAN alla WAN; il suo ambito e i suoi
   limiti sono descritti nell'architettura.
 - La UI non configura reti WiFi Enterprise, SSID nascosti o reti ospiti isolate.

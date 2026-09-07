@@ -12,7 +12,7 @@
 		},
 		"write": {
 			"ubus": {
-				"travel": [ "stage_connect_saved", "mark_used", "mwan_apply", "usb_mode", "usb_reset", "portal_probe", "portal_forget", "ts_login", "ts_apply", "ts_down", "ts_logout", "wg_toggle", "wg_import", "profile_save", "profile_apply", "profile_delete", "backup_export", "backup_import", "time_set", "reboot_set", "reboot_now" ],
+				"travel": [ "stage_connect_saved", "mark_used", "mwan_apply", "usb_mode", "usb_reset", "portal_probe", "portal_forget", "ts_login", "ts_apply", "ts_down", "ts_logout", "wg_toggle", "wg_import", "wg_save", "wg_delete", "profile_save", "profile_apply", "profile_delete", "backup_export", "backup_import", "time_set", "reboot_set", "reboot_now" ],
 				"traveld": [ "reset", "portal_check" ],
 				"uci": [ "add", "set", "delete", "apply", "confirm", "rollback" ]
 			},

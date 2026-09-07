@@ -425,23 +425,51 @@ background, conserva esito/output temporanei e normalizza nodi, nomi e presenza.
 
 ### WireGuard
 
-È gestito un tunnel `network.travel_wg` e un peer `network.travel_wg_peer`,
-di tipo `wireguard_travel_wg`. L'import legge i campi riconosciuti di
-`[Interface]` e `[Peer]`: chiavi, indirizzi, DNS, MTU, endpoint, AllowedIPs
-e keepalive. Verifica la presenza dei campi essenziali e non esegue direttive
-shell del file.
+Sono gestite più configurazioni salvate, con una sola attiva alla volta. Ogni
+configurazione è una coppia di sezioni in `/etc/config/network`: l'interfaccia
+`network.travel_wg<N>` e il peer `network.travel_wg<N>_peer` di tipo
+`wireguard_travel_wg<N>`. Il nome della sezione coincide con il nome
+dell'interfaccia ed è l'identificatore usato dai metodi rpcd. `travel_wg` senza
+numero è il tunnel unico delle versioni precedenti: viene elencato come primo
+profilo senza essere rinominato. I nuovi profili prendono il primo numero
+libero a partire da 1.
 
-L'import riscrive le due sezioni e lascia il tunnel disabilitato. Il keepalive
-predefinito è 25 secondi e AllowedIPs, se assente, è `0.0.0.0/0`.
-Il tunnel usa `fwmark=0x1000000` e `route_allowed_ips=0`; il routing applicativo
-installa una default IPv4 in una tabella dedicata. L'accensione attende fino
-a 15 secondi la comparsa del device prima di riapplicare il routing.
+Il nome scelto dall'utente sta in `travel_name` sulla sezione dell'interfaccia
+ed è obbligatorio alla creazione; per il tunnel ereditato, che non ce l'ha,
+l'elenco mostra l'endpoint finché non gli viene dato un nome. I nomi sono unici
+a meno di maiuscole e spazi ai bordi.
+
+`wg_get` restituisce l'elenco dei profili con la rispettiva configurazione,
+l'id di quello attivo, e — riferiti al solo profilo attivo — `config`, `status`
+e `routing`. `wg_import` crea un profilo nuovo (spento) o riscrive le sezioni di
+uno esistente conservandone lo stato di attivazione; `wg_save` sostituisce i
+parametri di un singolo profilo, dove i campi dei segreti vuoti significano
+"invariato" e `drop_preshared` rimuove la chiave precondivisa; `wg_delete`
+elimina un profilo e lo toglie dalla zona firewall; `wg_toggle` prende `id` e
+`enabled`. Nessuno di questi metodi legge o scrive le altre sezioni.
+
+L'import legge i campi riconosciuti di `[Interface]` e `[Peer]`: chiavi,
+indirizzi, DNS, MTU, endpoint, AllowedIPs e keepalive. Verifica la presenza e la
+forma dei campi essenziali — chiavi base64 da 44 caratteri, indirizzi e
+AllowedIPs come liste di IP/CIDR, porta e MTU numerici entro intervallo — e non
+esegue direttive shell del file. Il keepalive predefinito è 25 secondi e
+AllowedIPs, se assente, è `0.0.0.0/0`.
+
+Ogni tunnel usa `fwmark=0x1000000` e `route_allowed_ips=0`; il routing
+applicativo installa una default IPv4 in una tabella dedicata per il solo
+device attivo. `wg_toggle` rifiuta l'accensione quando un altro profilo è già
+attivo, nominandolo, e `wg_delete` rifiuta di eliminare quello attivo: lo
+scambio fra due profili richiede una disattivazione esplicita. L'accensione
+attende fino a 15 secondi la comparsa del device prima di riapplicare il
+routing; lo stesso avviene dopo una modifica al profilo attivo, che ne rifà
+le sezioni.
 
 ### Tabelle, regole e firewall
 
 `vpn-setup.sh runtime` riapplica inoltro IPv4, rotte e regole. Lo invocano
 l'init di travel, i comandi VPN pertinenti e l'hotplug
-`/etc/hotplug.d/net/40-travel-vpn` quando compare `tailscale0` o `travel_wg`.
+`/etc/hotplug.d/net/40-travel-vpn` quando compare `tailscale0` o un device
+`travel_wg*`.
 
 | Priorità | Regola |
 |---|---|
@@ -449,7 +477,7 @@ l'init di travel, i comandi VPN pertinenti e l'hotplug
 | 900 | Consulta tabella Tailscale 52, esclusi i pacchetti marcati `0x80000/0xff0000` |
 | 901, con device WireGuard presente | Consulta tabella 53, esclusi i pacchetti marcati `0x1000000/0x1000000` |
 
-La tabella 53 contiene `default dev travel_wg`. Il traffico UDP esterno di
+La tabella 53 contiene una default sul device WireGuard attivo. Il traffico UDP esterno di
 WireGuard porta il mark e prosegue verso il routing WAN: il progetto non
 mantiene una rotta host all'endpoint ad ogni failover. Il setup installa
 anche `100.64.0.0/10 dev tailscale0` nella tabella 52 quando il device esiste.
@@ -461,7 +489,7 @@ L'inoltro IPv4 viene impostato a runtime e persistito in
 
 | Sezione | Effetto |
 |---|---|
-| `travel_vpn` | Zona vpn: `tailscale0` e rete `travel_wg` dopo l'import; input/forward REJECT, output ACCEPT, masquerade e MSS clamping |
+| `travel_vpn` | Zona vpn: `tailscale0` e le reti `travel_wg*` di tutti i profili salvati, anche spenti; input/forward REJECT, output ACCEPT, masquerade e MSS clamping |
 | `travel_vpn_fwd` | Inoltro LAN → VPN |
 | `travel_vpn_out` | Inoltro VPN → WAN, legato all'annuncio exit node |
 | `travel_vpn_lan` | Inoltro VPN → LAN, legato all'annuncio della LAN |

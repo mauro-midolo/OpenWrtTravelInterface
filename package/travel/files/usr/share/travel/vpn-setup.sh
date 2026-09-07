@@ -113,7 +113,11 @@ WG_RULE_PREF=901
 # e solo cio' che sarebbe finito nella rotta predefinita prosegue nel tunnel.
 WG_LOCAL_PREF=899
 WG_TABLE=53
-WG_IFACE=travel_wg
+# Il prefisso, non un nome: le configurazioni WireGuard salvate sono tante
+# (`travel_wg`, `travel_wg1`, `travel_wg2`...) e vivono tutte in
+# `/etc/config/network`. Una sola pero' puo' essere accesa, quindi c'e' un solo
+# device da instradare e questa e' la funzione che dice quale.
+WG_PREFIX=travel_wg
 WG_BYPASS_MARK='0x1000000/0x1000000'
 TS_BYPASS_MARK='0x80000/0xff0000'
 
@@ -210,19 +214,40 @@ wg_routing_down() {
 	done
 }
 
+# La configurazione WireGuard accesa, o niente.
+#
+# Stessa lettura che fa il plugin rpcd, e per forza: se i due dessero risposte
+# diverse, l'interfaccia direbbe che il traffico passa da un tunnel e il kernel
+# lo manderebbe in un altro. Il vincolo del tunnel unico e' proprio cio' che
+# rende la domanda sensata - "quale" ha una risposta sola.
+wg_active_iface() {
+	local section
+
+	for section in $(uci -q show network 2>/dev/null |
+		sed -n "s/^network\.\(${WG_PREFIX}[0-9]*\)=interface\$/\1/p"); do
+		[ "$(uci -q get "network.$section.disabled")" = "1" ] && continue
+		printf '%s' "$section"
+		return 0
+	done
+
+	return 1
+}
+
 ensure_wg_routing() {
-	local probe out
+	local probe out iface
 
 	command -v ip >/dev/null 2>&1 || return 0
 
 	wg_routing_down
 
-	if [ ! -e "/sys/class/net/$WG_IFACE" ]; then
+	iface=$(wg_active_iface) || iface=""
+
+	if [ -z "$iface" ] || [ ! -e "/sys/class/net/$iface" ]; then
 		ip route flush table "$WG_TABLE" 2>/dev/null
 		return 0
 	fi
 
-	ip route replace default dev "$WG_IFACE" table "$WG_TABLE" 2>/dev/null
+	ip route replace default dev "$iface" table "$WG_TABLE" 2>/dev/null
 
 	# **Prima la salvaguardia, poi il dirottamento.** L'ordine non e' un
 	# dettaglio: fra le due righe non deve esistere un istante in cui il
@@ -263,7 +288,7 @@ ensure_wg_routing() {
 	probe=$(lan_probe_addr) && {
 		out=$(ip route get "$probe" 2>/dev/null)
 		case "$out" in
-			*"$WG_IFACE"*)
+			*"$iface"*)
 				say "ATTENZIONE: l'instradamento del tunnel cattura anche la LAN: lo tolgo"
 				wg_routing_down
 				return 0

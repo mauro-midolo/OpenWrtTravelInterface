@@ -255,14 +255,67 @@ export interface WgRouting {
   in_zone: boolean;
 }
 
+/**
+ * Una configurazione WireGuard salvata.
+ *
+ * `id` e' il nome della sezione uci, che su OpenWrt e' anche il nome
+ * dell'interfaccia: non e' un identificatore inventato dal frontend, ed e' per
+ * questo che non puo' divergere da niente. `name` invece lo sceglie chi salva,
+ * ed e' l'unica cosa con cui poi distingue due tunnel dello stesso provider.
+ */
+export interface WgProfile {
+  id: string;
+  name: string;
+  /** Questo profilo e' quello acceso. Al massimo uno lo e'. */
+  active: boolean;
+  /**
+   * Ha un nome vero, dato da una persona.
+   *
+   * Falso solo per il tunnel unico che arriva da una versione precedente: li'
+   * `name` e' l'endpoint, cioe' l'unica cosa che lo distingueva quando i tunnel
+   * erano uno. Serve alla UI per invitare a dargliene uno, non per nasconderlo.
+   */
+  named: boolean;
+  config: WgConfig;
+}
+
 export interface WgState {
   installed: boolean;
+  /** Almeno una configurazione salvata. */
   configured: boolean;
+  /** Una configurazione e' accesa. */
   enabled: boolean;
+  /** L'id di quella accesa, stringa vuota se non ce n'e' nessuna. */
+  active?: string;
+  profiles?: WgProfile[];
+  /** La configurazione accesa, ripetuta fuori dall'elenco per comodita'. */
   config: WgConfig;
   status: WgStatus;
   routing?: WgRouting;
   policy?: VpnPolicy;
+}
+
+/**
+ * I campi di un profilo, come li compila un modulo.
+ *
+ * I segreti sono stringhe come le altre, ma vuote vogliono dire "lascia quello
+ * che c'e'": il browser non li ha mai avuti (D3) e quindi non li puo'
+ * rimandare indietro. Togliere una chiave precondivisa e' una richiesta a se',
+ * `drop_preshared`, perche' un campo lasciato in bianco non e' una richiesta.
+ */
+export interface WgFields {
+  name: string;
+  addresses: string;
+  dns: string;
+  mtu: string;
+  private_key: string;
+  peer_key: string;
+  preshared_key: string;
+  drop_preshared: boolean;
+  endpoint: string;
+  port: string;
+  allowed_ips: string;
+  keepalive: string;
 }
 
 export function getWg(): Promise<WgState> {
@@ -270,39 +323,100 @@ export function getWg(): Promise<WgState> {
 }
 
 /**
- * Accende o spegne il tunnel.
+ * Le configurazioni salvate.
+ *
+ * Con un plugin piu' vecchio del frontend l'elenco non c'e': allora si mostra
+ * il tunnel unico come profilo singolo, invece di una schermata vuota che
+ * direbbe "non hai niente" a chi ha un tunnel acceso.
+ */
+export function wgProfiles(wg: WgState): WgProfile[] {
+  if (wg.profiles) return wg.profiles;
+  if (!wg.configured) return [];
+  return [
+    {
+      id: 'travel_wg',
+      name: wg.config.endpoint || 'WireGuard',
+      active: wg.enabled,
+      named: false,
+      config: wg.config,
+    },
+  ];
+}
+
+/** Quella accesa, o niente. */
+export function wgActiveProfile(wg: WgState): WgProfile | null {
+  return wgProfiles(wg).find((p) => p.active) ?? null;
+}
+
+/**
+ * Accende o spegne una configurazione.
  *
  * Il router rifiuta l'accensione quando qualcos'altro sta gia' decidendo dove
- * esce il traffico, e l'errore che torna e' gia' la frase da mostrare. La UI
- * spegne il pulsante prima, ma il controllo vero e' li': e' l'unico punto da
- * cui non si passa per sbaglio.
+ * esce il traffico - un'altra configurazione WireGuard compresa - e l'errore
+ * che torna e' gia' la frase da mostrare. La UI spegne il pulsante prima, ma il
+ * controllo vero e' li': e' l'unico punto da cui non si passa per sbaglio.
  */
-export async function wgToggle(enabled: boolean): Promise<void> {
+export async function wgToggle(enabled: boolean, id: string): Promise<void> {
   const result = await call<{ error?: string }>(
     'travel',
     'wg_toggle',
-    { enabled: enabled ? '1' : '0' },
+    { enabled: enabled ? '1' : '0', id },
     30_000,
   );
   if (result.error) throw new Error(result.error);
 }
 
 /**
- * Importa una configurazione incollata.
+ * Importa una configurazione incollata: un profilo nuovo, o uno esistente
+ * rifatto da capo.
  *
- * Il tunnel nasce **spento**: importare non e' accendere. Cosi' anche la prima
- * accensione passa dal controllo dei vincoli, e non esiste una scorciatoia che
- * li aggira.
+ * Il nome e' obbligatorio quando il profilo e' nuovo, ed e' il router a
+ * rifiutare senza. Un profilo nuovo nasce **spento**: importare non e'
+ * accendere, cosi' anche la prima accensione passa dal controllo dei vincoli e
+ * non esiste una scorciatoia che li aggira. Reimportare sopra un profilo acceso
+ * invece non lo spegne - e' una modifica.
  */
-export async function wgImport(config: string): Promise<{ endpoint: string }> {
-  const result = await call<{ endpoint?: string; error?: string }>(
+export async function wgImport(
+  config: string,
+  name: string,
+  id = '',
+): Promise<{ id: string; endpoint: string }> {
+  const result = await call<{ id?: string; endpoint?: string; error?: string }>(
     'travel',
     'wg_import',
-    { config },
+    { config, name, id },
     30_000,
   );
   if (result.error) throw new Error(result.error);
-  return { endpoint: result.endpoint ?? '' };
+  return { id: result.id ?? '', endpoint: result.endpoint ?? '' };
+}
+
+/**
+ * Salva i parametri di una configurazione, e solo di quella.
+ *
+ * Si mandano tutti i campi sempre: il router li prende come lo stato completo
+ * del profilo, perche' in shell "campo assente" e "campo vuoto" sono la stessa
+ * cosa e indovinare quale sia cancellerebbe in silenzio i DNS di qualcuno.
+ */
+export async function wgSave(id: string, fields: WgFields): Promise<void> {
+  const result = await call<{ error?: string }>(
+    'travel',
+    'wg_save',
+    { id, ...fields, drop_preshared: fields.drop_preshared ? '1' : '0' },
+    30_000,
+  );
+  if (result.error) throw new Error(result.error);
+}
+
+/**
+ * Elimina una configurazione salvata.
+ *
+ * Il router rifiuta di eliminare quella accesa: toglierebbe da sotto al
+ * traffico l'interfaccia in cui sta passando. Si spegne, poi si elimina.
+ */
+export async function wgDelete(id: string): Promise<void> {
+  const result = await call<{ error?: string }>('travel', 'wg_delete', { id }, 30_000);
+  if (result.error) throw new Error(result.error);
 }
 
 /** Byte del tunnel. Sta qui e non in dashboard.ts: e' l'unico posto che li usa. */
@@ -353,7 +467,9 @@ export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string;
   return [
     {
       ok: r.device_up,
-      label: 'Interfaccia del tunnel (travel_wg)',
+      // Con il nome vero dell'interfaccia: i profili sono tanti, e chi va a
+      // guardare in `ip link` deve sapere quale cercare.
+      label: `Interfaccia del tunnel (${wg.active || 'travel_wg'})`,
       fix: 'l’interfaccia non esiste: netifd non l’ha alzata',
     },
     {

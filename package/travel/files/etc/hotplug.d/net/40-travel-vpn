@@ -19,8 +19,11 @@
 # aspetta il device, ma questo hotplug e' la rete di sicurezza che non dipende
 # da quell'attesa.
 
+# `travel_wg` senza numero e' il tunnel unico delle versioni precedenti; i
+# profili salvati dopo si chiamano `travel_wg1`, `travel_wg2`... Ne puo' salire
+# uno solo alla volta, ma quale non si sa in anticipo: il filtro li prende tutti.
 case "$DEVICENAME" in
-	tailscale0|travel_wg) ;;
+	tailscale0|travel_wg|travel_wg[0-9]*) ;;
 	*) exit 0 ;;
 esac
 

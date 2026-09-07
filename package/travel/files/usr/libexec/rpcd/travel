@@ -2111,6 +2111,64 @@ method_portal_forget() {
 	json_dump
 }
 
+# --- I profili WireGuard, elencati --------------------------------------------
+#
+# Le configurazioni WireGuard vivono in `/etc/config/network` come interfacce
+# netifd e si chiamano `travel_wg`, `travel_wg1`, `travel_wg2`... Il nome della
+# sezione **e'** il nome dell'interfaccia - netifd funziona cosi' - quindi e'
+# anche l'identificatore con cui l'interfaccia parla di un profilo: non serve
+# inventarne un secondo, e uno solo non puo' divergere dall'altro.
+#
+# `travel_wg` senza numero e' il tunnel unico delle versioni precedenti. Resta
+# com'e' invece di essere rinominato: rinominare un'interfaccia significa
+# abbatterla e rifarla, e chi aggiorna il router mentre e' in albergo non se lo
+# merita. Diventa semplicemente la prima voce dell'elenco.
+#
+# Queste funzioni stanno qui sopra, prima della policy, perche' la policy e' il
+# loro primo lettore: "c'e' un tunnel acceso?" e "quale?" sono la stessa
+# domanda, e devono avere una risposta sola.
+WG_PREFIX=travel_wg
+
+# Le sezioni interfaccia dei profili, una per riga. Le sezioni peer si chiamano
+# `<profilo>_peer` e non finiscono qui: hanno tipo `wireguard_<profilo>`, non
+# `interface`, e il filtro le lascia fuori da solo.
+wg_profiles() {
+	uci -q show network 2>/dev/null |
+		sed -n "s/^network\.\(${WG_PREFIX}[0-9]*\)=interface\$/\1/p"
+}
+
+# Il profilo acceso, o niente.
+#
+# Al massimo uno: e' il vincolo di tutta la fase, e qui si legge come "il primo
+# che non e' disabilitato". Se una configurazione scritta a mano - LuCI, ssh -
+# ne avesse accesi due, questa ne nomina uno e i cancelli piu' sotto rifiutano
+# di accenderne altri: si torna a uno solo spegnendo, che e' la strada normale.
+wg_active() {
+	local section
+
+	for section in $(wg_profiles); do
+		[ "$(uci -q get "network.$section.disabled")" = "1" ] && continue
+		printf '%s' "$section"
+		return 0
+	done
+
+	return 1
+}
+
+# Il nome che gli ha dato chi lo ha salvato.
+#
+# E' obbligatorio da quando si crea un profilo in poi. Non c'e' per il tunnel
+# unico che arriva da una versione precedente: li' si mostra l'endpoint, che e'
+# l'unica cosa che lo distingue, e il primo salvataggio gli da' un nome vero.
+wg_name() {
+	local section="$1" name
+
+	name=$(uci -q get "network.$section.travel_name")
+	[ -n "$name" ] || name=$(uci -q get "network.${section}_peer.endpoint_host")
+	[ -n "$name" ] || name="$section"
+	printf '%s' "$name"
+}
+
 # --- Chi decide da dove esce il traffico (Fase 6b) ----------------------------
 #
 # Tre cose, e **al massimo una alla volta**:
@@ -2157,10 +2215,13 @@ policy_ts_exit() {
 	[ -n "$(uci -q get travel.tailscale.exit_node)" ]
 }
 
-# Vero se il tunnel WireGuard e' acceso.
+# Vero se un tunnel WireGuard e' acceso - uno qualunque dei profili salvati.
+#
+# I profili sono tanti, la decisione su dove esce il traffico e' una: quello che
+# conta qui non e' quale sia acceso ma che ce ne sia uno. Quale, lo chiede chi
+# deve scrivere la frase da mostrare.
 policy_wireguard() {
-	[ -n "$(uci -q get network.travel_wg)" ] &&
-		[ "$(uci -q get network.travel_wg.disabled)" != "1" ]
+	wg_active >/dev/null
 }
 
 # Chi sta gia' decidendo, escludendo quello che si sta per accendere.
@@ -2186,7 +2247,11 @@ policy_reason() {
 		ts_exit)
 			printf 'un exit node Tailscale sta gia portando fuori tutto il traffico' ;;
 		wireguard)
-			printf 'il tunnel WireGuard sta gia portando fuori tutto il traffico' ;;
+			# Col nome del profilo, adesso che ce ne puo' essere piu' d'uno:
+			# "un tunnel WireGuard" non basta piu' a dire quale spegnere.
+			_wg_on=$(wg_active) &&
+				printf 'il tunnel WireGuard "%s" sta gia portando fuori tutto il traffico' "$(wg_name "$_wg_on")" ||
+				printf 'un tunnel WireGuard sta gia portando fuori tutto il traffico' ;;
 		*)
 			printf '' ;;
 	esac
@@ -2468,7 +2533,9 @@ method_vpn() {
 	# Internet diventa quello di WireGuard. E' la combinazione che si vuole in
 	# viaggio - il telefono esce dal router, il router esce dal fornitore VPN -
 	# e ha due anelli suoi, che si mostrano solo quando il tunnel c'e'.
-	json_add_boolean wg_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	# "Il tunnel", cioe' quello acceso: i profili salvati sono tanti, ma quello
+	# che porta il traffico e' uno solo, e solo il suo device esiste.
+	json_add_boolean wg_up "$(_wg_on=$(wg_active) && [ -e "/sys/class/net/$_wg_on" ] && echo 1 || echo 0)"
 	# L'inoltro fra i due tunnel: senza, il pacchetto arriva, viene instradato
 	# verso WireGuard e li' la zona lo rifiuta, perche' i due tunnel stanno
 	# nella stessa zona e le zone non inoltrano su se stesse.
@@ -2856,23 +2923,36 @@ method_ts_logout() {
 
 # --- WireGuard (Fase 6b) ------------------------------------------------------
 #
-# **Un tunnel solo**, `travel_wg`, e non un elenco. Il piano ne prevedeva molti;
-# su un router da viaggio non serve, e soprattutto non e' rappresentabile: i
-# vincoli qui sopra dicono che al massimo un tunnel completo puo' essere acceso,
-# quindi un elenco sarebbe un elenco in cui una voce sola conta. Cambiare
-# provider significa reimportare la configurazione, che e' un incolla.
+# **Piu' configurazioni salvate, una sola accesa.** Le due meta' della frase
+# sono indipendenti e vanno tenute tali: chi viaggia ha il provider di casa, il
+# tunnel dell'ufficio e quello di un amico, e reimportare il file ogni volta che
+# cambia posto e' una tassa inutile. Che ne possa *funzionare* una sola alla
+# volta e' un'altra cosa, e resta vero: due rotte predefinite dentro due tunnel
+# diversi non sono una configurazione, sono un errore silenzioso (il
+# ragionamento intero sta nella sezione della policy, qui sopra).
 #
-# Il tunnel vive in `/etc/config/network` come interfaccia netifd con
+# Ne segue la regola che l'interfaccia mostra e i metodi fanno rispettare: per
+# passare da un profilo all'altro si spegne prima quello acceso. Non e' un
+# fastidio da nascondere con uno scambio automatico - lo scambio automatico
+# vorrebbe dire un istante in cui il traffico esce in chiaro, senza che nessuno
+# lo abbia chiesto.
+#
+# Ogni profilo vive in `/etc/config/network` come interfaccia netifd con
 # `proto wireguard`, non in `/etc/config/travel`: netifd sa gia' gestirlo, e
 # duplicarne la configurazione altrove vorrebbe dire due scritture da tenere
-# allineate. Vale la regola D1 - `network` resta canonico.
+# allineate. Vale la regola D1 - `network` resta canonico. Ne segue che i
+# profili sono davvero indipendenti: sono sezioni uci separate, e modificarne
+# una non sfiora le altre perche' non c'e' niente in comune da sfiorare.
+#
+# Il nome sta in `travel_name` sulla sezione dell'interfaccia. E' un'opzione in
+# piu' che netifd ignora, e sta li' e non in un file nostro per la stessa
+# ragione di sopra: due posti da tenere allineati sono un posto di troppo, e
+# un profilo cancellato da LuCI si porterebbe dietro il suo nome invece di
+# lasciarlo orfano.
 #
 # La chiave privata sta li' dentro come la password del WiFi sta in `wireless`:
 # i nostri metodi non la restituiscono mai (si dice solo `has_private_key`),
 # che e' la regola D3.
-
-WG_IFACE=travel_wg
-WG_PEER=travel_wg_peer
 
 # Il marchio sui pacchetti che WireGuard manda al peer.
 #
@@ -2888,41 +2968,313 @@ wg_installed() {
 	[ -x /usr/bin/wg ] && [ -f /lib/netifd/proto/wireguard.sh ]
 }
 
-# Stato del tunnel: cosa e' configurato, e cosa sta succedendo davvero.
+# Il profilo esiste davvero?
 #
-# `has_private_key` e non la chiave: un segreto che entra non torna indietro.
+# Ogni metodo che riceve un identificatore dal browser passa di qui prima di
+# toccare uci: senza, un `id` inventato scriverebbe una sezione nuova con un
+# nome qualunque in `/etc/config/network`, che e' il modo piu' silenzioso di
+# rompere la configurazione di rete di un router.
+wg_known() {
+	local want="$1" section
+
+	[ -n "$want" ] || return 1
+	for section in $(wg_profiles); do
+		[ "$section" = "$want" ] && return 0
+	done
+
+	return 1
+}
+
+# Il primo nome di sezione libero.
+#
+# I nuovi partono da 1 perche' `travel_wg` senza numero puo' esistere gia': e'
+# il tunnel unico delle versioni precedenti, e resta la prima voce dell'elenco
+# con il suo nome originale. Un numero lasciato libero da una cancellazione
+# viene riusato, ed e' voluto: il nome della sezione e' anche il nome
+# dell'interfaccia, che ha quindici caratteri di spazio, e un contatore che
+# cresce all'infinito li' dentro non ci sta.
+wg_new_section() {
+	local n=1
+
+	while [ "$n" -lt 64 ]; do
+		wg_known "${WG_PREFIX}${n}" || { printf '%s%s' "$WG_PREFIX" "$n"; return 0; }
+		n=$((n + 1))
+	done
+
+	return 1
+}
+
+# Il nome e' l'unica cosa con cui una persona distingue due profili: due uguali
+# renderebbero l'elenco inutile proprio nel momento in cui serve. Il confronto
+# ignora maiuscole e spazi ai bordi, perche' "Casa" e "casa " sono due nomi
+# diversi solo per un computer.
+wg_fold_name() {
+	printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+wg_name_taken() {
+	local want="$1" except="$2" section norm
+
+	norm=$(wg_fold_name "$want")
+	for section in $(wg_profiles); do
+		[ "$section" = "$except" ] && continue
+		[ "$(wg_fold_name "$(wg_name "$section")")" = "$norm" ] && return 0
+	done
+
+	return 1
+}
+
+# Come per i profili di luogo: si accetta quello che si sa scrivere, non si
+# prova a ripulire quello che arriva.
+valid_wg_name() {
+	local name="$1"
+
+	[ -n "$name" ] || return 1
+	[ "${#name}" -le 32 ] || return 1
+	case "$name" in
+		*[!A-Za-z0-9\ ._-]*) return 1 ;;
+	esac
+
+	return 0
+}
+
+# Una chiave WireGuard: 32 byte in base64, cioe' 44 caratteri che finiscono con
+# `=`. Rifiutarla adesso con un motivo e' meglio che scriverla e far cercare il
+# guasto nel log di netifd - che dira' soltanto che l'handshake non arriva.
+valid_wg_key() {
+	printf '%s' "$1" | grep -qE '^[A-Za-z0-9+/]{43}=$'
+}
+
+# Un elenco di indirizzi separati da virgole o spazi. Non si convalida la
+# semantica - a quella pensa netifd - ma la forma: uno spazio di troppo in un
+# campo incollato finirebbe in `uci add_list` come indirizzo a se'.
+valid_wg_addrs() {
+	local entry
+
+	[ -n "$1" ] || return 1
+	for entry in $(printf '%s' "$1" | tr ',' ' '); do
+		printf '%s' "$entry" | grep -qE '^[0-9a-fA-F:.]+(/[0-9]{1,3})?$' || return 1
+	done
+
+	return 0
+}
+
+wg_number_in() {
+	printf '%s' "$1" | grep -qE '^[0-9]+$' || return 1
+	[ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# I campi di un profilo, in variabili con lo stesso nome sia che arrivino da un
+# file incollato sia da un modulo compilato: cosi' la convalida e la scrittura
+# esistono in una copia sola, e non c'e' una strada che convalida meno
+# dell'altra.
+wg_fields_reset() {
+	WGF_NAME=""; WGF_PRIV=""; WGF_ADDR=""; WGF_DNS=""; WGF_MTU=""
+	WGF_PEER=""; WGF_PSK=""; WGF_HOST=""; WGF_PORT=""; WGF_ALLOWED=""
+	WGF_KEEPALIVE=""
+	WG_ERR=""
+}
+
+# Tutto cio' senza cui il tunnel non puo' esistere, piu' la forma di cio' che
+# c'e'. Torna 1 e lascia il motivo in `WG_ERR`, cosi' il chiamante lo passa a
+# `fail_json` senza riscriverlo.
+wg_validate() {
+	WG_ERR=""
+
+	valid_wg_name "$WGF_NAME" || {
+		WG_ERR="nome non valido: lettere, cifre, spazi, punto, - e _, fino a 32 caratteri"
+		return 1
+	}
+	# Mancante e malformato sono due errori diversi e portano a due gesti
+	# diversi: nel primo caso il file incollato e' monco - succede a chi copia
+	# meta' schermata - nel secondo c'e' qualcosa da correggere.
+	[ -n "$WGF_PRIV" ] || { WG_ERR="manca la chiave privata (PrivateKey nella sezione [Interface])"; return 1; }
+	valid_wg_key "$WGF_PRIV" || { WG_ERR="la chiave privata non e' una chiave WireGuard valida"; return 1; }
+	[ -n "$WGF_PEER" ] || { WG_ERR="manca la chiave pubblica del peer (PublicKey nella sezione [Peer])"; return 1; }
+	valid_wg_key "$WGF_PEER" || { WG_ERR="la chiave pubblica del peer non e' una chiave WireGuard valida"; return 1; }
+	[ -z "$WGF_PSK" ] || valid_wg_key "$WGF_PSK" || { WG_ERR="la chiave precondivisa non e' una chiave WireGuard valida"; return 1; }
+	[ -n "$WGF_ADDR" ] || { WG_ERR="mancano gli indirizzi dell'interfaccia (Address nella sezione [Interface])"; return 1; }
+	valid_wg_addrs "$WGF_ADDR" || { WG_ERR="gli indirizzi dell'interfaccia sono malformati"; return 1; }
+	[ -n "$WGF_ALLOWED" ] || { WG_ERR="manca cosa instradare nel tunnel (AllowedIPs nella sezione [Peer])"; return 1; }
+	valid_wg_addrs "$WGF_ALLOWED" || { WG_ERR="AllowedIPs malformati"; return 1; }
+	[ -z "$WGF_DNS" ] || valid_wg_addrs "$WGF_DNS" || { WG_ERR="i DNS non sono indirizzi validi"; return 1; }
+	[ -n "$WGF_HOST" ] || { WG_ERR="manca l'endpoint del peer (Endpoint nella sezione [Peer])"; return 1; }
+	wg_number_in "$WGF_PORT" 1 65535 || { WG_ERR="la porta dell'endpoint non e' valida"; return 1; }
+	[ -z "$WGF_MTU" ] || wg_number_in "$WGF_MTU" 576 9200 || { WG_ERR="MTU fuori intervallo (576-9200)"; return 1; }
+	[ -z "$WGF_KEEPALIVE" ] || wg_number_in "$WGF_KEEPALIVE" 0 65535 || { WG_ERR="keepalive fuori intervallo"; return 1; }
+
+	return 0
+}
+
+# L'interfaccia entra nella zona firewall del tunnel, insieme a Tailscale: cosi'
+# il kill switch e gli inoltri valgono per tutti senza doppioni. Ci stanno tutti
+# i profili, anche quelli spenti - una zona che nomina un'interfaccia che non
+# esiste non fa niente, e aggiungerla al momento dell'accensione vorrebbe dire
+# un reload del firewall proprio mentre il traffico si sposta.
+wg_join_zone() {
+	local section="$1"
+
+	uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$section" && return 0
+	uci add_list "firewall.travel_vpn.network=$section"
+	uci commit firewall
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+wg_leave_zone() {
+	local section="$1"
+
+	uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$section" || return 0
+	uci -q del_list "firewall.travel_vpn.network=$section"
+	uci commit firewall
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+# Scrive un profilo da `WGF_*`. La sezione si rifa' da zero anche quando esiste
+# gia': cosi' una modifica non si porta dietro i campi di prima - un secondo
+# indirizzo tolto dal modulo resterebbe altrimenti in `uci`, perche' `add_list`
+# aggiunge e non sostituisce. E' lo stesso motivo per cui la sezione della STA
+# WiFi viene ricreata invece che aggiornata.
+wg_write() {
+	local section="$1" disabled="$2" entry
+
+	uci -q delete "network.$section"
+	uci set "network.$section=interface"
+	uci set "network.$section.proto=wireguard"
+	uci set "network.$section.travel_name=$WGF_NAME"
+	uci set "network.$section.private_key=$WGF_PRIV"
+	uci set "network.$section.disabled=$disabled"
+	# Un marchio sui propri pacchetti, cosi' la regola di instradamento li
+	# lascia passare e il tunnel stesso continua a seguire il failover di mwan3
+	# invece di provare a entrare in se stesso.
+	uci set "network.$section.fwmark=$WG_MARK"
+	# Le rotte le mettiamo noi, in una tabella nostra: lasciarle installare a
+	# netifd metterebbe uno 0.0.0.0/0 nella tabella principale, dove finirebbe
+	# a litigare con mwan3.
+	uci set "network.$section.route_allowed_ips=0"
+	[ -n "$WGF_MTU" ] && uci set "network.$section.mtu=$WGF_MTU"
+
+	for entry in $(printf '%s' "$WGF_ADDR" | tr ',' ' '); do
+		uci add_list "network.$section.addresses=$entry"
+	done
+	for entry in $(printf '%s' "$WGF_DNS" | tr ',' ' '); do
+		[ -n "$entry" ] && uci add_list "network.$section.dns=$entry"
+	done
+
+	uci -q delete "network.${section}_peer"
+	uci set "network.${section}_peer=wireguard_$section"
+	uci set "network.${section}_peer.public_key=$WGF_PEER"
+	uci set "network.${section}_peer.endpoint_host=$WGF_HOST"
+	uci set "network.${section}_peer.endpoint_port=$WGF_PORT"
+	[ -n "$WGF_PSK" ] && uci set "network.${section}_peer.preshared_key=$WGF_PSK"
+	# Senza keepalive un tunnel dietro NAT si addormenta e il ritorno non passa
+	# piu'. Venticinque secondi e' il valore che usano tutti, e i provider che
+	# lo vogliono diverso lo scrivono nel file.
+	uci set "network.${section}_peer.persistent_keepalive=${WGF_KEEPALIVE:-25}"
+
+	for entry in $(printf '%s' "$WGF_ALLOWED" | tr ',' ' '); do
+		uci add_list "network.${section}_peer.allowed_ips=$entry"
+	done
+
+	uci commit network
+	wg_join_zone "$section"
+}
+
+# Fa prendere effetto a cio' che e' appena stato scritto, e rimette
+# l'instradamento.
+#
+# **Aspettare che il device esista prima di instradarlo.**
+#
+# `network reload` torna subito: netifd alza l'interfaccia per conto suo,
+# qualche istante dopo. La prima versione lanciava l'instradamento appena
+# tornata la chiamata, non trovava il device in /sys, e - peggio - concludeva
+# che il tunnel fosse giu': cancellava la regola invece di scriverla. Il tunnel
+# saliva un secondo dopo, faceva handshake, e il traffico dei client continuava
+# a uscire dalla WAN. Tutto sembrava a posto tranne l'unica cosa che contava.
+wg_reload() {
+	local section="$1" tries=0
+
+	ubus call network reload >/dev/null 2>&1
+
+	if [ "$(uci -q get "network.$section.disabled")" != "1" ]; then
+		ubus call network.interface."$section" up >/dev/null 2>&1
+		while [ "$tries" -lt 15 ]; do
+			[ -e "/sys/class/net/$section" ] && break
+			sleep 1
+			tries=$((tries + 1))
+		done
+	fi
+
+	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
+}
+
+# I campi di un profilo, per l'elenco. `has_private_key` e non la chiave: un
+# segreto che entra non torna indietro (D3).
+wg_config_json() {
+	local section="$1"
+
+	json_add_string  addresses  "$(uci -q get "network.$section.addresses" | tr '\n' ' ')"
+	json_add_string  mtu        "$(uci -q get "network.$section.mtu")"
+	json_add_string  dns        "$(uci -q get "network.$section.dns" | tr '\n' ' ')"
+	json_add_boolean has_private_key "$([ -n "$(uci -q get "network.$section.private_key")" ] && echo 1 || echo 0)"
+	json_add_string  peer_key   "$(uci -q get "network.${section}_peer.public_key")"
+	json_add_boolean has_preshared "$([ -n "$(uci -q get "network.${section}_peer.preshared_key")" ] && echo 1 || echo 0)"
+	json_add_string  endpoint   "$(uci -q get "network.${section}_peer.endpoint_host")"
+	json_add_string  port       "$(uci -q get "network.${section}_peer.endpoint_port")"
+	json_add_string  allowed_ips "$(uci -q get "network.${section}_peer.allowed_ips" | tr '\n' ' ')"
+	json_add_string  keepalive  "$(uci -q get "network.${section}_peer.persistent_keepalive")"
+}
+
+# Stato dei profili: cosa e' salvato, quale e' acceso, e cosa sta succedendo
+# davvero a quello acceso.
+#
+# `status` e `routing` parlano solo dell'attivo, e non e' una scorciatoia: sono
+# fatti che vivono nel kernel - un device, una regola, una tabella - e ne esiste
+# una serie sola perche' puo' esserci un tunnel solo acceso. Chiederli a un
+# profilo spento non vorrebbe dire niente.
 method_wg_get() {
-	local netstat device up handshake rx tx endpoint
+	local section active handshake rx tx endpoint
+
+	active=$(wg_active) || active=""
 
 	json_init
 
 	json_add_boolean installed "$(wg_installed && echo 1 || echo 0)"
-	json_add_boolean configured "$([ -n "$(uci -q get "network.$WG_IFACE")" ] && echo 1 || echo 0)"
-	json_add_boolean enabled "$(policy_wireguard && echo 1 || echo 0)"
+	json_add_boolean configured "$([ -n "$(wg_profiles)" ] && echo 1 || echo 0)"
+	json_add_boolean enabled "$([ -n "$active" ] && echo 1 || echo 0)"
+	# Quale, per esteso: e' cio' che l'interfaccia deve poter mostrare sempre.
+	json_add_string  active "$active"
 
+	json_add_array profiles
+	for section in $(wg_profiles); do
+		json_add_object
+		json_add_string  id "$section"
+		json_add_string  name "$(wg_name "$section")"
+		json_add_boolean active "$([ "$section" = "$active" ] && echo 1 || echo 0)"
+		json_add_boolean named "$([ -n "$(uci -q get "network.$section.travel_name")" ] && echo 1 || echo 0)"
+		json_add_object config
+		wg_config_json "$section"
+		json_close_object
+		json_close_object
+	done
+	json_close_array
+
+	# La configurazione dell'attivo anche fuori dall'elenco: chi chiede "il
+	# tunnel di adesso" - il kill switch, la dashboard - non deve cercarselo.
+	# Vuota quando non c'e' nessun attivo, che e' la risposta giusta.
 	json_add_object config
-	json_add_string  addresses  "$(uci -q get "network.$WG_IFACE.addresses" | tr '\n' ' ')"
-	json_add_string  mtu        "$(uci -q get "network.$WG_IFACE.mtu")"
-	json_add_string  dns        "$(uci -q get "network.$WG_IFACE.dns" | tr '\n' ' ')"
-	json_add_boolean has_private_key "$([ -n "$(uci -q get "network.$WG_IFACE.private_key")" ] && echo 1 || echo 0)"
-	json_add_string  peer_key   "$(uci -q get "network.$WG_PEER.public_key")"
-	json_add_boolean has_preshared "$([ -n "$(uci -q get "network.$WG_PEER.preshared_key")" ] && echo 1 || echo 0)"
-	json_add_string  endpoint   "$(uci -q get "network.$WG_PEER.endpoint_host")"
-	json_add_string  port       "$(uci -q get "network.$WG_PEER.endpoint_port")"
-	json_add_string  allowed_ips "$(uci -q get "network.$WG_PEER.allowed_ips" | tr '\n' ' ')"
-	json_add_string  keepalive  "$(uci -q get "network.$WG_PEER.persistent_keepalive")"
+	wg_config_json "$active"
 	json_close_object
 
 	# Lo stato vero, da `wg show`. Un handshake che non arriva mai e' il sintomo
 	# di chiave o endpoint sbagliati; uno vecchio di ore, di una rete che non
 	# passa piu'. Sono due guasti diversi e vanno distinti.
 	json_add_object status
-	if wg_installed && [ -d "/sys/class/net/$WG_IFACE" ]; then
+	if [ -n "$active" ] && wg_installed && [ -d "/sys/class/net/$active" ]; then
 		json_add_boolean device_up 1
-		handshake=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
-		rx=$(wg show "$WG_IFACE" transfer 2>/dev/null | awk '{print $2; exit}')
-		tx=$(wg show "$WG_IFACE" transfer 2>/dev/null | awk '{print $3; exit}')
-		endpoint=$(wg show "$WG_IFACE" endpoints 2>/dev/null | awk '{print $2; exit}')
+		handshake=$(wg show "$active" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+		rx=$(wg show "$active" transfer 2>/dev/null | awk '{print $2; exit}')
+		tx=$(wg show "$active" transfer 2>/dev/null | awk '{print $3; exit}')
+		endpoint=$(wg show "$active" endpoints 2>/dev/null | awk '{print $2; exit}')
 		json_add_int    last_handshake "${handshake:-0}"
 		json_add_int    rx "${rx:-0}"
 		json_add_int    tx "${tx:-0}"
@@ -2943,110 +3295,102 @@ method_wg_get() {
 	# dall'esterno ogni anello rotto ha il sintomo identico - il tunnel fa
 	# handshake, la scheda dice "attivo", e i client escono lo stesso dalla WAN.
 	# E' esattamente cio' che e' successo.
+	#
+	# Senza nessun profilo acceso sono tutti falsi, e senza il controllo su
+	# `active` non lo sarebbero: `/sys/class/net/` esiste sempre, ed e' quello
+	# che avrebbe risposto a un nome di device vuoto.
 	json_add_object routing
-	json_add_boolean device_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	json_add_boolean device_up "$([ -n "$active" ] && [ -e "/sys/class/net/$active" ] && echo 1 || echo 0)"
 	# La regola che manda il traffico nella tabella del tunnel: quella che
 	# mancava, perche' veniva scritta prima che l'interfaccia esistesse.
-	json_add_boolean rule "$(ip rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
-	json_add_boolean route "$(ip route show table 53 2>/dev/null | grep -q '^default ' && echo 1 || echo 0)"
+	json_add_boolean rule "$([ -n "$active" ] && ip rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
+	json_add_boolean route "$([ -n "$active" ] && ip route show table 53 2>/dev/null | grep -q '^default ' && echo 1 || echo 0)"
 	# Nella zona del tunnel: senza, il firewall scarta il traffico inoltrato
 	# anche quando l'instradamento e' perfetto.
-	json_add_boolean in_zone "$(uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$WG_IFACE" && echo 1 || echo 0)"
+	json_add_boolean in_zone "$([ -n "$active" ] && uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$active" && echo 1 || echo 0)"
 	json_close_object
 
 	policy_json
 	json_dump
 }
 
-# Accende o spegne il tunnel.
+# Accende o spegne un profilo.
 #
 # **Qui sta il cancello.** L'interfaccia spegne gia' il pulsante quando non si
 # puo', ma il vincolo non puo' vivere solo li': LuCI, un `uci set` da ssh o un
 # backup importato arriverebbero a una configurazione che l'interfaccia non sa
 # nemmeno rappresentare. Il controllo sta nel punto in cui la modifica prende
 # effetto, che e' l'unico posto da cui non si passa per sbaglio.
+#
+# **Accendere non scambia.** Con un altro profilo gia' acceso si rifiuta e si
+# dice quale, invece di spegnerlo di nascosto. Uno scambio automatico avrebbe
+# un istante - fra il tunnel vecchio che cade e quello nuovo che sale - in cui
+# il traffico esce in chiaro dalla rete dell'albergo, e nessuno lo avrebbe
+# chiesto. Due passi espliciti valgono quell'istante.
+#
+# Il controllo e' a se' e non passa da `policy_holder`: quella funzione esclude
+# dal confronto cio' che si sta accendendo, quindi "WireGuard" non blocca mai
+# "WireGuard". Giusto quando i tunnel erano uno, cieco adesso che sono tanti.
 method_wg_toggle() {
-	local input want holder tries
+	local input want id holder busy
 
 	input=$(cat)
 	[ -n "$input" ] || input='{}'
 	json_init
 	json_load "$input"
 	json_get_var want enabled
+	json_get_var id id
 
-	[ -n "$(uci -q get "network.$WG_IFACE")" ] || { fail_json "nessun tunnel configurato"; return; }
+	busy=$(wg_active) || busy=""
 
 	if [ "$want" = "1" ] || [ "$want" = "true" ]; then
+		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
 		wg_installed || { fail_json "wireguard-tools non e' installato"; return; }
+
+		[ -n "$busy" ] && [ "$busy" != "$id" ] && {
+			fail_json "e' gia' attiva la configurazione \"$(wg_name "$busy")\": disattivala prima di attivarne un'altra"
+			return
+		}
 
 		holder=$(policy_holder wireguard) && {
 			fail_json "non posso accendere WireGuard: $(policy_reason "$holder")"
 			return
 		}
-		uci set "network.$WG_IFACE.disabled=0"
+		uci set "network.$id.disabled=0"
 	else
-		uci set "network.$WG_IFACE.disabled=1"
+		# Spegnere senza dire quale spegne quello acceso: e' l'unico che possa
+		# esserlo, e chiederne il nome per dire "spegni" sarebbe cerimonia.
+		[ -n "$id" ] || id="$busy"
+		[ -n "$id" ] || { fail_json "nessuna configurazione WireGuard attiva"; return; }
+		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+		uci set "network.$id.disabled=1"
 	fi
 
 	uci commit network
-	ubus call network reload >/dev/null 2>&1
-	ubus call network.interface."$WG_IFACE" up >/dev/null 2>&1
-
-	# **Aspettare che il device esista prima di instradarlo.**
-	#
-	# `network reload` torna subito: netifd alza l'interfaccia per conto suo,
-	# qualche istante dopo. La prima versione lanciava l'instradamento appena
-	# tornata la chiamata, non trovava `travel_wg` in /sys, e - peggio -
-	# concludeva che il tunnel fosse giu': cancellava la regola invece di
-	# scriverla. Il tunnel saliva un secondo dopo, faceva handshake, e il
-	# traffico dei client continuava a uscire dalla WAN. Tutto sembrava a posto
-	# tranne l'unica cosa che contava.
-	if [ "$(uci -q get "network.$WG_IFACE.disabled")" != "1" ]; then
-		tries=0
-		while [ "$tries" -lt 15 ]; do
-			[ -e "/sys/class/net/$WG_IFACE" ] && break
-			sleep 1
-			tries=$((tries + 1))
-		done
-	fi
-
-	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
+	wg_reload "$id"
 
 	json_init
-	json_add_boolean enabled "$([ "$(uci -q get "network.$WG_IFACE.disabled")" = "1" ] && echo 0 || echo 1)"
-	json_add_boolean device_up "$([ -e "/sys/class/net/$WG_IFACE" ] && echo 1 || echo 0)"
+	json_add_string  active "$(wg_active || true)"
+	json_add_boolean enabled "$([ "$(uci -q get "network.$id.disabled")" = "1" ] && echo 0 || echo 1)"
+	json_add_boolean device_up "$([ -e "/sys/class/net/$id" ] && echo 1 || echo 0)"
 	json_dump
 }
 
-# Importa una configurazione WireGuard incollata.
+# Legge un file `.conf` incollato dentro `WGF_*`.
 #
-# E' il formato in cui un provider la consegna, ed e' l'unico modo per non far
-# ridigitare due chiavi base64 da 44 caratteri su un telefono, in piedi, con una
-# mano. Si accetta il blocco `[Interface]`/`[Peer]` cosi' com'e'.
+# E' il formato in cui un provider consegna la configurazione, ed e' l'unico
+# modo per non far ridigitare due chiavi base64 da 44 caratteri su un telefono,
+# in piedi, con una mano. Si accetta il blocco `[Interface]`/`[Peer]` cosi'
+# com'e'.
 #
 # Il parsing sta sul router e non nel browser di proposito: la chiave privata
-# non deve fare il giro due volte, e soprattutto la validazione deve stare dalla
+# non deve fare il giro due volte, e soprattutto la convalida deve stare dalla
 # stessa parte del cancello - se la facesse solo la UI, un client scritto a mano
 # potrebbe scrivere qualunque cosa in `network`.
-#
-# Nasce sempre **spento**: importare non e' accendere. Cosi' l'accensione passa
-# dal cancello dei vincoli anche la prima volta, e non c'e' una scorciatoia che
-# li aggira.
-method_wg_import() {
-	local input conf line key value section
-	local priv addr dns mtu peer_key psk endpoint host port allowed keepalive
+wg_parse_conf() {
+	local conf="$1" line key value where
 
-	input=$(cat)
-	[ -n "$input" ] || input='{}'
-	json_init
-	json_load "$input"
-	json_get_var conf config
-
-	[ -n "$conf" ] || { fail_json "configurazione vuota"; return; }
-
-	section=""
-	priv=""; addr=""; dns=""; mtu=""
-	peer_key=""; psk=""; endpoint=""; allowed=""; keepalive=""
+	where=""
 
 	# Un `while read` su una qui-stringa: niente pipe, altrimenti il ciclo
 	# girerebbe in una subshell e le variabili tornerebbero vuote all'uscita.
@@ -3057,106 +3401,221 @@ method_wg_import() {
 		[ -n "$line" ] || continue
 
 		case "$line" in
-			'[Interface]'|'[interface]') section=iface; continue ;;
-			'[Peer]'|'[peer]')           section=peer;  continue ;;
-			\[*\])                       section="";    continue ;;
+			'[Interface]'|'[interface]') where=iface; continue ;;
+			'[Peer]'|'[peer]')           where=peer;  continue ;;
+			\[*\])                       where="";    continue ;;
 		esac
 
 		key=$(printf '%s' "${line%%=*}" | sed 's/[[:space:]]*$//' | tr 'A-Z' 'a-z')
 		value=$(printf '%s' "${line#*=}" | sed 's/^[[:space:]]*//')
 		[ "$key" = "$line" ] && continue
 
-		if [ "$section" = "iface" ]; then
+		if [ "$where" = "iface" ]; then
 			case "$key" in
-				privatekey) priv="$value" ;;
-				address)    addr="$value" ;;
-				dns)        dns="$value" ;;
-				mtu)        mtu="$value" ;;
+				privatekey) WGF_PRIV="$value" ;;
+				address)    WGF_ADDR="$value" ;;
+				dns)        WGF_DNS="$value" ;;
+				mtu)        WGF_MTU="$value" ;;
 			esac
-		elif [ "$section" = "peer" ]; then
+		elif [ "$where" = "peer" ]; then
 			case "$key" in
-				publickey)           peer_key="$value" ;;
-				presharedkey)        psk="$value" ;;
-				endpoint)            endpoint="$value" ;;
-				allowedips)          allowed="$value" ;;
-				persistentkeepalive) keepalive="$value" ;;
+				publickey)           WGF_PEER="$value" ;;
+				presharedkey)        WGF_PSK="$value" ;;
+				endpoint)            WGF_HOST="$value" ;;
+				allowedips)          WGF_ALLOWED="$value" ;;
+				persistentkeepalive) WGF_KEEPALIVE="$value" ;;
 			esac
 		fi
 	done <<EOF
 $conf
 EOF
 
-	# Cio' senza cui il tunnel non puo' esistere. Meglio rifiutare adesso con
-	# un motivo che scrivere una configurazione monca e far cercare il guasto
-	# nel log di netifd.
-	[ -n "$priv" ]     || { fail_json "manca PrivateKey nella sezione [Interface]"; return; }
-	[ -n "$peer_key" ] || { fail_json "manca PublicKey nella sezione [Peer]"; return; }
-	[ -n "$endpoint" ] || { fail_json "manca Endpoint nella sezione [Peer]"; return; }
-	[ -n "$addr" ]     || { fail_json "manca Address nella sezione [Interface]"; return; }
-
-	host="${endpoint%:*}"
-	port="${endpoint##*:}"
-	[ "$host" = "$port" ] && port=51820
-
-	# L'interfaccia: si riscrive da zero, cosi' un import non si porta dietro
-	# i campi del provider precedente - lo stesso motivo per cui la sezione
-	# della STA WiFi viene ricreata invece che aggiornata.
-	uci -q delete "network.$WG_IFACE"
-	uci set "network.$WG_IFACE=interface"
-	uci set "network.$WG_IFACE.proto=wireguard"
-	uci set "network.$WG_IFACE.private_key=$priv"
-	# Spento: importare non e' accendere.
-	uci set "network.$WG_IFACE.disabled=1"
-	# Un marchio sui propri pacchetti, cosi' la regola di instradamento li
-	# lascia passare e il tunnel stesso continua a seguire il failover di mwan3
-	# invece di provare a entrare in se stesso.
-	uci set "network.$WG_IFACE.fwmark=$WG_MARK"
-	# Le rotte le mettiamo noi, in una tabella nostra: lasciarle installare a
-	# netifd metterebbe uno 0.0.0.0/0 nella tabella principale, dove finirebbe
-	# a litigare con mwan3.
-	uci set "network.$WG_IFACE.route_allowed_ips=0"
-	[ -n "$mtu" ] && uci set "network.$WG_IFACE.mtu=$mtu"
-
-	for entry in $(printf '%s' "$addr" | tr ',' ' '); do
-		uci add_list "network.$WG_IFACE.addresses=$entry"
-	done
-	for entry in $(printf '%s' "$dns" | tr ',' ' '); do
-		[ -n "$entry" ] && uci add_list "network.$WG_IFACE.dns=$entry"
-	done
-
-	uci -q delete "network.$WG_PEER"
-	uci set "network.$WG_PEER=wireguard_$WG_IFACE"
-	uci set "network.$WG_PEER.public_key=$peer_key"
-	uci set "network.$WG_PEER.endpoint_host=$host"
-	uci set "network.$WG_PEER.endpoint_port=$port"
-	[ -n "$psk" ] && uci set "network.$WG_PEER.preshared_key=$psk"
-	# Senza keepalive un tunnel dietro NAT si addormenta e il ritorno non passa
-	# piu'. Venticinque secondi e' il valore che usano tutti, e i provider che
-	# lo vogliono diverso lo scrivono nel file.
-	uci set "network.$WG_PEER.persistent_keepalive=${keepalive:-25}"
-
-	[ -n "$allowed" ] || allowed="0.0.0.0/0"
-	for entry in $(printf '%s' "$allowed" | tr ',' ' '); do
-		uci add_list "network.$WG_PEER.allowed_ips=$entry"
-	done
-
-	uci commit network
-
-	# Nella zona del tunnel, insieme a Tailscale: cosi' il kill switch e gli
-	# inoltri valgono per tutti e due senza doppioni.
-	if ! uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$WG_IFACE"; then
-		uci add_list "firewall.travel_vpn.network=$WG_IFACE"
-		uci commit firewall
-		/etc/init.d/firewall reload >/dev/null 2>&1
+	# `Endpoint` e' host e porta insieme: si separano qui, perche' da qui in
+	# poi sono due campi distinti anche nel modulo di modifica.
+	if [ -n "$WGF_HOST" ]; then
+		WGF_PORT="${WGF_HOST##*:}"
+		WGF_HOST="${WGF_HOST%:*}"
+		[ "$WGF_HOST" = "$WGF_PORT" ] && WGF_PORT=51820
 	fi
+
+	# Il valore che usano tutti quando il file non lo dice: senza keepalive un
+	# tunnel dietro NAT si addormenta e il ritorno non passa piu'.
+	[ -n "$WGF_ALLOWED" ] || WGF_ALLOWED="0.0.0.0/0"
+	[ -n "$WGF_KEEPALIVE" ] || WGF_KEEPALIVE=25
+}
+
+# Importa una configurazione incollata come profilo nuovo, oppure ne rifa' uno
+# esistente.
+#
+# **Il nome e' obbligatorio** quando il profilo e' nuovo: e' l'unica cosa con
+# cui poi lo si distingue dagli altri in un elenco, e chiederlo dopo vorrebbe
+# dire avere per un momento una voce senza nome - cioe' esattamente la cosa che
+# rende un elenco inutile.
+#
+# Un profilo nuovo nasce **spento**: importare non e' accendere. Cosi'
+# l'accensione passa dal cancello dei vincoli anche la prima volta, e non c'e'
+# una scorciatoia che li aggira. Reimportare sopra un profilo acceso invece non
+# lo spegne - e' una modifica, non una creazione - e si limita a rimettere in
+# piedi il tunnel con i parametri nuovi.
+method_wg_import() {
+	local input conf id name section state
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var conf config
+	json_get_var id id
+	json_get_var name name
+
+	[ -n "$conf" ] || { fail_json "configurazione vuota"; return; }
+
+	wg_fields_reset
+	wg_parse_conf "$conf"
+
+	if [ -n "$id" ]; then
+		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+		section="$id"
+		# Reimportando si puo' anche non toccare il nome: quello che c'e' va
+		# gia' bene, ed e' il riferimento che la persona ha in testa.
+		[ -n "$name" ] || name="$(wg_name "$section")"
+		state="$(uci -q get "network.$section.disabled")"
+		[ "$state" = "1" ] || state=0
+	else
+		section=$(wg_new_section) || { fail_json "troppe configurazioni WireGuard salvate"; return; }
+		state=1
+	fi
+
+	WGF_NAME="$name"
+	wg_name_taken "$WGF_NAME" "$section" && {
+		fail_json "esiste gia' una configurazione WireGuard con questo nome"
+		return
+	}
+	wg_validate || { fail_json "$WG_ERR"; return; }
+
+	wg_write "$section" "$state"
+	[ "$state" = "1" ] || wg_reload "$section"
 
 	json_init
 	json_add_boolean imported 1
-	json_add_string  endpoint "$host:$port"
-	json_add_string  allowed_ips "$allowed"
-	# Il tunnel resta spento: lo dice la risposta, cosi' l'interfaccia non deve
+	json_add_string  id "$section"
+	json_add_string  name "$WGF_NAME"
+	json_add_string  endpoint "$WGF_HOST:$WGF_PORT"
+	json_add_string  allowed_ips "$WGF_ALLOWED"
+	# Acceso o spento lo dice la risposta, cosi' l'interfaccia non deve
 	# indovinarlo per sapere cosa mostrare dopo.
-	json_add_boolean enabled 0
+	json_add_boolean enabled "$([ "$state" = "1" ] && echo 0 || echo 1)"
+	json_dump
+}
+
+# Modifica i singoli parametri di un profilo salvato.
+#
+# **Il modulo manda tutti i campi, sempre**, e questo metodo li prende per
+# quello che sono: il nuovo stato completo del profilo. In shell non esiste la
+# differenza fra "campo assente" e "campo vuoto", quindi una scrittura parziale
+# avrebbe dovuto indovinare quale delle due fosse - e sbagliando avrebbe
+# cancellato in silenzio i DNS o l'MTU di qualcuno.
+#
+# I segreti sono l'eccezione, per la stessa ragione per cui non escono mai (D3):
+# vuoti vogliono dire "lasciali come stanno", perche' l'interfaccia non li ha
+# mai avuti e quindi non li puo' rimandare indietro. Per togliere una chiave
+# precondivisa c'e' `drop_preshared`, che e' una richiesta esplicita e non un
+# campo lasciato in bianco.
+#
+# Tocca una sezione sola. Le altre configurazioni non vengono nemmeno lette:
+# sono sezioni uci indipendenti, e non c'e' niente in comune da alterare per
+# sbaglio.
+method_wg_save() {
+	local input id drop_psk active
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var id id
+
+	wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+
+	wg_fields_reset
+	json_get_var WGF_NAME      name
+	json_get_var WGF_ADDR      addresses
+	json_get_var WGF_DNS       dns
+	json_get_var WGF_MTU       mtu
+	json_get_var WGF_PRIV      private_key
+	json_get_var WGF_PEER      peer_key
+	json_get_var WGF_PSK       preshared_key
+	json_get_var WGF_HOST      endpoint
+	json_get_var WGF_PORT      port
+	json_get_var WGF_ALLOWED   allowed_ips
+	json_get_var WGF_KEEPALIVE keepalive
+	json_get_var drop_psk      drop_preshared
+
+	# I segreti che il browser non ha: restano quelli scritti sul router.
+	[ -n "$WGF_PRIV" ] || WGF_PRIV="$(uci -q get "network.$id.private_key")"
+	if [ "$drop_psk" = "1" ] || [ "$drop_psk" = "true" ]; then
+		WGF_PSK=""
+	elif [ -z "$WGF_PSK" ]; then
+		WGF_PSK="$(uci -q get "network.${id}_peer.preshared_key")"
+	fi
+
+	wg_name_taken "$WGF_NAME" "$id" && {
+		fail_json "esiste gia' una configurazione WireGuard con questo nome"
+		return
+	}
+	wg_validate || { fail_json "$WG_ERR"; return; }
+
+	# Lo stato di accensione non e' un parametro del modulo: si cambia con
+	# l'interruttore, che e' l'unico punto in cui il vincolo del tunnel unico
+	# viene controllato. Salvare non accende e non spegne.
+	active=$(uci -q get "network.$id.disabled")
+	[ "$active" = "1" ] || active=0
+
+	wg_write "$id" "$active"
+	# Modificare il profilo acceso vuol dire rifarne il tunnel: netifd lo
+	# riporta su con i parametri nuovi e l'instradamento va riscritto, perche'
+	# il device di prima non c'e' piu'.
+	[ "$active" = "1" ] || wg_reload "$id"
+
+	json_init
+	json_add_boolean saved 1
+	json_add_string  id "$id"
+	json_add_string  name "$WGF_NAME"
+	json_dump
+}
+
+# Elimina un profilo salvato.
+#
+# **Non si cancella quello acceso.** Cancellarlo vorrebbe dire togliere da sotto
+# al traffico l'interfaccia in cui sta passando, e lasciare in RAM una regola e
+# una rotta che puntano a un device che non esiste piu': un router che non esce
+# piu' su Internet e nessuna schermata che sappia dire perche'. Spegnere prima
+# e' un passo in piu' che si vede, ed e' lo stesso passo che serve gia' per
+# passare da un tunnel all'altro.
+method_wg_delete() {
+	local input id busy
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var id id
+
+	wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+
+	busy=$(wg_active) || busy=""
+	[ "$busy" = "$id" ] && {
+		fail_json "e' la configurazione attiva: disattivala prima di eliminarla"
+		return
+	}
+
+	uci -q delete "network.${id}_peer"
+	uci -q delete "network.$id"
+	uci commit network
+	wg_leave_zone "$id"
+	ubus call network reload >/dev/null 2>&1
+
+	json_init
+	json_add_boolean deleted 1
 	json_dump
 }
 
@@ -3972,6 +4431,7 @@ case "$1" in
 		json_close_object
 		json_add_object wg_toggle
 		json_add_string enabled ""
+		json_add_string id ""
 		json_close_object
 		json_add_object profile_list
 		json_close_object
@@ -4012,6 +4472,26 @@ case "$1" in
 		json_close_object
 		json_add_object wg_import
 		json_add_string config ""
+		json_add_string id ""
+		json_add_string name ""
+		json_close_object
+		json_add_object wg_save
+		json_add_string  id ""
+		json_add_string  name ""
+		json_add_string  addresses ""
+		json_add_string  dns ""
+		json_add_string  mtu ""
+		json_add_string  private_key ""
+		json_add_string  peer_key ""
+		json_add_string  preshared_key ""
+		json_add_boolean drop_preshared 0
+		json_add_string  endpoint ""
+		json_add_string  port ""
+		json_add_string  allowed_ips ""
+		json_add_string  keepalive ""
+		json_close_object
+		json_add_object wg_delete
+		json_add_string id ""
 		json_close_object
 		json_dump
 		;;
@@ -4057,6 +4537,8 @@ case "$1" in
 			reboot_set)           method_reboot_set ;;
 			reboot_now)           method_reboot_now ;;
 			wg_import)            method_wg_import ;;
+			wg_save)              method_wg_save ;;
+			wg_delete)            method_wg_delete ;;
 			*)                   echo '{}'; exit 1 ;;
 		esac
 		;;

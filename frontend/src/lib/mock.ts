@@ -230,17 +230,43 @@ const usbDevices = [
   },
 ];
 
+/** Una configurazione WireGuard salvata, nel simulatore. */
+interface MockWgProfile {
+  id: string;
+  name: string;
+  named: boolean;
+  addresses: string;
+  dns: string;
+  mtu: string;
+  peer_key: string;
+  has_preshared: boolean;
+  endpoint: string;
+  port: string;
+  allowed_ips: string;
+  keepalive: string;
+  active: boolean;
+}
+
 /**
  * WireGuard, e i vincoli di compatibilita' (Fase 6b).
  *
- * Parte non configurato: e' lo stato di un router appena installato, quello che
- * si vede una volta sola e che quindi nessuno prova mai.
+ * Parte senza nessuna configurazione salvata: e' lo stato di un router appena
+ * installato, quello che si vede una volta sola e che quindi nessuno prova mai.
+ *
+ * `next` conta le sezioni come fa il router: il nome della sezione uci e'
+ * anche il nome dell'interfaccia, e nel simulatore serve la stessa cosa perche'
+ * e' l'identificatore che le schermate si passano.
  */
 const wgState = {
   installed: true,
-  configured: false,
-  enabled: false,
+  profiles: [] as MockWgProfile[],
+  next: 1,
 };
+
+/** La configurazione accesa, o niente. Al massimo una: e' il vincolo. */
+function wgActiveMock(): MockWgProfile | undefined {
+  return wgState.profiles.find((p) => p.active);
+}
 
 /**
  * Chi sta decidendo da dove esce il traffico.
@@ -260,7 +286,7 @@ const MOCK_REASON: Record<string, string> = {
 function mockHolder(want: string): string {
   if (want !== 'balance' && mwanDefault.mode === 'balance') return 'balance';
   if (want !== 'ts_exit' && vpnState.exitNode !== '') return 'ts_exit';
-  if (want !== 'wireguard' && wgState.enabled) return 'wireguard';
+  if (want !== 'wireguard' && wgActiveMock()) return 'wireguard';
   return '';
 }
 
@@ -275,7 +301,7 @@ function mockPolicy() {
   return {
     balance: mwanDefault.mode === 'balance',
     ts_exit: vpnState.exitNode !== '',
-    wireguard: wgState.enabled,
+    wireguard: Boolean(wgActiveMock()),
     blocked_by,
     reason,
   };
@@ -863,10 +889,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           // Gli anelli che riguardano l'uscita dentro WireGuard compaiono solo
           // a tunnel acceso: accendendolo dalla schermata WireGuard si vede la
           // catena allungarsi di tre righe, che e' proprio il caso da provare.
-          wg_up: wgState.enabled,
+          wg_up: Boolean(wgActiveMock()),
           wg_fw: vpnState.advertiseExit,
-          wg_fw_loaded: wgState.enabled,
-          wg_route_rule: wgState.enabled,
+          wg_fw_loaded: Boolean(wgActiveMock()),
+          wg_route_rule: Boolean(wgActiveMock()),
         },
         // Abbastanza nodi da vedere che l'elenco regge: uno spento in mezzo,
         // due che si offrono come uscita, e nomi di lunghezza diversa - e'
@@ -936,61 +962,191 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   // guarda sparire l'exit node e l'accensione di WireGuard; accendi WireGuard e
   // guarda sparire il bilanciamento. E' l'unico modo di verificare le sei
   // combinazioni senza sei configurazioni vere.
-  'travel.wg_get': () => ({
-    installed: wgState.installed,
-    configured: wgState.configured,
-    enabled: wgState.enabled,
-    config: {
-      addresses: wgState.configured ? '10.66.12.4/32' : '',
-      mtu: '1420',
-      dns: wgState.configured ? '10.66.0.1' : '',
-      has_private_key: wgState.configured,
-      peer_key: wgState.configured ? 'k8Fj2mQ1vX9pR4sT7wY0zA3bC6dE9fG2hJ5kL8nM0qU=' : '',
-      has_preshared: false,
-      endpoint: wgState.configured ? 'fr-3.vpnprovider.example' : '',
-      port: wgState.configured ? '51820' : '',
-      allowed_ips: wgState.configured ? '0.0.0.0/0' : '',
-      keepalive: '25',
-    },
-    routing: {
-      device_up: wgState.enabled,
-      rule: wgState.enabled,
-      route: wgState.enabled,
-      in_zone: wgState.configured,
-    },
-    status: {
-      device_up: wgState.enabled,
-      // Un handshake fresco solo se acceso: spento, il tunnel non parla con
-      // nessuno e la scheda deve dirlo invece di mostrare numeri vecchi.
-      last_handshake: wgState.enabled ? Math.floor(Date.now() / 1000) - 20 : 0,
-      rx: wgState.enabled ? 48 * 1024 * 1024 : 0,
-      tx: wgState.enabled ? 7 * 1024 * 1024 : 0,
-      peer_endpoint: wgState.enabled ? '51.15.44.201:51820' : '',
-      now: Math.floor(Date.now() / 1000),
-    },
-    policy: mockPolicy(),
-  }),
+  'travel.wg_get': () => {
+    const on = wgActiveMock();
+    const config = (p?: MockWgProfile) => ({
+      addresses: p?.addresses ?? '',
+      mtu: p?.mtu ?? '',
+      dns: p?.dns ?? '',
+      has_private_key: p != null,
+      peer_key: p?.peer_key ?? '',
+      has_preshared: p?.has_preshared ?? false,
+      endpoint: p?.endpoint ?? '',
+      port: p?.port ?? '',
+      allowed_ips: p?.allowed_ips ?? '',
+      keepalive: p?.keepalive ?? '',
+    });
+
+    return {
+      installed: wgState.installed,
+      configured: wgState.profiles.length > 0,
+      enabled: on != null,
+      active: on?.id ?? '',
+      profiles: wgState.profiles.map((p) => ({
+        id: p.id,
+        name: p.name,
+        active: p.active,
+        named: p.named,
+        config: config(p),
+      })),
+      config: config(on),
+      // Instradamento e stato riguardano il tunnel acceso e nessun altro: sono
+      // fatti che vivrebbero nel kernel, e ne esiste una serie sola.
+      routing: {
+        device_up: on != null,
+        rule: on != null,
+        route: on != null,
+        in_zone: on != null,
+      },
+      status: {
+        device_up: on != null,
+        // Un handshake fresco solo se acceso: spento, il tunnel non parla con
+        // nessuno e la scheda deve dirlo invece di mostrare numeri vecchi.
+        last_handshake: on ? Math.floor(Date.now() / 1000) - 20 : 0,
+        rx: on ? 48 * 1024 * 1024 : 0,
+        tx: on ? 7 * 1024 * 1024 : 0,
+        peer_endpoint: on ? '51.15.44.201:51820' : '',
+        now: Math.floor(Date.now() / 1000),
+      },
+      policy: mockPolicy(),
+    };
+  },
 
   'travel.wg_import': (args) => {
     const conf = String(args.config ?? '');
+    const name = String(args.name ?? '').trim();
+    const id = String(args.id ?? '');
+
     if (!/PrivateKey/i.test(conf)) return { error: 'manca PrivateKey nella sezione [Interface]' };
     if (!/Endpoint/i.test(conf)) return { error: 'manca Endpoint nella sezione [Peer]' };
-    wgState.configured = true;
-    // Importare non e' accendere, qui come sul router.
-    wgState.enabled = false;
-    return { imported: true, endpoint: 'fr-3.vpnprovider.example:51820', enabled: false };
+
+    const existing = id ? wgState.profiles.find((p) => p.id === id) : undefined;
+    if (id && !existing) return { error: 'configurazione WireGuard sconosciuta' };
+    if (!existing && name === '') return { error: 'il nome è obbligatorio' };
+    // Lo stesso cancello del router: due nomi uguali renderebbero l'elenco
+    // inutile proprio nel momento in cui serve.
+    if (
+      name !== '' &&
+      wgState.profiles.some(
+        (p) => p !== existing && p.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      return { error: 'esiste gia’ una configurazione WireGuard con questo nome' };
+    }
+
+    // Cio' che il file conterrebbe. Il simulatore non fa il parsing vero - lo
+    // fa il router - ma i campi devono esserci, altrimenti il modulo di
+    // modifica non avrebbe niente da mostrare.
+    const parsed = {
+      addresses: '10.66.12.4/32',
+      dns: '10.66.0.1',
+      mtu: '1420',
+      peer_key: 'k8Fj2mQ1vX9pR4sT7wY0zA3bC6dE9fG2hJ5kL8nM0qU=',
+      has_preshared: /PresharedKey/i.test(conf),
+      endpoint: 'fr-3.vpnprovider.example',
+      port: '51820',
+      allowed_ips: '0.0.0.0/0',
+      keepalive: '25',
+    };
+
+    if (existing) {
+      Object.assign(existing, parsed);
+      if (name !== '') {
+        existing.name = name;
+        existing.named = true;
+      }
+      return {
+        imported: true,
+        id: existing.id,
+        endpoint: `${parsed.endpoint}:${parsed.port}`,
+        enabled: existing.active,
+      };
+    }
+
+    const fresh: MockWgProfile = {
+      id: `travel_wg${wgState.next++}`,
+      name,
+      named: true,
+      // Importare non e' accendere, qui come sul router.
+      active: false,
+      ...parsed,
+    };
+    wgState.profiles.push(fresh);
+    return {
+      imported: true,
+      id: fresh.id,
+      endpoint: `${parsed.endpoint}:${parsed.port}`,
+      enabled: false,
+    };
+  },
+
+  'travel.wg_save': (args) => {
+    const id = String(args.id ?? '');
+    const name = String(args.name ?? '').trim();
+    const profile = wgState.profiles.find((p) => p.id === id);
+    if (!profile) return { error: 'configurazione WireGuard sconosciuta' };
+    if (name === '') return { error: 'il nome è obbligatorio' };
+    if (
+      wgState.profiles.some((p) => p !== profile && p.name.toLowerCase() === name.toLowerCase())
+    ) {
+      return { error: 'esiste gia’ una configurazione WireGuard con questo nome' };
+    }
+
+    // Si scrive solo questa: le altre non vengono nemmeno lette, che e' il
+    // punto dell'intera schermata.
+    profile.name = name;
+    profile.named = true;
+    profile.addresses = String(args.addresses ?? '');
+    profile.dns = String(args.dns ?? '');
+    profile.mtu = String(args.mtu ?? '');
+    profile.peer_key = String(args.peer_key ?? '');
+    profile.endpoint = String(args.endpoint ?? '');
+    profile.port = String(args.port ?? '');
+    profile.allowed_ips = String(args.allowed_ips ?? '');
+    profile.keepalive = String(args.keepalive ?? '');
+    if (String(args.drop_preshared ?? '') === '1') profile.has_preshared = false;
+    else if (String(args.preshared_key ?? '') !== '') profile.has_preshared = true;
+
+    return { saved: true, id, name };
+  },
+
+  'travel.wg_delete': (args) => {
+    const id = String(args.id ?? '');
+    const index = wgState.profiles.findIndex((p) => p.id === id);
+    if (index < 0) return { error: 'configurazione WireGuard sconosciuta' };
+    if (wgState.profiles[index].active) {
+      return { error: 'e’ la configurazione attiva: disattivala prima di eliminarla' };
+    }
+    wgState.profiles.splice(index, 1);
+    return { deleted: true };
   },
 
   'travel.wg_toggle': (args) => {
     const want = String(args.enabled ?? '') === '1';
+    const id = String(args.id ?? '');
+    const on = wgActiveMock();
+    const profile = wgState.profiles.find((p) => p.id === id) ?? (want ? undefined : on);
+
+    if (!profile) {
+      return { error: want ? 'configurazione WireGuard sconosciuta' : 'nessuna configurazione WireGuard attiva' };
+    }
+
     if (want) {
+      // Accendere non scambia: con un'altra accesa si rifiuta e si dice quale,
+      // esattamente come fa il router.
+      if (on && on !== profile) {
+        return {
+          error: `e’ gia’ attiva la configurazione "${on.name}": disattivala prima di attivarne un’altra`,
+        };
+      }
       // Lo stesso cancello del router: chi prova ad accendere quando qualcosa
       // sta gia' decidendo si prende l'errore, non un successo silenzioso.
       const holder = mockHolder('wireguard');
       if (holder) return { error: `non posso accendere WireGuard: ${MOCK_REASON[holder]}` };
     }
-    wgState.enabled = want;
-    return { enabled: want };
+
+    profile.active = want;
+    return { active: wgActiveMock()?.id ?? '', enabled: want };
   },
 
   // --- Captive portal ---
