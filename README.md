@@ -1,33 +1,104 @@
-# Travel Router UI
+﻿# Travel Router UI
 
-Interfaccia di gestione mobile-first per un **GL.iNet Beryl 7 (GL-MT3600BE)** su
-OpenWrt vanilla 25.12, pensata per essere usata dal telefono, con una mano, in
-hotel e aeroporti, spesso senza Internet funzionante.
+[![Versione progetto: 1.9.1-fase8](https://img.shields.io/badge/versione-1.9.1--fase8-blue)](package/travel/files/usr/share/travel/version)
+[![OpenWrt di riferimento: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
+[![Dispositivo: GL-MT3600BE](https://img.shields.io/badge/dispositivo-GL--MT3600BE-green)](#dispositivo-e-firmware-di-riferimento)
 
-- [Architettura e decisioni](docs/architettura.md)
-- [**Se qualcosa va storto**](docs/recovery.md) — da salvare offline sul telefono
+**La gestione di un router da viaggio, pensata per lo schermo del telefono.**
 
-**Fase attuale: 8** — WiFi con reti salvate e riconnessione automatica,
-dashboard, multi-WAN con tethering USB, LAN e porte ethernet commutabili,
-rilevamento dei captive portal, VPN Tailscale e WireGuard con kill switch,
-l'elenco dei dispositivi collegati con la porta o l'access point da cui entrano,
-e infine profili, backup, orologio e riavvio pianificato.
-Le fasi e cosa contengono stanno nell'[architettura](docs/architettura.md#fasi).
+Travel Router UI è un'interfaccia web per **GL.iNet Beryl 7 (GL-MT3600BE)**
+con **OpenWrt vanilla 25.12**. Riunisce connessioni WiFi, accesso a Internet,
+rete locale e VPN in un pannello utilizzabile dal browser, anche quando la
+connessione Internet non funziona.
 
-## Struttura
+## Perché esiste
 
-```
-frontend/          SPA Preact + Vite; si compila sul PC, il router serve solo file statici
-  src/lib/ubus.ts  client per il canale /ubus: unico modo di parlare con il router
-  src/lib/mock.ts  simulatore del bus, per lavorare senza dispositivo
-package/travel/    file che finiscono sul router
-tools/deploy.ps1   compila e installa via ssh
-docs/              architettura e procedura di recupero
-```
+In viaggio cambia la rete a cui ci si collega: il WiFi dell'hotel richiede un
+accesso dal browser, una connessione cade, il telefono diventa una WAN di
+emergenza. Gestire questi passaggi dallo smartphone può richiedere di
+attraversare molte pagine di configurazione e capire quali impostazioni
+dipendono dalle altre.
 
-## Sviluppare senza router
+Il progetto vuole rendere semplici le operazioni più frequenti: collegare il
+router alla rete disponibile, mantenere una rete personale per i propri
+dispositivi, capire perché Internet non è raggiungibile e scegliere come
+instradare il traffico. L'interfaccia è progettata per l'uso con una mano,
+con le informazioni e le azioni raccolte per attività.
 
-E' il modo normale di lavorare: il router serve solo quando si installa.
+Tutti i file dell'applicazione sono serviti dal router: la configurazione
+locale resta accessibile senza Internet, purché il telefono riesca a
+raggiungerlo. LuCI rimane disponibile per la configurazione avanzata.
+
+## Dispositivo e firmware di riferimento
+
+| Voce | Specifica |
+|---|---|
+| Dispositivo | GL.iNet Beryl 7, modello **GL-MT3600BE** |
+| Processore | MediaTek a quattro core, 2,0 GHz |
+| Memoria | 512 MB DDR4 |
+| Archiviazione | 512 MB NAND flash |
+| WiFi | WiFi 7 dual band, 2,4 e 5 GHz |
+| Ethernet | Due porte da 2,5 Gb/s, WAN e LAN |
+| USB | Una porta USB 3.0 per periferiche e tethering compatibile |
+| Alimentazione | USB-C |
+| Firmware di riferimento del progetto | **OpenWrt vanilla 25.12** |
+| Versione dell'interfaccia/plugin | **1.9.1-fase8** |
+
+Le specifiche hardware provengono dalla
+[scheda ufficiale GL.iNet](https://www.gl-inet.com/products/gl-mt3600be/).
+Le funzionalità radio effettivamente disponibili dipendono dal firmware e dai
+driver installati.
+
+La base software indicata è l'ambiente di riferimento documentato nel
+repository. Il progetto si installa su OpenWrt già presente sul dispositivo;
+non distribuisce un'immagine firmware. La compatibilità con il firmware
+originale GL.iNet, altri router o altre versioni di OpenWrt è da verificare.
+Gli script di installazione usano `apk`.
+
+Il badge della versione segue il
+[file di versione distribuito sul router](package/travel/files/usr/share/travel/version).
+Il repository indica la serie OpenWrt **25.12**, senza fissare una specifica
+patch release o build del firmware.
+
+## Cosa permette di fare
+
+| Area | Funzioni disponibili |
+|---|---|
+| **WiFi** | Cercare e collegare reti, salvare credenziali e priorità, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. |
+| **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
+| **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
+| **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
+| **VPN** | Gestire Tailscale, scegliere un exit node, importare un tunnel WireGuard e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
+| **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, gestire USB, orologio e riavvio pianificato. |
+
+Per esempio, in hotel puoi collegare il router al WiFi della struttura,
+completare l'accesso al portale e continuare a usare la tua rete personale.
+Se hai configurato una seconda connessione, il failover permette di usarla
+quando quella principale non è più disponibile.
+
+## Stato del progetto e limiti attuali
+
+Le funzioni elencate sono implementate; il progetto è in sviluppo e richiede
+verifiche sul dispositivo per i diversi scenari di rete.
+
+- La gestione di LAN, multi-WAN e routing VPN è centrata su **IPv4**;
+  l'integrazione completa di IPv6 resta da realizzare.
+- Bilanciamento multi-WAN, uso di un exit node Tailscale remoto e WireGuard
+  attivo sono modalità alternative fra loro. La UI applica questi vincoli.
+- WireGuard gestisce un tunnel con un peer; non offre una gestione completa
+  di più tunnel e split tunneling.
+- Il kill switch blocca l'inoltro dalla LAN alla WAN; il suo ambito e i suoi
+  limiti sono descritti nell'architettura.
+- La UI non configura reti WiFi Enterprise, SSID nascosti o reti ospiti isolate.
+- Il simulatore aiuta a provare i flussi, ma non sostituisce le verifiche su
+  OpenWrt. Il repository non include ancora una suite automatica o una pipeline CI.
+
+Dettagli tecnici, comportamenti di rollback e sviluppi mancanti sono descritti
+in [Architettura e stato dell'implementazione](docs/architettura.md).
+
+## Provare l'interfaccia senza router
+
+Con Node.js e npm disponibili sul PC, dalla cartella del progetto:
 
 ```powershell
 cd frontend
@@ -35,89 +106,97 @@ npm install
 npm run dev
 ```
 
-Si apre su `http://localhost:5173/travel/` con il **simulatore attivo**: nessun
-router collegato, qualsiasi password va bene. Le risposte finte stanno in
-`src/lib/mock.ts` — e' anche il posto dove simulare gli scenari scomodi (WAN che
-cade, captive portal, rete che sparisce) che sul dispositivo vero sono difficili
-da riprodurre a comando.
+Apri **http://localhost:5173/travel/**. In assenza della variabile
+`VITE_ROUTER`, il server di sviluppo attiva il simulatore e il login accetta
+qualsiasi password. Puoi esplorare le schermate e provare reti WiFi,
+interruzioni di connessione, portali e VPN senza un dispositivo collegato.
 
-Due scorciatoie utili nel simulatore: la password `sbagliata` fa fallire
-l'associazione, e collegarsi a **Hotel-Guest** o **Hotel-WiFi-Free** finisce
-dietro un captive portal — che sparisce clonando il MAC di `pixel-di-mauro`,
-l'unico che il portale finto considera gia' autenticato.
+I dati e gli scenari simulati sono in
+[`frontend/src/lib/mock.ts`](frontend/src/lib/mock.ts).
 
-Anche i vincoli fra multi-WAN, Tailscale e WireGuard si provano li': accendi il
-bilanciamento e guarda sparire l'exit node e l'accensione di WireGuard, accendi
-WireGuard e guarda sparire il bilanciamento. Sono sei combinazioni, e senza
-simulatore servirebbero sei configurazioni vere.
-
-Per sviluppare contro il router vero:
+Per sviluppare contro un router reale, dalla cartella `frontend`:
 
 ```powershell
 $env:VITE_ROUTER = "https://192.168.10.1"
 npm run dev
 ```
 
+In questa modalità le operazioni dell'interfaccia modificano il router indicato.
+
 ## Installare sul router
 
-Serve solo `ssh`, che Windows 11 ha gia' integrato.
+Servono un PC con **PowerShell, Node.js, npm, SSH e tar**, il router con
+OpenWrt già installato e accesso amministrativo via SSH. Sul router sono
+attesi i servizi OpenWrt di base, tra cui uhttpd con accesso ubus, rpcd/UCI e
+ucode con i relativi moduli; l'elenco completo è
+nell'[architettura](docs/architettura.md#build-installazione-e-dipendenze).
+L'installazione delle dipendenze mancanti richiede accesso a Internet dal router.
+
+Dalla cartella principale del repository:
 
 ```powershell
-.\tools\deploy.ps1
+.\tools\deploy.ps1 -Router 192.168.10.1
 ```
 
-Prima installazione, con il terminale web (la rete di sicurezza per quando sei in
-viaggio senza SSH — richiede che il router abbia Internet):
+Sostituisci l'indirizzo con quello del tuo router. Lo script compila il
+frontend sul PC, trasferisce i file via SSH e avvia il setup. Sul router
+vengono serviti file statici; Node.js serve solo sul PC.
+
+Per installare anche il terminale web opzionale:
 
 ```powershell
-.\tools\deploy.ps1 -WithTtyd
+.\tools\deploy.ps1 -Router 192.168.10.1 -WithTtyd
 ```
 
-Poi apri **`https://192.168.10.1/travel/`** dal telefono e accedi con la password
-di root del router. Il certificato e' self-signed: il browser avvisa, e' normale.
+Apri quindi **https://192.168.10.1/travel/**, se HTTPS è configurato sul
+router, e accedi con la password di root. Un certificato autofirmato genera
+un avviso nel browser. Gli indirizzi di esempio vanno adattati alla propria LAN.
 
-Opzioni: `-Router <ip>`, `-User <utente>`, `-SkipBuild`.
-
-### Se ssh chiede la password ogni volta
-
-Una tantum, dal PC:
-
-```powershell
-if (-not (Test-Path ~\.ssh\id_ed25519)) { ssh-keygen -t ed25519 -N '""' -f ~\.ssh\id_ed25519 }
-Get-Content ~\.ssh\id_ed25519.pub | ssh root@192.168.10.1 "mkdir -p /etc/dropbear; cat >> /etc/dropbear/authorized_keys; chmod 600 /etc/dropbear/authorized_keys"
-```
-
-## Cosa tocca sul router
-
-Il deploy e' volutamente poco invasivo. LuCI resta installata e intatta: e' la
-via di fuga.
-
-| Percorso | |
+| Opzione | Scopo |
 |---|---|
-| `/www/travel/` | l'interfaccia (svuotata e riscritta a ogni deploy) |
-| `/usr/libexec/rpcd/travel` | oggetto ubus `travel` |
-| `/usr/share/travel/` | versione e script di setup |
-| `/usr/share/rpcd/acl.d/travel.json` | permessi |
-| `/etc/config/travel` | configurazione e reti salvate, **creata solo se assente** |
-| `/etc/init.d/travel` | servizio travelD |
-| `uhttpd.main.ubus_prefix` | impostato a `/ubus` solo se mancante |
-| `firewall.travel_vpn`, `travel_vpn_fwd` | zona del tunnel VPN e inoltro dalla LAN |
-| `firewall.travel_vpn_out`, `travel_vpn_lan` | inoltri per exit node e subnet router, creati **spenti** |
-| `firewall.travel_killswitch` | la regola del kill switch, creata **spenta** |
-| `/etc/sysctl.d/30-travel-forwarding.conf` | inoltro IPv4, che serve a exit node e subnet router |
-| `network.travel_wg` | il tunnel WireGuard, creato solo importando una configurazione |
+| `-Router <ip>` | Indirizzo del router; predefinito `192.168.10.1` |
+| `-User <utente>` | Utente SSH; predefinito `root` |
+| `-SkipBuild` | Usa la build già presente in `frontend/dist/` |
+| `-WithTtyd` | Richiede anche l'installazione di `luci-app-ttyd` |
 
-Per disinstallare tutto:
+Il setup installa servizi e dipendenze, inizializza configurazioni di rete e
+firewall e imposta la pagina iniziale del router perché apra `/travel/`.
+**LuCI resta raggiungibile in `/cgi-bin/luci/`.** Eventuali avvisi sulle
+dipendenze vanno risolti per utilizzare le funzioni interessate.
 
-```sh
-/etc/init.d/travel stop; /etc/init.d/travel disable
-rm -rf /www/travel /usr/share/travel /usr/libexec/rpcd/travel \
-       /usr/share/rpcd/acl.d/travel.json /etc/init.d/travel \
-       /etc/sysctl.d/30-travel-forwarding.conf
-for s in travel_killswitch travel_vpn_lan travel_vpn_out travel_vpn_fwd travel_vpn; do
-  uci -q delete "firewall.$s"
-done
-uci commit firewall; /etc/init.d/firewall reload
-for p in 899 900 901; do ip rule del pref "$p" 2>/dev/null; done   # le regole dei tunnel vivono in RAM
-/etc/init.d/rpcd restart
+La creazione iniziale degli access point è separata dal deploy: lo script
+[`tools/setup-ap.ps1`](tools/setup-ap.ps1) configura SSID e password sulle
+due radio, disabilita le altre interfacce WiFi e ricarica il wireless.
+
+## Struttura e sviluppo
+
+```text
+frontend/              Interfaccia Preact, TypeScript e Vite
+  src/lib/             Client ubus, logica applicativa e simulatore
+  src/screens/         Schermate dell'applicazione
+package/travel/files/  Backend rpcd, daemon ucode, servizi e script di setup
+tools/                 Deploy e strumenti per il dispositivo
+docs/                  Architettura e documentazione operativa
 ```
+
+Il browser comunica con il router tramite `/ubus`. Il plugin `travel`
+espone le operazioni di gestione; il daemon `traveld` cura riconnessione,
+campionamento del traffico e automazioni. OpenWrt conserva la gestione
+effettiva delle connessioni e delle configurazioni.
+
+Per controllare i tipi e compilare, dalla cartella `frontend`:
+
+```powershell
+npm run typecheck
+npm run build
+```
+
+## Contribuire
+
+Segnalazioni, prove sul dispositivo e proposte di miglioramento sono benvenute.
+Per un problema, indica modello del router, versione e build di OpenWrt,
+versione del progetto, passaggi per riprodurlo e comportamento atteso.
+Rimuovi password, chiavi e altri dati riservati dagli eventuali log allegati.
+
+Per orientarsi nel codice e individuare le aree da completare, parti da
+[`docs/architettura.md`](docs/architettura.md).
