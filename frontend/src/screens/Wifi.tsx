@@ -20,7 +20,7 @@ import type { DaemonStatus } from '../lib/autoreconnect';
 import { AutoCard, AutoSheet } from './AutoReconnect';
 import { ConnectSheet } from './Connect';
 import { ApCard, ApSheet } from './AccessPoint';
-import { SavedCard, SavedSheet } from './SavedNetworks';
+import { SavedEntryCard, SavedNetworksScreen } from './SavedNetworks';
 import { ApplyStatus } from '../components/ApplyStatus';
 import { PORTAL_LABEL, getPortals } from '../lib/portal';
 import type { PortalResult, PortalStatus } from '../lib/portal';
@@ -294,7 +294,15 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
   const [aps, setAps] = useState<ApSection[]>([]);
   const [editingAp, setEditingAp] = useState(false);
   const [saved, setSaved] = useState<SavedNetwork[]>([]);
-  const [pickedSaved, setPickedSaved] = useState<SavedNetwork | null>(null);
+  /**
+   * Quale delle due viste della scheda e' aperta.
+   *
+   * Le reti salvate stanno in una pagina a se' ma non in una scheda a se': si
+   * arriva da qui, e la barra in basso deve continuare a dire dove si e'
+   * entrati. Tenerle qui vuol dire anche che condividono la lettura gia' fatta
+   * - reti, radio e uplink - invece di rifarne una loro.
+   */
+  const [view, setView] = useState<'radios' | 'saved'>('radios');
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null);
   const [portals, setPortals] = useState<PortalStatus | null>(null);
   const [editingAuto, setEditingAuto] = useState(false);
@@ -348,6 +356,10 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
 
   useEffect(reload, [reload]);
 
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [view]);
+
   const uplinkOf = (radio: Radio) => uplinks.find((u) => u.radio === radio.name) ?? null;
 
   const scan = async (radio: Radio) => {
@@ -398,6 +410,18 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
     });
   };
 
+  if (view === 'saved') {
+    return (
+      <SavedNetworksScreen
+        saved={saved}
+        radios={radios ?? []}
+        uplinks={uplinks}
+        onReload={reload}
+        onBack={() => setView('radios')}
+      />
+    );
+  }
+
   return (
     <main class="screen">
       <header class="topbar">
@@ -423,7 +447,7 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
 
       <ApCard aps={aps} onEdit={() => setEditingAp(true)} />
 
-      <SavedCard saved={saved} onPick={setPickedSaved} />
+      <SavedEntryCard saved={saved} onOpen={() => setView('saved')} />
 
       <AutoCard
         daemon={daemon}
@@ -469,18 +493,6 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
           daemon={daemon}
           onClose={(changed) => {
             setEditingAuto(false);
-            if (changed) reload();
-          }}
-        />
-      )}
-
-      {pickedSaved && (
-        <SavedSheet
-          net={pickedSaved}
-          saved={saved}
-          radios={radios ?? []}
-          onClose={(changed) => {
-            setPickedSaved(null);
             if (changed) reload();
           }}
         />

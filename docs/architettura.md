@@ -66,7 +66,7 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 
 | Scheda | Funzioni |
 |---|---|
-| WiFi | Radio e uplink, scansione, connessione e disconnessione, MAC e hostname DHCP, reti salvate, riconnessione automatica, impostazioni comuni e interruttori degli AP, stato dei portali. |
+| WiFi | Radio e uplink, scansione, connessione e disconnessione, MAC e hostname DHCP, riconnessione automatica, impostazioni comuni e interruttori degli AP, stato dei portali. Le reti salvate hanno una pagina dedicata, aperta dalla voce "Gestione reti salvate" col totale accanto. |
 | LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli delle porte ethernet, elenco dei dispositivi collegati. |
 | Internet | Dashboard per WAN, traffico corrente e della sessione, stato del collegamento e dei portali, multi-WAN, regole di routing e health check. |
 | VPN | Accesso e impostazioni Tailscale, nodi del tailnet, importazione e controllo WireGuard, diagnostica del routing, kill switch e sospensione temporanea. |
@@ -231,6 +231,22 @@ UI comprende SSID e banda; una voce senza banda vale per entrambe.
 Sono implementati modifica, eliminazione, abilitazione, note, riordino delle
 priorità e connessione con credenziali salvate. `mark_used` registra
 `last_used` e `last_result` per le azioni che lo invocano dalla UI.
+
+L'elenco vive in una pagina dedicata, non nella scheda WiFi: cresce con i
+viaggi e in coda alla scheda spingeva in basso radio e scansione. La scheda ne
+mostra solo la voce di accesso con il totale; la pagina è una vista di
+`screens/Wifi.tsx`, quindi riusa reti, radio e uplink già letti e non è una
+sesta scheda della barra. Dentro, le reti restano divise per banda e ordinabili
+separatamente, ogni riga porta banda, cifratura, ultimo utilizzo, esito
+dell'ultimo tentativo se diverso da "ok" e nota, più le targhette *collegata*,
+*nascosta* e *disattivata*. Da sei reti in su compare una ricerca per SSID o
+nota; il numero di priorità mostrato resta quello dell'elenco intero anche
+mentre si filtra.
+
+`hidden` è letta da uci e riportata da `travel.networks`, ma nessuna schermata
+la scrive: una rete che non annuncia il proprio SSID non compare nella
+scansione, quindi non c'è un punto da cui salvarla. Serve a riconoscere nella
+lista le voci aggiunte a mano.
 
 Il motore automatico è disabilitato per default (`autoreconnect=0`) e valuta
 la situazione ogni 10 secondi. Ordina le reti abilitate per priorità

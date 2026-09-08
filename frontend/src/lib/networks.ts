@@ -13,7 +13,8 @@
 import { call } from './ubus';
 import { HOSTNAME_OFF } from './hostname';
 import type { HostnameChoice, HostnameMode } from './hostname';
-import type { MacMode, ScanResult } from './wifi';
+import { uplinkState } from './wifi';
+import type { MacMode, ScanResult, Uplink } from './wifi';
 
 export interface SavedNetwork {
   /** Nome della sezione uci, es. "net_lx3f9a". */
@@ -22,6 +23,15 @@ export interface SavedNetwork {
   encryption: string;
   /** Banda preferita, vuota se indifferente. */
   band: string;
+  /**
+   * La rete non annuncia il proprio SSID.
+   *
+   * Si legge e basta: nessuna schermata la scrive, perche' una rete nascosta
+   * non compare nella scansione e il pannello non ha da dove salvarla. Chi ne
+   * ha aggiunta una a mano deve pero' riconoscerla nell'elenco, perche' e'
+   * l'unica voce che non si puo' ritrovare confrontandola con le reti viste.
+   */
+  hidden: boolean;
   mac_mode: string;
   mac_value: string;
   /** Nome da mandare nel DHCP su questa rete: none | device | custom. */
@@ -260,4 +270,42 @@ export function groupByBand(saved: SavedNetwork[]): BandGroup[] {
  */
 export function bandSiblings(saved: SavedNetwork[], net: SavedNetwork): SavedNetwork[] {
   return saved.filter((n) => n.band === net.band);
+}
+
+/**
+ * L'uplink acceso su questa rete salvata, se c'e'.
+ *
+ * Serve a dire "collegata" accanto alla voce giusta, e per quello il confronto
+ * deve tenere conto della banda: la stessa rete a 2.4 e a 5 GHz sono due voci
+ * distinte, e marcarle tutte e due perche' condividono il nome direbbe una cosa
+ * falsa su quella su cui la radio non e' agganciata. Una voce senza banda vale
+ * per entrambe le radio, quindi si accontenta di qualsiasi uplink.
+ *
+ * Uno stato "disabled" e' della configurazione, non dell'aggancio: la STA e'
+ * spenta e non sta portando niente, quindi non conta come collegamento.
+ */
+export function connectedVia(uplinks: Uplink[], net: SavedNetwork): Uplink | undefined {
+  return uplinks.find(
+    (u) =>
+      u.kind === 'wifi' &&
+      Boolean(u.ssid) &&
+      u.ssid === net.ssid &&
+      (net.band === '' || u.band === net.band) &&
+      uplinkState(u) !== 'disabled',
+  );
+}
+
+/**
+ * Filtro per la ricerca nell'elenco delle reti salvate.
+ *
+ * Confronta senza distinzione fra maiuscole e minuscole e cerca anche nella
+ * nota: chi ha scritto "hotel di Berlino" su una rete che si chiama
+ * "WLAN-4F2A" la ritrova per come se la ricorda, non per come si chiama.
+ */
+export function matchesQuery(net: SavedNetwork, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return true;
+  return (
+    net.ssid.toLowerCase().includes(needle) || net.note.toLowerCase().includes(needle)
+  );
 }

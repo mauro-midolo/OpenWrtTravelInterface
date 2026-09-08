@@ -517,6 +517,12 @@ export const AP_ENCRYPTIONS = [
 ] as const;
 
 export function encryptionLabel(value: string): string {
+  // "none" e' il valore che uci si aspetta per una rete aperta, ed e' quello
+  // che `encryptionForSta` salva: mostrarlo com'e' faceva comparire la parola
+  // "none" in mezzo a etichette italiane. Non sta in AP_ENCRYPTIONS perche'
+  // quell'elenco riempie la scelta della cifratura dell'access point, e un
+  // access point aperto non e' un'opzione da offrire.
+  if (value === 'none') return 'Aperta';
   return AP_ENCRYPTIONS.find((e) => e.value === value)?.label ?? value ?? '—';
 }
 

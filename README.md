@@ -64,7 +64,7 @@ patch release o build del firmware.
 
 | Area | Funzioni disponibili |
 |---|---|
-| **WiFi** | Cercare e collegare reti, salvare credenziali e priorità, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. |
+| **WiFi** | Cercare e collegare reti, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate, con credenziali e priorità, hanno una pagina dedicata con la ricerca per nome. |
 | **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
 | **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |

@@ -83,6 +83,26 @@ body {
   gap: 12px;
 }
 
+/* Titolo con il tasto indietro accanto, quando la pagina e' aperta da un'altra.
+   La larghezza minima azzerata serve perche' sia il titolo ad accorciarsi,
+   invece di spingere fuori dalla barra il pulsante di destra. */
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Un pulsante che contiene un solo segno: il riempimento laterale dei pulsanti
+   di testo lo renderebbe largo il doppio del necessario, ma l'area toccabile
+   resta quella minima. */
+.button--icon {
+  min-width: var(--tap);
+  padding: 0 12px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
 h1 {
   margin: 0;
   font-size: 1.35rem;
@@ -290,6 +310,10 @@ button:disabled {
   left: 0;
   right: 0;
   bottom: 0;
+  /* Sopra al contenuto che scorre: i titoli di banda restano appiccicati in
+     alto con un livello proprio, e senza questo passerebbero davanti alla
+     barra invece di finirci sotto. */
+  z-index: 5;
   display: flex;
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -434,6 +458,15 @@ button:disabled {
 .badge--warn {
   background: var(--error-bg);
   color: var(--error-text);
+}
+
+/* Un fatto che non e' ne' un problema ne' una conferma: "nascosta" dice com'e'
+   fatta la rete, non come sta andando. Colorata come un avviso si sarebbe letta
+   come un guasto. */
+.badge--muted {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
 }
 
 /* --- Filtri ----------------------------------------------------------------- */
@@ -760,4 +793,86 @@ button:disabled {
 
 .group__title:first-of-type {
   margin-top: 12px;
+}
+
+/* --- Reti salvate: la pagina dedicata ---------------------------------------
+   L'elenco puo' essere lungo - una rete per ogni posto in cui si e' dormito -
+   e va letto scorrendo, non leggendo. Da qui in giu' tutto serve a una cosa
+   sola: che ogni riga sia alta come le altre e dica le stesse cose nello stesso
+   posto, cosi' l'occhio scende lungo la colonna dei nomi senza rimettersi a
+   fuoco a ogni voce. */
+
+/* Il titolo della banda resta in alto mentre il suo gruppo scorre: con venti
+   reti in elenco, senza di questo si finisce a guardare righe senza piu' sapere
+   di quale radio parlano. I margini negativi lo portano fino ai bordi della
+   scheda, altrimenti le righe passerebbero visibili nei 16px di riempimento ai
+   lati del titolo. */
+.saved-group__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: -16px -16px 0;
+  padding: 14px 16px 8px;
+  background: var(--surface);
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+.saved-group__count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* La posizione per priorita', davanti al nome. Larghezza fissa: incolonnati,
+   i numeri si saltano con l'occhio invece di doverli leggere, e i nomi partono
+   tutti dallo stesso punto. */
+.saved__rank {
+  display: inline-block;
+  min-width: 1.6em;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Nome e riga di dettaglio non vanno a capo: una riga d'elenco che cresce
+   perche' la nota e' lunga romperebbe il passo con cui si scorre. Quello che
+   qui viene tagliato si legge per intero aprendo la rete. */
+.saved__ssid,
+.saved__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* Le targhette possono essere tre - collegata, nascosta, disattivata - e su uno
+   schermo stretto non ci stanno in fila: vanno a capo verso destra invece di
+   schiacciare il nome. */
+.saved__badges {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+/* Una riga sola dentro la sua scheda: la riga di separazione in fondo non
+   separerebbe da niente, perche' sotto c'e' gia' il bordo della scheda. */
+.net--link {
+  border-bottom: none;
+}
+
+/* Il segno che una riga porta da qualche parte invece di aprire un foglio. */
+.chevron {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-muted);
 }

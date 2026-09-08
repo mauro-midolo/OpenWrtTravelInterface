@@ -701,6 +701,10 @@ method_networks() {
 		json_add_string  ssid        "$(uci -q get "travel.$section.ssid")"
 		json_add_string  encryption  "$(uci -q get "travel.$section.encryption")"
 		json_add_string  band        "$(uci -q get "travel.$section.band")"
+		# Rete che non annuncia il proprio SSID. Nessuna schermata la scrive:
+		# la scansione non la vede, quindi non c'e' da dove salvarla. Si riporta
+		# perche' chi ne ha aggiunta una a mano deve riconoscerla nell'elenco.
+		json_add_boolean hidden      "$([ "$(uci -q get "travel.$section.hidden")" = "1" ] && echo 1 || echo 0)"
 		json_add_string  mac_mode    "$(uci -q get "travel.$section.mac_mode")"
 		json_add_string  mac_value   "$(uci -q get "travel.$section.mac_value")"
 		json_add_string  note        "$(uci -q get "travel.$section.note")"
