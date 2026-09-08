@@ -805,6 +805,13 @@ aperto, una volta per spostamento e una all'avvio - le pressioni lunghe e i
 resta `unknown`: sta in `/var/run` perche' e' dove si trova una levetta adesso,
 non una preferenza da conservare.
 
+Quale delle due posizioni sia "acceso" non lo dice il kernel, lo dice la
+serigrafia: sul Beryl 7 il pallino stampato sta a destra, e a destra la
+levetta risulta aperta (`released`), verificato sul router. La coppia sta
+scritta solo in `toggle-button.sh`, il livello del rilevamento: tutto il resto
+vede `on` e `off`, e un modello cablato al contrario si sistema li' senza
+toccare azioni, configurazione o allineamento.
+
 I nomi `BTN_0` e `BTN_1` coprono i due codici con cui i router da viaggio
 dichiarano la levetta; entrambi i file rimandano allo stesso gestore. OpenWrt
 di suo non installa gestori con questi nomi - i suoi si chiamano `reset`,

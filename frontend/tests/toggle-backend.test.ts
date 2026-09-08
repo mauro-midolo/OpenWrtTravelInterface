@@ -264,7 +264,9 @@ describe('router physical toggle', () => {
 
   it('translates the kernel event without knowing which function will run', () => {
     expect(run('toggle_set led').status).toBe(0);
-    for (const [action, brightness] of [['pressed', '255'], ['released', '0']]) {
+    // La levetta sul pallino - a destra, levetta aperta, `released` - e'
+    // quella accesa: e' la serigrafia a deciderlo, non il kernel.
+    for (const [action, brightness] of [['released', '255'], ['pressed', '0']]) {
       const result = press(action);
       expect(result.status, `${action}: ${result.stderr}`).toBe(0);
       expect(read('sys/class/leds/blue-status/brightness')).toBe(brightness);

@@ -451,6 +451,10 @@ say "avvio travelD"
 /etc/init.d/travel enable  >/dev/null 2>&1
 /etc/init.d/travel-led enable
 /etc/init.d/travel-led start
+# La posizione registrata l'ha scritta la versione di prima, che poteva leggere
+# la levetta al contrario: si riparte da "non lo so", che e' la verita' finche'
+# il kernel non manda un evento nuovo. Al riavvio sparirebbe da sola.
+rm -f /var/run/travel-toggle.position
 /etc/init.d/travel-toggle enable
 /etc/init.d/travel-toggle start
 /etc/init.d/travel restart >/dev/null 2>&1
