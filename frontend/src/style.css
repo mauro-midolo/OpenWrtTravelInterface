@@ -881,6 +881,51 @@ button:disabled {
   border-bottom: none;
 }
 
+/* --- Condivisione di una rete ------------------------------------------------
+   Il QR va inquadrato da un altro telefono: deve essere grande abbastanza da
+   leggersi a mezzo metro e restare quadrato, e non deve seguire il tema. */
+
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+  /* Il bianco esce dal disegno e circonda il codice: la zona di quiete deve
+     restare chiara anche quando la scheda sotto e' scura. */
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.qr {
+  /* Non piu' larga della scheda, e non cosi' piccola da non leggersi: su un
+     telefono in verticale sono circa 260px. */
+  width: min(260px, 100%);
+  height: auto;
+  display: block;
+}
+
+/* Una password mostrata: monospaziata perche' si legge carattere per
+   carattere, e spezzabile perche' non ha spazi dove andare a capo. */
+.secret {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.05rem;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  /* Si seleziona col dito per copiarla: e' l'alternativa al QR per chi ha un
+     dispositivo senza fotocamera. */
+  user-select: all;
+}
+
+/* I pallini al posto della password: non sono un testo da selezionare. */
+.secret--masked {
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
 /* Il segno che una riga porta da qualche parte invece di aprire un foglio. */
 .chevron {
   font-size: 1.4rem;

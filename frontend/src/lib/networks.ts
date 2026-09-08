@@ -5,12 +5,13 @@
  * `travel.networks`, che non fa uscire le chiavi. La scrittura passa
  * dall'oggetto `uci`, come tutto il resto.
  *
- * Unica eccezione: collegarsi a una rete gia' salvata. La password non puo'
- * passare dal browser, quindi e' il router a copiarla nelle modifiche in
- * sospeso della sessione (`travel.stage_connect_saved`).
+ * Per collegarsi, il router copia la password nelle modifiche in sospeso
+ * (`travel.stage_connect_saved`). Solo la condivisione la legge nel browser,
+ * su richiesta esplicita e per la sola sezione selezionata.
  */
 
 import { call } from './ubus';
+import type { ShareInput } from './share';
 import { HOSTNAME_OFF } from './hostname';
 import type { HostnameChoice, HostnameMode } from './hostname';
 import { uplinkState } from './wifi';
@@ -186,6 +187,44 @@ export async function stageConnectSaved(section: string, radio: string): Promise
 
 export function markUsed(section: string, result: string): Promise<unknown> {
   return call('travel', 'mark_used', { section, result });
+}
+
+/**
+ * I dati di una rete salvata, letti al momento e per quella sola rete.
+ *
+ * E' l'unica lettura del pannello che fa uscire un segreto dal router, e sta
+ * qui da sola apposta. La regola del progetto - le risposte applicative
+ * ordinarie non contengono chiavi - resta intatta: `travel.networks` continua
+ * a dire soltanto `has_key`, e nessun elenco porta con se' delle password.
+ * Si chiede una rete alla volta quando qualcuno apre "Condividi". I dati
+ * restano nello stato della schermata fino alla chiusura, senza persistenza.
+ *
+ * Non allarga i permessi di nessuno: gli ACL concedono gia' la lettura UCI di
+ * `travel` a chi ha una sessione, quindi chi puo' aprire questa schermata puo'
+ * gia' leggere la stessa chiave da se'. E' la posizione dichiarata
+ * nell'architettura - il pannello e' uno strumento di amministrazione, non un
+ * confine di isolamento verso un amministratore autenticato.
+ *
+ * Una sola lettura della sezione aggiorna insieme SSID, cifratura e chiave.
+ * Una rete aperta puo' omettere key; una sezione mancante resta un errore.
+ */
+export async function readShareNetwork(section: string): Promise<ShareInput & { band: string }> {
+  const { values } = await call<{ values?: Record<string, unknown> }>('uci', 'get', {
+    config: 'travel',
+    section,
+  });
+  if (values?.['.type'] !== 'network' || typeof values.ssid !== 'string' ||
+      typeof values.encryption !== 'string' ||
+      (values.key !== undefined && typeof values.key !== 'string')) {
+    throw new Error('Impossibile leggere i dati della rete salvata.');
+  }
+  return {
+    ssid: values.ssid,
+    encryption: values.encryption,
+    key: values.encryption === 'none' ? '' : values.key ?? '',
+    hidden: values.hidden === '1',
+    band: typeof values.band === 'string' ? values.band : '',
+  };
 }
 
 /** Dati per salvare la rete che si sta per usare, presi dal risultato di scansione. */

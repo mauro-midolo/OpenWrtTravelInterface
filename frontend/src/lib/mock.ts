@@ -16,6 +16,8 @@
  *   - le modifiche che restano in sospeso finche' non arriva la conferma.
  */
 
+import { UBUS_NOT_FOUND, UbusError } from './ubus-error';
+
 const bootedAt = Date.now();
 
 function jitter(base: number, spread: number): number {
@@ -1827,6 +1829,40 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   // --- uci: le modifiche restano in sospeso fino alla conferma ---
 
+  /**
+   * Lettura della sezione selezionata o di una singola opzione, come rpcd.
+   *
+   * Serve alla condivisione, che chiede la chiave di una rete alla volta. Il
+   * simulatore riproduce anche il caso scomodo: un'opzione che non c'e' - una
+   * rete aperta non ha `key` - non risponde con una stringa vuota ma con
+   * "nessun dato", codice 5. Chi chiama deve distinguere le due cose, e se il
+   * simulatore rispondesse vuoto quel ramo non verrebbe mai provato.
+   */
+  'uci.get': (args) => {
+    const config = String(args.config ?? '');
+    const section = String(args.section ?? '');
+    const option = String(args.option ?? '');
+
+    if (config === 'travel') {
+      const entry = savedNetworks[section];
+      if (!entry) throw new UbusError(UBUS_NOT_FOUND, 'uci.get');
+      const values: Record<string, string> = {
+        '.type': 'network',
+        '.name': section,
+        ssid: entry.ssid,
+        encryption: entry.encryption,
+        band: entry.band,
+        hidden: entry.hidden ? '1' : '0',
+      };
+      if (entry.key !== '') values.key = entry.key;
+      if (!option) return { values };
+      if (!(option in values)) throw new UbusError(UBUS_NOT_FOUND, 'uci.get');
+      return { value: values[option] };
+    }
+
+    throw new UbusError(UBUS_NOT_FOUND, 'uci.get');
+  },
+
   'uci.delete': (args) => {
     const section = String(args.section ?? '');
 
@@ -2143,6 +2179,9 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         // refuso: senza, correggerlo dal simulatore non avrebbe nessun effetto
         // e la prova del giro "sbaglia, correggi, riprova" non direbbe niente.
         if (values.ssid !== undefined) entry.ssid = values.ssid;
+        if (values.encryption !== undefined) entry.encryption = values.encryption;
+        if (values.hidden !== undefined) entry.hidden = values.hidden === '1';
+        if (values.band !== undefined) entry.band = values.band;
         if (values.mac_mode !== undefined) entry.mac_mode = values.mac_mode;
         if (values.mac_value !== undefined) entry.mac_value = values.mac_value;
         if (values.note !== undefined) entry.note = values.note;

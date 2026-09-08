@@ -7,6 +7,7 @@
  */
 
 import { mockCall } from './mock';
+import { UBUS_OK, UBUS_PERMISSION_DENIED, UbusError } from './ubus-error';
 
 /** Sessione "nulla": l'unica cosa che puo' fare e' chiamare session.login. */
 const NULL_SESSION = '00000000000000000000000000000000';
@@ -16,41 +17,9 @@ const STORAGE_KEY = 'travel.session';
 /** Senza VITE_ROUTER in sviluppo si lavora contro il simulatore, senza router. */
 export const USE_MOCK = import.meta.env.DEV && !import.meta.env.VITE_ROUTER;
 
-/** Codici di stato ubus che ci interessa distinguere. */
-export const UBUS_OK = 0;
-export const UBUS_PERMISSION_DENIED = 6;
-
-/** Testo dei codici di stato ubus. Senza, restano numeri senza significato. */
-const UBUS_MESSAGES: Record<number, string> = {
-  1: 'comando non valido',
-  2: 'argomento non valido',
-  3: 'metodo inesistente',
-  4: 'oggetto non trovato',
-  5: 'nessun dato',
-  6: 'permesso negato',
-  7: 'timeout',
-  8: 'non supportato',
-  9: 'errore sconosciuto',
-  10: 'connessione fallita',
-};
-
-export class UbusError extends Error {
-  constructor(
-    readonly code: number,
-    /** Oggetto e metodo chiamati, per sapere *cosa* e' fallito. */
-    readonly where: string,
-    detail?: string,
-  ) {
-    const text = detail ?? UBUS_MESSAGES[code] ?? `codice ${code}`;
-    super(`${where}: ${text} (codice ${code})`);
-    this.name = 'UbusError';
-  }
-
-  /** Sessione scaduta o revocata: va rifatto il login. */
-  get isAuthError(): boolean {
-    return this.code === UBUS_PERMISSION_DENIED;
-  }
-}
+// I codici e il tipo dell'errore vivono a parte, cosi' anche il simulatore
+// puo' usarli: qui si ri-esportano perche' resti l'unico punto da importare.
+export { UBUS_NOT_FOUND, UBUS_OK, UBUS_PERMISSION_DENIED, UbusError } from './ubus-error';
 
 /** Il router non e' raggiungibile: caso normalissimo su un router da viaggio. */
 export class TransportError extends Error {

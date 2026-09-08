@@ -35,6 +35,7 @@ import type { ConnectOutcome, Radio, Uplink } from '../lib/wifi';
 import { getSystem, hostnameLabel, isValidHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { HostnamePicker } from '../components/HostnamePicker';
+import { ShareSheet } from './ShareNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
 
 /**
@@ -387,6 +388,7 @@ export function SavedSheet({
   /** La riga di log che spiega l'esito, se il router ne ha trovata una. */
   const [detail, setDetail] = useState('');
   const [checking, setChecking] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   // Solo per dire cosa verrebbe inviato scegliendo "nome del router".
   useEffect(() => {
@@ -478,6 +480,10 @@ export function SavedSheet({
     }
   };
 
+  if (sharing) {
+    return <ShareSheet net={net} onClose={() => setSharing(false)} />;
+  }
+
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
@@ -512,6 +518,9 @@ export function SavedSheet({
               </button>
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('edit')}>
                 Modifica
+              </button>
+              <button class="button button--ghost" disabled={busy} onClick={() => setSharing(true)}>
+                Condividi
               </button>
               <button
                 class="button button--ghost"

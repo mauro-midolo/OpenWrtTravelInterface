@@ -271,6 +271,33 @@ dell'ultimo tentativo se diverso da "ok" e nota, più le targhette *collegata*,
 nota; il numero di priorità mostrato resta quello dell'elenco intero anche
 mentre si filtra.
 
+### Condivisione delle reti salvate
+
+Il menu di ogni rete salvata offre **Condividi**, anche quando la rete è
+disattivata, non connessa o non è disponibile alcuna radio. A ogni apertura,
+`uci.get` legge la sola sezione selezionata di `travel`: SSID, cifratura,
+password, banda e stato nascosto vengono dalla stessa risposta aggiornata.
+Le letture degli elenchi continuano a omettere le password; i permessi ACL
+esistenti consentono già questa lettura amministrativa.
+
+La password resta mascherata finché si preme **Mostra password** e viene
+nuovamente nascosta alla riapertura. I dati risiedono solo nello stato della
+schermata e vengono rimossi alla chiusura. Il QR viene generato localmente
+con `qrcode-generator`, codifica UTF-8 e margine bianco di quattro moduli,
+senza inviare credenziali a servizi esterni.
+
+Il contenuto segue il [formato WiFi ZXing](https://github.com/zxing/zxing/wiki/Barcode-Contents#wi-fi-network-config-android-ios-11):
+`WIFI:T:WPA;S:SSID;P:password;;`, con escape dei caratteri speciali,
+`H:true` per reti nascoste e `T:nopass` senza password per quelle aperte.
+WPA/WPA2 e WPA2/WPA3 misto usano `WPA`; WPA3 puro usa `SAE` e richiede
+un lettore e un dispositivo compatibili. Errori di lettura, credenziali
+mancanti o cifrature non supportate impediscono la visualizzazione del QR.
+
+`npm test` verifica il contenuto e la decodifica dei QR con un lettore
+indipendente, oltre a mascheramento, riapertura, dati aggiornati, errori,
+risposte asincrone e comportamento del simulatore. La connessione effettiva
+da fotocamere Android/iPhone resta da verificare su dispositivi fisici.
+
 ### Reti nascoste
 
 Una rete che non annuncia il proprio SSID non compare in nessuna scansione, e
@@ -812,8 +839,8 @@ né una roadmap approvata.
   coerente richiedono altro lavoro. Vanno verificati failover con traffico
   reale, riavvio dei servizi, rotte Tailscale e ambito effettivo del kill
   switch, incluse connessioni già stabilite.
-- **Verifiche ripetibili:** non sono presenti una suite automatica o una
-  pipeline CI; il simulatore non sostituisce test su OpenWrt. Servono prove
+- **Verifiche ripetibili:** la suite automatica copre la condivisione WiFi;
+  manca una pipeline CI e il simulatore non sostituisce test su OpenWrt. Servono prove
   riproducibili di rollback, rinnovo DHCP dopo cambio LAN, USB, routing VPN
   e ripristino backup. Gli script di misura della scansione non costituiscono
   una regressione automatica.
