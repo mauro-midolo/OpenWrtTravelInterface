@@ -67,7 +67,7 @@ patch release o build del firmware.
 | **WiFi** | Cercare e collegare reti, aggiungere a mano una rete nascosta, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate, con credenziali e priorità, hanno una pagina dedicata con la ricerca per nome. |
 | **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
-| **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
+| **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
 | **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
 | **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, gestire USB, orologio e riavvio pianificato. |
 

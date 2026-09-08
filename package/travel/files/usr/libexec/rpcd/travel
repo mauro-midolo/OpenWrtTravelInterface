@@ -1074,6 +1074,17 @@ bridge_info() {
 }
 
 # Interfaccia logica che usa una certa porta come proprio device.
+# Le sezioni `device` di /etc/config/network, una per riga in JSON.
+#
+# Il MAC di una porta si scrive li' (`option macaddr`) e non sull'interfaccia:
+# da OpenWrt 21.02 netifd lo legge solo dalla sezione device, e messo altrove
+# verrebbe ignorato in silenzio. Si legge tutto in un colpo perche' serve una
+# volta per porta, e una chiamata ubus per porta sarebbe una in piu' del
+# necessario a ogni apertura della schermata LAN.
+device_sections() {
+	ubus call uci get '{"config":"network","type":"device"}' 2>/dev/null 		| jsonfilter -e '@.values[*]'
+}
+
 network_using_port() {
 	local want="$1" network
 	for network in $(uci show network 2>/dev/null | sed -n 's/^network\.\([^.]*\)=interface$/\1/p'); do
@@ -1092,7 +1103,9 @@ network_using_port() {
 # non da un'impostazione nostra che potrebbe divergere.
 method_ethports() {
 	local bridge bridge_section bridge_ports zone zone_networks
-	local port network role entry
+	local port network role entry obj dev_section dev_mac devfile
+
+	devfile="/tmp/travel-ethdev.$"
 
 	bridge=$(bridge_info)
 	bridge_section="${bridge%%	*}"
@@ -1117,9 +1130,25 @@ method_ethports() {
 	done
 	json_close_array
 
+	# Le sezioni device si leggono una volta sola, prima del giro sulle porte.
+	device_sections > "$devfile" 2>/dev/null
+
 	json_add_array ports
 	for port in $(physical_ports); do
 		network=$(network_using_port "$port")
+
+		# La sezione che descrive questa porta, se esiste: serve per aggiornare
+		# quella che c'e' invece di aggiungerne una seconda con lo stesso nome,
+		# che netifd applicherebbe in un ordine non garantito.
+		dev_section=""
+		dev_mac=""
+		while read -r obj; do
+			[ -n "$obj" ] || continue
+			[ "$(printf '%s' "$obj" | jsonfilter -e '@.name')" = "$port" ] || continue
+			dev_section=$(printf '%s' "$obj" | jsonfilter -e '@[".name"]')
+			dev_mac=$(printf '%s' "$obj" | jsonfilter -e '@.macaddr')
+			break
+		done < "$devfile"
 
 		role="free"
 		for entry in $bridge_ports; do
@@ -1134,6 +1163,13 @@ method_ethports() {
 		json_add_string  role    "$role"
 		json_add_string  network "$network"
 		json_add_int     carrier "$(carrier_of "$port")"
+		# Il MAC con cui la porta si presenta adesso, letto dal kernel: coincide
+		# con `mac_config` solo dopo che netifd lo ha applicato. Quello di
+		# fabbrica non compare da nessuna parte, e non serve: si ritrova
+		# togliendo l'opzione, non leggendolo.
+		json_add_string  mac            "$(first_line "/sys/class/net/$port/address")"
+		json_add_string  mac_config     "$dev_mac"
+		json_add_string  device_section "$dev_section"
 		# Con mwan3 (Fase 3) ogni WAN ha anche una voce li': va seguita nella
 		# stessa transazione, altrimenti resterebbe un health check su una WAN
 		# che non esiste piu'.
@@ -1141,6 +1177,8 @@ method_ethports() {
 		json_close_object
 	done
 	json_close_array
+
+	rm -f "$devfile"
 
 	json_dump
 }

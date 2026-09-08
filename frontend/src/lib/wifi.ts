@@ -329,6 +329,25 @@ export function randomMac(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(':');
 }
 
+/**
+ * La forma canonica di un MAC: senza spazi e in minuscolo.
+ *
+ * Serve perche' le due sorgenti non concordano. uci conserva quello che ci si
+ * scrive, quindi un macaddr messo a mano puo' essere in maiuscolo; il kernel
+ * riporta invece l'indirizzo in uso sempre in minuscolo. Confrontare le due
+ * forme senza ridurle alla stessa fa sembrare diverso cio' che e' uguale, e una
+ * verifica che confronta l'indirizzo scritto con quello in uso non passerebbe
+ * mai.
+ *
+ * Sta qui accanto a isValidMac e non dentro un componente perche' va applicata
+ * in tutti i punti in cui un MAC entra: quello digitato, quello ripreso dalla
+ * configurazione e quello che si sta per scrivere. Chiusa in un componente
+ * coprirebbe solo i valori che passano di li'.
+ */
+export function normalizeMac(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 export function isValidMac(mac: string): boolean {
   if (!MAC_RE.test(mac)) return false;
   // Bit 0 del primo byte acceso = indirizzo multicast, non usabile da una

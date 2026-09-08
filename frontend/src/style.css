@@ -731,6 +731,17 @@ button:disabled {
   min-width: 0;
 }
 
+/* Due comandi in coda alla riga di una porta - il MAC e il ruolo. Su uno
+   schermo stretto vanno a capo fra loro invece di schiacciare il nome della
+   porta, che e' l'unica cosa che permette di riconoscerla. */
+.port__controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+}
+
 /* Da dove entra un dispositivo, in fondo alla sua riga. Non si spezza su due
    righe: "Access point 2.4 GHz" letto a meta' non dice piu' niente. */
 

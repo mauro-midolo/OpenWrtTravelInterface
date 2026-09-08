@@ -67,7 +67,7 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 | Scheda | Funzioni |
 |---|---|
 | WiFi | Radio e uplink, scansione, connessione e disconnessione, aggiunta manuale di reti nascoste, MAC e hostname DHCP, riconnessione automatica, impostazioni comuni e interruttori degli AP, stato dei portali. Le reti salvate hanno una pagina dedicata, aperta dalla voce "Gestione reti salvate" col totale accanto. |
-| LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli delle porte ethernet, elenco dei dispositivi collegati. |
+| LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli e indirizzo MAC delle porte ethernet, elenco dei dispositivi collegati. |
 | Internet | Dashboard per WAN, traffico corrente e della sessione, stato del collegamento e dei portali, multi-WAN, regole di routing e health check. |
 | VPN | Accesso e impostazioni Tailscale, nodi del tailnet, importazione e controllo WireGuard, diagnostica del routing, kill switch e sospensione temporanea. |
 | Impostazioni | Stato e nome del router, periferiche e modalità USB, profili, backup e ripristino, orologio/NTP, riavvio e collegamento a LuCI. |
@@ -161,6 +161,7 @@ interrompere l'accesso:
 | Connessione WiFi, reti salvate e comandi wireless pertinenti | 90 s ordinari | Stato radio/AP tramite `wirelessCameUp` |
 | Modifica di SSID, cifratura e password degli AP | 240 s | `wirelessCameUp` |
 | Clonazione MAC dal pannello portale | 150 s | `wirelessCameUp` |
+| MAC di una porta ethernet | 150 s | Rilettura del MAC in uso sulla porta |
 | LAN | 300 s | Nuovo indirizzo fra quelli attivi |
 | Ruolo di una porta ethernet | 90 s | Rilettura del ruolo richiesto |
 
@@ -213,12 +214,39 @@ dalla configurazione e dagli uplink attivi su quella radio.
 invoca `ubus call iwinfo scan`; se manca un device ne crea uno managed
 temporaneo con `iw`, rimuovendolo al termine e tramite trap. Il frontend
 concede 30 secondi, filtra la banda, normalizza la sicurezza e raggruppa
-i risultati. Gli SSID vuoti sono mostrati come reti nascoste ma non selezionabili.
+i risultati. Gli SSID vuoti sono mostrati come reti nascoste: non si possono
+selezionare, perché non c'è un nome da mettere in configurazione, ma toccarli
+apre il modulo che lo chiede.
 
 La connessione supporta reti aperte, WPA2, WPA3 e modalità di transizione.
+
 Il MAC può essere quello del device, casuale, manuale o clonato da un client
-LAN. Il MAC casuale è generato nel browser; salvandolo nella rete viene
-riutilizzato nelle riconnessioni. La clonazione riguarda la STA WiFi.
+LAN. Le quattro modalità stanno in un unico controllo condiviso,
+`components/MacPicker.tsx`, usato dalla connessione WiFi e dalle porte
+ethernet: è la stessa scelta, e vederla in due forme diverse farebbe pensare a
+due impostazioni diverse — la stessa ragione per cui esiste `HostnamePicker`.
+Il pannello dei portali resta con la sua lista di client, perché lì la scelta è
+solo la clonazione e vive dentro un flusso suo. Il MAC casuale è generato nel
+browser, unicast e localmente amministrato; salvandolo nella rete viene
+riutilizzato nelle riconnessioni.
+
+Sulla STA WiFi il MAC si scrive nella sezione `wifi-iface`. Sulle porte
+ethernet si scrive invece in una sezione `device` di `/etc/config/network`
+(`option macaddr`): da OpenWrt 21.02 netifd lo legge solo da lì, e messo
+sull'interfaccia verrebbe ignorato in silenzio. La sezione viene creata al
+primo uso con nome `dev_<porta>` e poi riusata, per non lasciarne due sullo
+stesso device. Tornare all'indirizzo di fabbrica significa **cancellare**
+l'opzione, non scriverla vuota: `macaddr=` verrebbe passato al kernel così
+com'è. La sezione invece resta, perché può portare altre impostazioni della
+porta. L'indirizzo di fabbrica non viene letto da nessuna parte: si ritrova
+togliendo l'opzione.
+
+La conferma rilegge l'indirizzo **in uso** e non quello scritto: la scrittura
+l'ha già garantita `uci apply`, mentre quello che conta è che netifd l'abbia
+applicato alla porta. Cambiare il MAC di una porta WAN fa ripartire il DHCP a
+monte e invalida un eventuale login a un captive portal — è anche il motivo per
+cui lo si cambia; su una porta del bridge può cambiare anche l'indirizzo di
+`br-lan`, che prende il proprio da una delle porte che lo compongono.
 
 L'hostname DHCP ha tre modalità: nessun nome (`hostname='*'`), nome del router
 (opzione rimossa), nome personalizzato. È configurabile per WAN e ricordato

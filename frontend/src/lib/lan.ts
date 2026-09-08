@@ -15,6 +15,7 @@
  */
 
 import { call } from './ubus';
+import { normalizeMac } from './wifi';
 
 export interface LanDhcp {
   start: string;
@@ -422,6 +423,12 @@ export interface EthPort {
   network: string;
   carrier: number;
   mwan3: boolean;
+  /** Il MAC con cui la porta si presenta adesso, letto dal kernel. */
+  mac: string;
+  /** Il MAC imposto in configurazione, vuoto se si usa quello di fabbrica. */
+  mac_config: string;
+  /** Sezione `device` di uci che descrive la porta, vuota se non esiste. */
+  device_section: string;
 }
 
 export interface EthPorts {
@@ -434,8 +441,32 @@ export interface EthPorts {
   ports: EthPort[];
 }
 
-export function getEthPorts(): Promise<EthPorts> {
-  return call<EthPorts>('travel', 'ethports');
+/**
+ * Una porta con i campi del MAC sempre presenti.
+ *
+ * `mac`, `mac_config` e `device_section` sono arrivati dopo: un router che ha
+ * ancora l'rpcd precedente non li manda, ed e' lo stato normale fra
+ * l'aggiornamento dell'interfaccia e quello del pacchetto - la UI sta in
+ * `/www`, il metodo in un file diverso. Si riempiono all'ingresso, una volta
+ * sola, cosi' nessuna schermata deve ricordarsi che potrebbero mancare:
+ * leggerne uno assente farebbe morire tutta la scheda LAN per un campo che non
+ * c'e'.
+ *
+ * E' lo stesso trattamento che ricevono le reti salvate nate prima che
+ * l'hostname per rete esistesse.
+ */
+export function withMacDefaults(port: EthPort): EthPort {
+  return {
+    ...port,
+    mac: port.mac ?? '',
+    mac_config: port.mac_config ?? '',
+    device_section: port.device_section ?? '',
+  };
+}
+
+export async function getEthPorts(): Promise<EthPorts> {
+  const info = await call<EthPorts>('travel', 'ethports');
+  return { ...info, ports: (info.ports ?? []).map(withMacDefaults) };
 }
 
 /**
@@ -447,6 +478,69 @@ export function getEthPorts(): Promise<EthPorts> {
  */
 export function wanNetworkName(port: string): string {
   return `wan_${port.replace(/[^A-Za-z0-9_]/g, '_')}`;
+}
+
+/**
+ * Nome della sezione `device` per una porta che non ne ha ancora una.
+ *
+ * Stesse regole di `wanNetworkName`: uci accetta solo lettere, cifre e
+ * trattini bassi nei nomi di sezione, e i nomi di porta con un punto - le VLAN
+ * ne hanno - romperebbero la configurazione senza dire perche'.
+ */
+export function devSectionName(port: string): string {
+  return `dev_${port.replace(/[^A-Za-z0-9_]/g, '_')}`;
+}
+
+/**
+ * Prepara il cambio di MAC di una porta ethernet.
+ *
+ * Il MAC di un device si scrive nella sezione `device` di
+ * `/etc/config/network`, non sull'interfaccia: da OpenWrt 21.02 netifd lo
+ * legge solo da li'. Messo sull'interfaccia verrebbe ignorato in silenzio, che
+ * e' il modo peggiore di sbagliare - la schermata direbbe fatto e la porta si
+ * presenterebbe come prima.
+ *
+ * MAC vuoto significa tornare a quello di fabbrica, e si ottiene cancellando
+ * l'opzione, non scrivendola vuota: `macaddr=` verrebbe passato al kernel
+ * cosi' com'e'. E' la stessa distinzione che vale per la STA WiFi in
+ * `stageStaMac`, ed e' la differenza fra una porta che torna su e una che non
+ * sale piu'.
+ *
+ * La sezione resta anche quando si toglie il MAC: puo' portare altre
+ * impostazioni della porta - l'MTU, per dirne una - e cancellarla per riordino
+ * porterebbe via anche quelle.
+ */
+export async function stageEthMac(port: EthPort, requested: string): Promise<void> {
+  // In forma canonica prima di scrivere: quello che finisce in uci viene poi
+  // confrontato con l'indirizzo che il kernel riporta, sempre minuscolo.
+  const mac = normalizeMac(requested);
+
+  if (mac) {
+    if (port.device_section) {
+      await call('uci', 'set', {
+        config: 'network',
+        section: port.device_section,
+        values: { macaddr: mac },
+      });
+    } else {
+      await call('uci', 'add', {
+        config: 'network',
+        type: 'device',
+        name: devSectionName(port.name),
+        values: { name: port.name, macaddr: mac },
+      });
+    }
+    return;
+  }
+
+  // Non c'era nessuna sezione: non c'e' nemmeno niente da togliere.
+  if (!port.device_section) return;
+
+  await call('uci', 'delete', {
+    config: 'network',
+    section: port.device_section,
+    option: 'macaddr',
+  });
 }
 
 /**

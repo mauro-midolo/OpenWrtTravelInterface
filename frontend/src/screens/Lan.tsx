@@ -18,6 +18,7 @@ import {
   listClients,
   matchDnsProvider,
   prefix24,
+  stageEthMac,
   stageEthPort,
   stripPrefix,
   stageLan,
@@ -35,8 +36,10 @@ import type {
   PortRole,
   WanSubnet,
 } from '../lib/lan';
-import { getUplinks } from '../lib/wifi';
+import { getUplinks, isValidMac, normalizeMac } from '../lib/wifi';
+import type { MacChoice } from '../lib/wifi';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { MacPicker } from '../components/MacPicker';
 
 /**
  * Finestra lunga: dopo lo spostamento il dispositivo deve rinnovare il DHCP e
@@ -228,11 +231,157 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
   );
 }
 
+/**
+ * Quanto si ha per confermare un cambio di MAC su una porta.
+ *
+ * Piu' dei novanta secondi soliti, per lo stesso motivo per cui ne servono di
+ * piu' cambiando il MAC della STA: l'indirizzo nuovo fa cadere il collegamento
+ * e obbliga a rifare il DHCP, e chi sta guardando la pagina proprio da quella
+ * porta deve avere il tempo di tornare dentro.
+ */
+const MAC_ROLLBACK_SECONDS = 150;
+
 const ROLE_LABEL: Record<PortRole, string> = {
   wan: 'WAN (uplink)',
   lan: 'LAN (bridge)',
   free: 'non assegnata',
 };
+
+/**
+ * MAC di una porta ethernet.
+ *
+ * Stessa scelta e stesso controllo del MAC di una rete WiFi - \`MacPicker\` e'
+ * lo stesso componente - perche' e' la stessa decisione presa su un'altra
+ * interfaccia: cambiare i quattro modi o il loro aspetto fra una scheda e
+ * l'altra farebbe pensare a due impostazioni diverse.
+ *
+ * Passa da applica-e-conferma con una verifica in piu', come il cambio di
+ * ruolo della porta: il MAC viene riletto dal router e deve corrispondere a
+ * quello chiesto. "Il router risponde" non basta come prova, perche' da
+ * un'altra porta o dal WiFi risponde comunque anche se netifd non ha applicato
+ * niente.
+ */
+function EthMacSheet({
+  port,
+  onClose,
+}: {
+  port: EthPort;
+  onClose: (changed: boolean) => void;
+}) {
+  const apply = useApply();
+  // Si riparte da com'e' adesso: un MAC gia' imposto compare nella casella
+  // manuale, pronto da correggere invece che da ridigitare.
+  //
+  // Normalizzato anche qui, e non solo quando esce dal controllo: uci conserva
+  // il maiuscolo di un macaddr scritto a mano, e un valore ripreso cosi' com'e'
+  // risulterebbe diverso da se stesso appena confrontato con l'indirizzo in
+  // uso, che il kernel riporta minuscolo. Il foglio si aprirebbe con "Applica"
+  // gia' attivo senza che nulla sia cambiato, e quell'applicazione non
+  // potrebbe mai essere confermata.
+  const [mac, setMac] = useState<MacChoice>(() =>
+    port.mac_config
+      ? { mode: 'manual', value: normalizeMac(port.mac_config) }
+      : { mode: 'device', value: '' },
+  );
+  const [done, setDone] = useState(false);
+
+  // Entrambi in forma canonica: e' l'unico modo perche' il confronto fra il
+  // MAC scritto e quello in uso voglia dire qualcosa.
+  const want = mac.mode === 'device' ? '' : normalizeMac(mac.value);
+  const before = normalizeMac(port.mac_config);
+  const valid = mac.mode === 'device' || isValidMac(want);
+  const changed = want !== before;
+
+  const go = async () => {
+    const confirmed = await apply.run(() => stageEthMac(port, want), {
+      verify: async () => {
+        const fresh = await getEthPorts();
+        const now = fresh.ports.find((p) => p.name === port.name);
+        if (!now) return false;
+        // Si controlla l'indirizzo in uso, non quello scritto: la scrittura in
+        // uci l'ha gia' garantita `uci apply`, mentre quello che interessa e'
+        // che netifd lo abbia davvero messo sulla porta.
+        if (want) return normalizeMac(now.mac) === want;
+        // Ritorno a quello di fabbrica: non lo si conosce in anticipo, ma si sa
+        // che non deve piu' esserci l'opzione e che l'indirizzo non deve piu'
+        // essere quello che si era imposto.
+        return now.mac_config === '' && normalizeMac(now.mac) !== before;
+      },
+      seconds: MAC_ROLLBACK_SECONDS,
+    });
+    if (confirmed) setDone(true);
+  };
+
+  return (
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="sheet__panel card">
+        <h2>MAC di {port.name}</h2>
+
+        {apply.phase === 'idle' && !done && (
+          <>
+            <p class="muted">
+              Adesso la porta si presenta come <code>{port.mac || '—'}</code>
+              {port.mac_config ? ' (indirizzo impostato).' : ' (indirizzo di fabbrica).'}
+            </p>
+
+            <MacPicker
+              choice={mac}
+              onChange={setMac}
+              deviceNote="La porta torna a usare l'indirizzo di fabbrica: l'impostazione viene tolta dalla configurazione."
+            />
+
+            {/* L'avviso dipende da cosa fa la porta adesso, perche' le
+                conseguenze sono opposte: da una parte la rete del posto ti
+                vede come un dispositivo nuovo, dall'altra si muove la rete
+                locale sotto ai tuoi. */}
+            <p class="alert alert--warn">
+              {port.role === 'wan'
+                ? "La rete a monte ti vedrà come un dispositivo nuovo: rifarà il DHCP e un eventuale portale di accesso chiederà di nuovo il login. È anche il motivo per cui si cambia."
+                : port.role === 'lan'
+                  ? "La porta fa parte del bridge locale: il collegamento cade per qualche secondo, e il bridge può cambiare a sua volta indirizzo, perché prende il proprio da una delle porte che lo compongono."
+                  : 'La porta non è assegnata: il nuovo indirizzo varrà da quando le darai un ruolo.'}
+            </p>
+
+            <p class="muted">
+              Se non riesci a confermare, dopo {MAC_ROLLBACK_SECONDS} secondi torna tutto
+              come prima.
+            </p>
+
+            <div class="sheet__actions">
+              <button class="button button--ghost" onClick={() => onClose(false)}>
+                Annulla
+              </button>
+              <button
+                class="button button--primary"
+                disabled={!valid || !changed}
+                onClick={go}
+              >
+                {want ? 'Applica' : 'Togli'}
+              </button>
+            </div>
+          </>
+        )}
+
+        <ApplyStatus apply={apply} onClose={() => onClose(true)} />
+
+        {done && (
+          <>
+            <p class="alert alert--ok">
+              {want
+                ? `${port.name} ora si presenta come ${want}.`
+                : `${port.name} è tornata all'indirizzo di fabbrica.`}
+            </p>
+            <div class="sheet__actions">
+              <button class="button button--primary" onClick={() => onClose(true)}>
+                Chiudi
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Porte ethernet commutabili (requisito C).
@@ -251,6 +400,8 @@ function EthPortCard() {
   const [info, setInfo] = useState<EthPorts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pick, setPick] = useState<{ port: EthPort; target: PortMode } | null>(null);
+  /** Porta di cui si sta cambiando il MAC, o nessuna. */
+  const [macPort, setMacPort] = useState<EthPort | null>(null);
   const [done, setDone] = useState(false);
 
   const load = useCallback(() => {
@@ -320,13 +471,31 @@ function EthPortCard() {
                     : 'cavo non leggibile'}
                 {port.network ? ` · ${port.network}` : ''}
               </span>
+              {/* Il MAC su una riga sua: e' lungo quanto il resto messo
+                  insieme, e in coda alla prima riga la manderebbe a capo su
+                  ogni porta. Quando quello impostato non e' ancora quello in
+                  uso lo si dice, perche' e' la spia di una configurazione
+                  scritta che netifd non ha applicato. */}
+              <span class="net__meta">
+                MAC {port.mac || '—'}
+                {port.mac_config === ''
+                  ? ' · di fabbrica'
+                  : normalizeMac(port.mac_config) === normalizeMac(port.mac)
+                    ? ' · impostato'
+                    : ` · impostato ${port.mac_config}, non ancora applicato`}
+              </span>
             </div>
-            <button
-              class="button button--ghost"
-              onClick={() => setPick({ port, target: port.role === 'wan' ? 'lan' : 'wan' })}
-            >
-              {port.role === 'wan' ? 'Usa come LAN' : 'Usa come WAN'}
-            </button>
+            <div class="port__controls">
+              <button class="button button--ghost" onClick={() => setMacPort(port)}>
+                Cambia MAC
+              </button>
+              <button
+                class="button button--ghost"
+                onClick={() => setPick({ port, target: port.role === 'wan' ? 'lan' : 'wan' })}
+              >
+                {port.role === 'wan' ? 'Usa come LAN' : 'Usa come WAN'}
+              </button>
+            </div>
           </div>
         ))}
 
@@ -339,6 +508,16 @@ function EthPortCard() {
           </p>
         )}
       </section>
+
+      {macPort && (
+        <EthMacSheet
+          port={macPort}
+          onClose={(applied) => {
+            setMacPort(null);
+            if (applied) load();
+          }}
+        />
+      )}
 
       {pick && info && (
         <div class="sheet" role="dialog" aria-modal="true">

@@ -1,24 +1,16 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useApply } from '../lib/apply';
-import {
-  getUplinks,
-  isValidMac,
-  randomMac,
-  stageConnection,
-  uplinkState,
-  wirelessCameUp,
-} from '../lib/wifi';
+import { getUplinks, isValidMac, stageConnection, uplinkState, wirelessCameUp } from '../lib/wifi';
 import { encryptionForSta } from '../lib/wifi';
-import type { ConnectionPlan, MacChoice, MacMode, ScanResult, Uplink } from '../lib/wifi';
+import type { ConnectionPlan, MacChoice, ScanResult, Uplink } from '../lib/wifi';
 import { findSaved, fromScan, hostnameOf, markUsed, saveNetwork, updateNetwork } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import { HOSTNAME_OFF, getSystem, isValidHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { checkPortal, portalReason } from '../lib/portal';
 import type { PortalResult } from '../lib/portal';
-import { clientTitle, listClients } from '../lib/lan';
-import type { LanClient } from '../lib/lan';
 import { HostnamePicker } from '../components/HostnamePicker';
+import { MacPicker } from '../components/MacPicker';
 import { ApplyStatus } from '../components/ApplyStatus';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -39,11 +31,7 @@ export function ConnectSheet({
 }) {
   const apply = useApply();
   const [password, setPassword] = useState('');
-  const [macMode, setMacMode] = useState<MacMode>('device');
-  const [macRandom, setMacRandom] = useState(randomMac);
-  const [macManual, setMacManual] = useState('');
-  const [macClone, setMacClone] = useState('');
-  const [clients, setClients] = useState<LanClient[] | null>(null);
+  const [mac, setMac] = useState<MacChoice>({ mode: 'device', value: '' });
   const [remember, setRemember] = useState(true);
   const [checking, setChecking] = useState(false);
   const [probing, setProbing] = useState(false);
@@ -76,30 +64,16 @@ export function ConnectSheet({
     };
   }, []);
 
-  // L'elenco dei dispositivi si legge solo se serve davvero: e' una passata sui
-  // lease e sulla tabella dei vicini, inutile per chi non clona niente.
-  useEffect(() => {
-    if (macMode !== 'clone' || clients !== null) return;
-    let cancelled = false;
-    void listClients()
-      .then((list) => !cancelled && setClients(list))
-      .catch(() => !cancelled && setClients([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [macMode, clients]);
-
-  const macValue =
-    macMode === 'random' ? macRandom : macMode === 'clone' ? macClone : macManual;
-  const macOk = macMode === 'device' || isValidMac(macValue);
+  const macOk = mac.mode === 'device' || isValidMac(mac.value);
   const passwordOk = net.open || password.length >= 8;
   const hostnameOk = hostname.mode !== 'custom' || isValidHostname(hostname.value.trim());
 
   const start = async (event: Event) => {
     event.preventDefault();
-    const mac: MacChoice = { mode: macMode, value: macValue.toLowerCase() };
+    // Il valore arriva gia' normalizzato da MacPicker: qui non si ritocca.
+    const chosen: MacChoice = { mode: mac.mode, value: mac.value };
 
-    const confirmed = await apply.run(() => stageConnection(net, password, plan, mac, hostname), {
+    const confirmed = await apply.run(() => stageConnection(net, password, plan, chosen, hostname), {
       // "Il router risponde" non basta: da cavo risponde sempre. Si conferma
       // solo se le radio hanno davvero accettato la configurazione.
       verify: wirelessCameUp,
@@ -184,8 +158,8 @@ export function ConnectSheet({
           fromScan(
             net,
             password,
-            macMode,
-            macValue.toLowerCase(),
+            mac.mode,
+            mac.value,
             encryptionForSta(net),
             hostname,
           ),
@@ -259,94 +233,7 @@ export function ConnectSheet({
               </label>
             )}
 
-            <div class="field">
-              <span>Indirizzo MAC da usare</span>
-              <div class="chips">
-                {(
-                  [
-                    ['device', 'Della scheda'],
-                    ['random', 'Casuale'],
-                    ['manual', 'Manuale'],
-                    ['clone', 'Di un dispositivo'],
-                  ] as const
-                ).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    class={macMode === mode ? 'chip chip--on' : 'chip'}
-                    onClick={() => setMacMode(mode)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {macMode === 'random' && (
-                <div class="mac-row">
-                  <code>{macRandom}</code>
-                  <button
-                    type="button"
-                    class="button button--ghost"
-                    onClick={() => setMacRandom(randomMac())}
-                  >
-                    Rigenera
-                  </button>
-                </div>
-              )}
-
-              {macMode === 'manual' && (
-                <input
-                  type="text"
-                  value={macManual}
-                  placeholder="aa:bb:cc:dd:ee:ff"
-                  autocapitalize="none"
-                  autocomplete="off"
-                  spellcheck={false}
-                  onInput={(e) => setMacManual((e.target as HTMLInputElement).value)}
-                />
-              )}
-
-              {/* Il MAC di un dispositivo gia' autenticato: serve dove il
-                  portale autorizza gli indirizzi, e vale la pena impostarlo
-                  prima di collegarsi se si sa gia' che quella rete lo fa. */}
-              {macMode === 'clone' && (
-                <>
-                  {clients === null && <span class="muted">Leggo i dispositivi collegati…</span>}
-                  {clients !== null && clients.length === 0 && (
-                    <span class="muted">
-                      Nessun dispositivo visto sulla LAN. Collega al router il telefono con
-                      cui hai fatto l'accesso e riprova.
-                    </span>
-                  )}
-                  {clients !== null && clients.length > 0 && (
-                    <div class="chips">
-                      {clients.map((client) => (
-                        <button
-                          key={client.mac}
-                          type="button"
-                          class={macClone === client.mac.toLowerCase() ? 'chip chip--on' : 'chip'}
-                          onClick={() => setMacClone(client.mac.toLowerCase())}
-                        >
-                          {clientTitle(client)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {macClone && (
-                    <span class="muted">
-                      <code>{macClone}</code> — mentre il router lo usa, quel dispositivo non
-                      deve restare collegato direttamente a questa rete.
-                    </span>
-                  )}
-                </>
-              )}
-
-              {macMode === 'manual' && macManual !== '' && !macOk && (
-                <span class="muted">
-                  Formato non valido, o primo byte dispari (sarebbe un indirizzo multicast).
-                </span>
-              )}
-            </div>
+            <MacPicker choice={mac} onChange={setMac} />
 
             <HostnamePicker
               choice={hostname}

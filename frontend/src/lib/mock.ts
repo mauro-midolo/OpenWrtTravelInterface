@@ -284,10 +284,36 @@ const ethState = {
   bridgePorts: ['eth1'],
   zoneSection: '@zone[1]',
   zoneNetworks: ['wan', 'wwan_radio0', 'wwan_radio1'],
-  /** Le due porte 2.5G del dispositivo. */
+  /**
+   * Le due porte 2.5G del dispositivo.
+   *
+   * `mac` e' l'indirizzo con cui la porta si presenta adesso; `factory`
+   * quello scritto nella scheda, che il simulatore tiene per poterci tornare -
+   * sul router non lo si legge da nessuna parte, si ritrova togliendo
+   * l'opzione. `macConfig` e' l'eventuale indirizzo imposto in
+   * configurazione, e `devSection` la sezione `device` che lo porta.
+   */
   ports: [
-    { name: 'eth0', network: 'wan', disabled: false, carrier: 0 },
-    { name: 'eth1', network: '', disabled: false, carrier: 1 },
+    {
+      name: 'eth0',
+      network: 'wan',
+      disabled: false,
+      carrier: 0,
+      mac: '94:83:c4:d6:c7:40',
+      factory: '94:83:c4:d6:c7:40',
+      macConfig: '',
+      devSection: '',
+    },
+    {
+      name: 'eth1',
+      network: '',
+      disabled: false,
+      carrier: 1,
+      mac: '94:83:c4:d6:c7:41',
+      factory: '94:83:c4:d6:c7:41',
+      macConfig: '',
+      devSection: '',
+    },
   ],
 };
 
@@ -655,6 +681,18 @@ const scanFixtures = [
 const hiddenAps: Array<{ ssid: string; band: '2.4' | '5' }> = [
   { ssid: 'Uffici-Interni', band: '5' },
 ];
+
+/**
+ * L'indirizzo come lo riporterebbe il kernel dopo averlo applicato.
+ *
+ * uci conserva quello che ci si scrive - anche in maiuscolo, se qualcuno ha
+ * modificato /etc/config/network a mano - mentre `/sys/class/net/*` e' sempre
+ * minuscolo. Il simulatore tiene le due forme separate perche' e' proprio la
+ * loro differenza che fa sbagliare i confronti fra "scritto" e "in uso".
+ */
+function appliedMac(written: string): string {
+  return written.trim().toLowerCase();
+}
 
 /** Se un punto di accesso con questo nome esiste su questa banda. */
 function apExists(ssid: string, band: '2.4' | '5'): boolean {
@@ -1666,6 +1704,9 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       network: p.network,
       carrier: p.carrier,
       mwan3: false,
+      mac: p.mac,
+      mac_config: p.macConfig,
+      device_section: p.devSection,
     })),
   }),
 
@@ -1800,6 +1841,20 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       return {};
     }
 
+    // MAC tolto da una porta: torna quello di fabbrica. Vale la stessa
+    // distinzione del nome DHCP qui sotto - cancellare l'opzione non e'
+    // scriverla vuota - e per il MAC e' la differenza fra una porta che torna
+    // su e una che non sale piu'.
+    if (args.config === 'network' && args.option === 'macaddr') {
+      pending.push(() => {
+        const port = ethState.ports.find((p) => p.devSection === section);
+        if (!port) return;
+        port.macConfig = '';
+        port.mac = port.factory;
+      });
+      return {};
+    }
+
     // Nome DHCP tolto: l'interfaccia torna al default di OpenWrt, cioe' manda
     // il nome del router. Cancellare l'opzione e scriverla vuota non sono la
     // stessa cosa, e il simulatore deve distinguerle come il router.
@@ -1849,6 +1904,24 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   'uci.add': (args) => {
     const values = (args.values ?? {}) as Record<string, string>;
+
+    // Sezione `device`: e' li' che vive il MAC di una porta, non
+    // sull'interfaccia. Prima del ramo delle interfacce, che si riconosce da
+    // `device` e non da `name`, per non dipendere dall'ordine dei campi.
+    if (args.config === 'network' && args.type === 'device') {
+      const section = String(args.name ?? '');
+      const target = values.name ?? '';
+      pending.push(() => {
+        const port = ethState.ports.find((p) => p.name === target);
+        if (!port) return;
+        port.devSection = section;
+        if (values.macaddr !== undefined) {
+          port.macConfig = values.macaddr;
+          port.mac = appliedMac(values.macaddr);
+        }
+      });
+      return {};
+    }
 
     // Nuova interfaccia WAN per una porta che prima non ne aveva una.
     if (args.config === 'network' && values.device) {
@@ -1923,6 +1996,19 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         if (Array.isArray(raw.ports)) ethState.bridgePorts = raw.ports.map(String);
       });
       return {};
+    }
+
+    // MAC riscritto su una porta che ha gia' la sua sezione `device`.
+    {
+      const port = ethState.ports.find((p) => p.devSection !== '' && p.devSection === section);
+      if (args.config === 'network' && port && values.macaddr !== undefined) {
+        const mac = values.macaddr;
+        pending.push(() => {
+          port.macConfig = mac;
+          port.mac = appliedMac(mac);
+        });
+        return {};
+      }
     }
 
     if (args.config === 'firewall' && section === ethState.zoneSection) {
