@@ -70,7 +70,7 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 | LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli e indirizzo MAC delle porte ethernet, elenco dei dispositivi collegati. |
 | Internet | Dashboard per WAN, traffico corrente e della sessione, stato del collegamento e dei portali, multi-WAN, regole di routing e health check. |
 | VPN | Accesso e impostazioni Tailscale, nodi del tailnet, importazione e controllo WireGuard, diagnostica del routing, kill switch e sospensione temporanea. |
-| Impostazioni | Stato e nome del router, periferiche e modalità USB, profili, backup e ripristino, orologio/NTP, riavvio e collegamento a LuCI. |
+| Impostazioni | Stato e nome del router, interruttore del LED di stato, periferiche e modalità USB, profili, backup e ripristino, orologio/NTP, riavvio e collegamento a LuCI. |
 
 `src/lib/` contiene client RPC, tipi, trasformazioni, validazioni e sequenze
 di scrittura UCI. `src/screens/` contiene schermate e pannelli;
@@ -682,6 +682,43 @@ applica il valore del profilo. Non usa rollback e non ripristina ogni
 parametro: health check, regole personalizzate e parametri di blacklist,
 per esempio, non fanno parte dello snapshot.
 
+### LED di stato
+
+Il LED e' un interruttore fra i dati del dispositivo in Impostazioni, subito
+sotto «Memoria in uso»: e' una preferenza, non una funzione con una scheda sua.
+Acceso tiene fisso il colore identificato da `led-running`; spento spegne
+tutti i colori associati agli alias di stato `running`, `boot`, `failsafe` e
+`upgrade`, senza toccare i LED delle porte. Il rilevamento usa `get_dt_led` di
+OpenWrt: sul Beryl 7 gli alias identificano il blu e il bianco, come nella
+[definizione hardware OpenWrt](https://github.com/openwrt/openwrt/blob/openwrt-25.12/target/linux/mediatek/dts/mt7987a-glinet-gl-mt3600be.dts).
+Se il controllo non è disponibile, la riga mostra «non disponibile» al posto
+dell'interruttore.
+
+`src/lib/led.ts` espone `getStatusLed()` e `setStatusLed(enabled)` per altre
+schermate. I metodi RPC `travel.led_get` e `travel.led_set` usano le funzioni
+di `/usr/share/travel/led.sh`: `led_detect`, `led_get`, `led_set 0|1` e
+`led_apply`. Il setter valida l'input booleano, disabilita i trigger e scrive
+la luminosità immediatamente, senza apply di rete. La risposta di successo
+arriva dopo il salvataggio; gli errori lasciano visibile l'ultima scelta
+confermata e il backend tenta di ripristinare luminosità e trigger precedenti.
+
+La preferenza è salvata in `/etc/config/travel_led`, sezione `led 'main'`,
+opzione `enabled '0'|'1'`. Un file UCI dedicato e una sostituzione atomica
+evitano di committare modifiche di rete pendenti. Un lock serializza le
+scritture LED; risalvare lo stesso valore non riscrive la flash. Il file
+rientra nel backup standard delle configurazioni OpenWrt.
+
+Il setup abilita `/etc/init.d/travel-led` (START=99), che richiama lo stesso
+helper dopo `done` (95) e `led` (96). La scelta viene quindi ripristinata a
+fine avvio; le indicazioni del bootloader, dell'avvio iniziale e del failsafe
+restano possibili. Senza una preferenza salvata viene conservato il
+comportamento OpenWrt e la prima lettura mostra la luminosità corrente.
+
+I test coprono UI, simulatore e helper shell con sysfs/UCI simulati, inclusi
+ripristino in un nuovo processo, errori di scrittura, rollback e lock.
+Su Windows i test shell richiedono Git Bash nel percorso di installazione
+standard. La verifica fisica del LED e del reboot resta da eseguire sul router.
+
 ### Backup, orologio e riavvio
 
 Il backup è l'archivio OpenWrt di `sysupgrade -b`, restituito in base64 tramite
@@ -712,7 +749,7 @@ dal frontend.
 
 | Oggetto | Area | Metodi |
 |---|---|---|
-| `travel` | Stato e dispositivo | `status`, `system`, `usb`, `usb_devices`, `usb_mode`, `usb_reset` |
+| `travel` | Stato e dispositivo | `status`, `system`, `led_get`, `led_set`, `usb`, `usb_devices`, `usb_mode`, `usb_reset` |
 | `travel` | WiFi | `radios`, `uplinks`, `ap`, `scan`, `networks`, `stage_connect_saved`, `mark_used`, `sta_diagnose` |
 | `travel` | LAN e multi-WAN | `lan`, `ethports`, `clients`, `mwan`, `mwan_apply` |
 | `travel` | Portali | `portal_probe`, `portal_networks`, `portal_forget` |
@@ -839,7 +876,7 @@ né una roadmap approvata.
   coerente richiedono altro lavoro. Vanno verificati failover con traffico
   reale, riavvio dei servizi, rotte Tailscale e ambito effettivo del kill
   switch, incluse connessioni già stabilite.
-- **Verifiche ripetibili:** la suite automatica copre la condivisione WiFi;
+- **Verifiche ripetibili:** la suite automatica copre la condivisione WiFi e il controllo LED con hardware simulato;
   manca una pipeline CI e il simulatore non sostituisce test su OpenWrt. Servono prove
   riproducibili di rollback, rinnovo DHCP dopo cambio LAN, USB, routing VPN
   e ripristino backup. Gli script di misura della scansione non costituiscono

@@ -19,6 +19,8 @@ say "permessi sugli eseguibili"
 chmod 0755 /usr/libexec/rpcd/travel
 chmod 0755 /usr/share/travel/setup.sh
 chmod 0755 /etc/init.d/travel
+chmod 0755 /etc/init.d/travel-led
+chmod 0755 /usr/share/travel/led.sh
 chmod 0755 /etc/hotplug.d/net/30-travel-usb
 chmod 0755 /etc/hotplug.d/net/40-travel-vpn
 chmod 0755 /etc/hotplug.d/usb/20-travel-usb-mode
@@ -442,6 +444,8 @@ sh /usr/share/travel/vpn-setup.sh
 
 say "avvio travelD"
 /etc/init.d/travel enable  >/dev/null 2>&1
+/etc/init.d/travel-led enable
+/etc/init.d/travel-led start
 /etc/init.d/travel restart >/dev/null 2>&1
 
 say "riavvio rpcd"

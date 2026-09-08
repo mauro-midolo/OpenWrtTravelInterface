@@ -43,6 +43,34 @@ anon_section() {
 		done
 }
 
+method_led_get() {
+	. /usr/share/travel/led.sh
+	if ! led_detect 2>/dev/null; then
+		json_init
+		json_add_boolean supported 0
+		json_add_boolean enabled 0
+		json_dump
+		return
+	fi
+	led_get || { fail_json "Impossibile leggere lo stato del LED."; return; }
+	json_init
+	json_add_boolean supported 1
+	json_add_boolean enabled "$LED_ENABLED"
+	json_dump
+}
+
+method_led_set() {
+	local input enabled type error
+	input=$(cat)
+	json_load "$input" || { fail_json "Richiesta LED non valida."; return; }
+	json_get_type type enabled
+	json_get_var enabled enabled
+	[ "$type" = boolean ] || { fail_json "enabled deve essere booleano."; return; }
+	. /usr/share/travel/led.sh
+	error=$(led_set "$enabled" 2>&1) || { fail_json "$error"; return; }
+	method_led_get
+}
+
 method_status() {
 	local uptime idle load1 load5 load15 temp
 
@@ -4504,6 +4532,11 @@ case "$1" in
 		json_close_object
 		json_add_object system
 		json_close_object
+		json_add_object led_get
+		json_close_object
+		json_add_object led_set
+		json_add_boolean enabled 0
+		json_close_object
 		json_add_object radios
 		json_close_object
 		json_add_object uplinks
@@ -4652,6 +4685,8 @@ case "$1" in
 			usb)                  method_usb ;;
 			usb_devices)          method_usb_devices ;;
 			usb_mode)             method_usb_mode ;;
+			led_get)              method_led_get ;;
+			led_set)              method_led_set ;;
 			usb_reset)            method_usb_reset ;;
 			portal_probe)         method_portal_probe ;;
 			portal_networks)      method_portal_networks ;;

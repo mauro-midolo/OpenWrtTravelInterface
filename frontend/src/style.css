@@ -162,6 +162,22 @@ p {
   overflow-wrap: anywhere;
 }
 
+/* Un interruttore al posto del valore: sta nella colonna di destra come
+   ci sta un numero, senza portarsi dietro una scheda intera. */
+label.row {
+  cursor: pointer;
+}
+
+.row__toggle {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  flex: none;
+  /* La riga allinea alla linea di base; una casella non ne ha una utile. */
+  align-self: center;
+  margin: 0;
+}
+
 .login {
   gap: 16px;
 }

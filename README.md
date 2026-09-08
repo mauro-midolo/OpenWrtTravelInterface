@@ -69,7 +69,7 @@ patch release o build del firmware.
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
 | **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
 | **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
-| **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, gestire USB, orologio e riavvio pianificato. |
+| **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, accendere e spegnere il LED di stato, gestire USB, orologio e riavvio pianificato. |
 
 Per esempio, in hotel puoi collegare il router al WiFi della struttura,
 completare l'accesso al portale e continuare a usare la tua rete personale.
@@ -193,6 +193,9 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+Su Windows, i test dell?helper LED richiedono Git Bash nel percorso standard
+`C:/Program Files/Git/bin/bash.exe`.
 
 ## Contribuire
 

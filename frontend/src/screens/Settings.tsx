@@ -6,6 +6,7 @@ import { getStatus, getUsb, getUsbDevices, resetUsb, setUsbMode } from '../lib/d
 import type { DeviceStatus, UsbDevice, UsbDevices } from '../lib/device';
 import { getSystem, isValidHostname, setSystemHostname } from '../lib/hostname';
 import { BackupCard, ProfilesCard, RebootCard, TimeCard } from './System';
+import { StatusLedRow } from '../components/StatusLedRow';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -456,6 +457,10 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
             <Row label="Memoria in uso" value={`${mem}%`} />
           </>
         )}
+
+        {/* Il LED viene da una chiamata sua: la riga resta anche quando lo
+            stato del dispositivo non arriva. */}
+        <StatusLedRow />
 
         {poll.error && !(poll.error instanceof UbusError && poll.error.isAuthError) && (
           <p class="alert alert--warn alert--code">{poll.error.message}</p>

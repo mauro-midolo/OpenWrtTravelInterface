@@ -3,7 +3,7 @@
 		"description": "Interfaccia di gestione per router da viaggio",
 		"read": {
 			"ubus": {
-				"travel": [ "status", "system", "radios", "uplinks", "ap", "scan", "networks", "lan", "ethports", "clients", "mwan", "usb", "usb_devices", "portal_networks", "sta_diagnose", "vpn", "wg_get", "profile_list", "time_get", "reboot_get" ],
+				"travel": [ "status", "system", "led_get", "radios", "uplinks", "ap", "scan", "networks", "lan", "ethports", "clients", "mwan", "usb", "usb_devices", "portal_networks", "sta_diagnose", "vpn", "wg_get", "profile_list", "time_get", "reboot_get" ],
 				"traveld": [ "status", "dashboard", "portal" ],
 				"session": [ "access", "get" ],
 				"uci": [ "get", "changes" ]
@@ -12,7 +12,7 @@
 		},
 		"write": {
 			"ubus": {
-				"travel": [ "stage_connect_saved", "mark_used", "mwan_apply", "usb_mode", "usb_reset", "portal_probe", "portal_forget", "ts_login", "ts_apply", "ts_down", "ts_logout", "wg_toggle", "wg_import", "wg_save", "wg_delete", "profile_save", "profile_apply", "profile_delete", "backup_export", "backup_import", "time_set", "reboot_set", "reboot_now" ],
+				"travel": [ "led_set", "stage_connect_saved", "mark_used", "mwan_apply", "usb_mode", "usb_reset", "portal_probe", "portal_forget", "ts_login", "ts_apply", "ts_down", "ts_logout", "wg_toggle", "wg_import", "wg_save", "wg_delete", "profile_save", "profile_apply", "profile_delete", "backup_export", "backup_import", "time_set", "reboot_set", "reboot_now" ],
 				"traveld": [ "reset", "portal_check" ],
 				"uci": [ "add", "set", "delete", "apply", "confirm", "rollback" ]
 			},

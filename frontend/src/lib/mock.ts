@@ -325,6 +325,8 @@ const ethState = {
  * `*` significa "non inviarlo" ed e' il default del progetto: setup.sh lo
  * scrive su tutte le WAN, e il simulatore parte dallo stesso stato.
  */
+const statusLedState = { supported: true, enabled: true };
+
 const systemState = { hostname: 'OpenWrt', section: 'cfg01e48a' };
 
 /**
@@ -1796,6 +1798,13 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       disabled: !usbDevices[0]?.netdev,
     },
   }),
+
+  'travel.led_get': () => ({ ...statusLedState }),
+  'travel.led_set': (args) => {
+    if (typeof args.enabled !== 'boolean') return { error: 'enabled deve essere booleano.' };
+    statusLedState.enabled = args.enabled;
+    return { ...statusLedState };
+  },
 
   'travel.usb': () => ({
     force_usb2: usbState.force_usb2,
