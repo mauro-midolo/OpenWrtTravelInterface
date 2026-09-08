@@ -3,7 +3,7 @@
 		"description": "Interfaccia di gestione per router da viaggio",
 		"read": {
 			"ubus": {
-				"travel": [ "status", "system", "radios", "uplinks", "ap", "scan", "networks", "lan", "ethports", "clients", "mwan", "usb", "usb_devices", "portal_networks", "vpn", "wg_get", "profile_list", "time_get", "reboot_get" ],
+				"travel": [ "status", "system", "radios", "uplinks", "ap", "scan", "networks", "lan", "ethports", "clients", "mwan", "usb", "usb_devices", "portal_networks", "sta_diagnose", "vpn", "wg_get", "profile_list", "time_get", "reboot_get" ],
 				"traveld": [ "status", "dashboard", "portal" ],
 				"session": [ "access", "get" ],
 				"uci": [ "get", "changes" ]

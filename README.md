@@ -64,7 +64,7 @@ patch release o build del firmware.
 
 | Area | Funzioni disponibili |
 |---|---|
-| **WiFi** | Cercare e collegare reti, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate, con credenziali e priorità, hanno una pagina dedicata con la ricerca per nome. |
+| **WiFi** | Cercare e collegare reti, aggiungere a mano una rete nascosta, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate, con credenziali e priorità, hanno una pagina dedicata con la ricerca per nome. |
 | **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
 | **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
@@ -89,7 +89,9 @@ verifiche sul dispositivo per i diversi scenari di rete.
   una alla volta; non offre split tunneling né più tunnel attivi insieme.
 - Il kill switch blocca l'inoltro dalla LAN alla WAN; il suo ambito e i suoi
   limiti sono descritti nell'architettura.
-- La UI non configura reti WiFi Enterprise, SSID nascosti o reti ospiti isolate.
+- La UI non configura reti WiFi Enterprise né reti ospiti isolate. Gli SSID
+  nascosti si aggiungono a mano dalla scheda WiFi, indicando nome, banda e tipo
+  di sicurezza.
 - Il simulatore aiuta a provare i flussi, ma non sostituisce le verifiche su
   OpenWrt. Il repository non include ancora una suite automatica o una pipeline CI.
 

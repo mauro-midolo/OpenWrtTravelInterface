@@ -26,6 +26,17 @@ function jitter(base: number, spread: number): number {
 const BLACKOUT_MS = 9000;
 /** Quanto ci mette la STA a prendere un indirizzo dopo essersi agganciata. */
 const DHCP_MS = 5000;
+/**
+ * Quanto resta associata una STA con la password sbagliata.
+ *
+ * Non zero, ed e' il punto: con WPA l'associazione riesce comunque, ed e'
+ * l'handshake a quattro vie che fallisce subito dopo. Per quei pochi secondi
+ * l'uplink mostra l'SSID senza indirizzo - identico a un DHCP lento - e chi
+ * guarda una volta sola in quella finestra scambia un rifiuto per un'attesa.
+ * Il simulatore la riproduce perche' e' proprio li' che la schermata puo'
+ * sbagliare verdetto.
+ */
+const HANDSHAKE_MS = 3000;
 
 interface MockSta {
   ssid: string;
@@ -65,7 +76,15 @@ interface MockSaved {
   disabled: boolean;
   last_used: number;
   last_result: string;
-  has_key: boolean;
+  /**
+   * La password, che non esce mai di qui.
+   *
+   * Sul router sta in `/etc/config/travel` e `travel.networks` non la
+   * riporta: dice solo `has_key`. Il simulatore fa lo stesso, e la tiene
+   * perche' e' l'unico modo di riprodurre una connessione rifiutata per
+   * password sbagliata, che e' un esito che la schermata deve distinguere.
+   */
+  key: string;
 }
 
 const savedNetworks: Record<string, MockSaved> = {
@@ -84,7 +103,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 86400 * 3,
     last_result: 'ok',
-    has_key: true,
+    key: 'hotelguest',
   },
   // Stessa rete di casa sulle due bande: due voci indipendenti, con priorita'
   // diverse. E' il caso che l'elenco unico non sapeva rappresentare.
@@ -105,7 +124,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 3600,
     last_result: 'ok',
-    has_key: true,
+    key: 'casacasacasa',
   },
   net_casa24: {
     section: 'net_casa24',
@@ -122,7 +141,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 7200,
     last_result: 'ok',
-    has_key: true,
+    key: 'casacasacasa',
   },
   // Le voci che seguono servono a provare la pagina dedicata quando le reti
   // sono tante: da sole fanno comparire la ricerca, e coprono i casi che la
@@ -142,7 +161,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 86400 * 6,
     last_result: 'portal',
-    has_key: false,
+    key: '',
   },
   net_treno: {
     section: 'net_treno',
@@ -159,7 +178,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: true,
     last_used: Math.floor(Date.now() / 1000) - 86400 * 41,
     last_result: 'no-address',
-    has_key: true,
+    key: 'trenitalia',
   },
   // Nascosta: non compare in nessuna scansione, quindi nell'elenco e' l'unica
   // che si riconosce solo dall'etichetta.
@@ -178,7 +197,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 86400 * 12,
     last_result: 'ok',
-    has_key: true,
+    key: 'segretissima',
   },
   net_coworking: {
     section: 'net_coworking',
@@ -195,7 +214,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 86400 * 20,
     last_result: 'unassociated',
-    has_key: true,
+    key: 'coworking2024',
   },
   net_tim: {
     section: 'net_tim',
@@ -212,7 +231,7 @@ const savedNetworks: Record<string, MockSaved> = {
     disabled: false,
     last_used: 0,
     last_result: '',
-    has_key: true,
+    key: 'timtimtim',
   },
 };
 
@@ -609,12 +628,93 @@ const scanFixtures = [
   { ssid: 'Hotel-Guest', channel: 1, signal: -67, wpa: [2], auth: ['psk'] },
   { ssid: 'Hotel-Guest', channel: 11, signal: -80, wpa: [2], auth: ['psk'] },
   { ssid: 'Hotel-WiFi-Free', channel: 11, signal: -63, wpa: [], auth: ['none'] },
+  // La rete di casa sulle due bande: e' salvata due volte, ed e' anche il modo
+  // di vedere nell'elenco della scansione le due configurazioni separate.
+  { ssid: 'Casa Mia', channel: 3, signal: -55, wpa: [2], auth: ['psk'] },
+  { ssid: 'Casa Mia', channel: 40, signal: -61, wpa: [2], auth: ['psk'] },
   { ssid: 'Vodafone-12345', channel: 1, signal: -71, wpa: [2], auth: ['psk'] },
   { ssid: 'FASTWEB-ABCDEF', channel: 36, signal: -74, wpa: [2, 3], auth: ['psk', 'sae'] },
   { ssid: '', channel: 100, signal: -78, wpa: [2], auth: ['psk'] },
   { ssid: 'iPhone di Marco', channel: 9, signal: -82, wpa: [2], auth: ['psk'] },
   { ssid: 'TIM-9988776', channel: 149, signal: -88, wpa: [2], auth: ['psk'] },
 ];
+
+/**
+ * Le reti nascoste che nel simulatore esistono davvero.
+ *
+ * Non stanno in `scanFixtures` ed e' esattamente il punto: una rete nascosta
+ * non compare in nessuna scansione, e il router la trova solo sondando il nome
+ * che gli e' stato scritto a mano. Sono la controparte necessaria del modulo
+ * "aggiungi rete nascosta": senza, ogni rete aggiunta risulterebbe inesistente
+ * e non si potrebbe mai provare il caso che riesce.
+ *
+ * La banda fa parte dell'identita' anche qui: la stessa rete cercata sulla
+ * banda sbagliata non si trova, che e' proprio cio' che le due configurazioni
+ * separate devono far vedere.
+ */
+const hiddenAps: Array<{ ssid: string; band: '2.4' | '5' }> = [
+  { ssid: 'Uffici-Interni', band: '5' },
+];
+
+/** Se un punto di accesso con questo nome esiste su questa banda. */
+function apExists(ssid: string, band: '2.4' | '5'): boolean {
+  const visible = scanFixtures.some(
+    (n) => n.ssid === ssid && (n.channel <= 14) === (band === '2.4'),
+  );
+  return visible || hiddenAps.some((n) => n.ssid === ssid && n.band === band);
+}
+
+/**
+ * Perche' questa STA non si aggancia, se non si aggancia.
+ *
+ * Due regole sole, dichiarate qui una volta: la password letterale
+ * "sbagliata" viene rifiutata, e un nome che su quella banda non esiste non
+ * viene trovato. Servono a riprodurre i due esiti che dall'esterno si vedono
+ * uguali - nessuna associazione - ma che la schermata deve distinguere perche'
+ * hanno rimedi opposti.
+ */
+function staFailure(sta: MockSta, band: '2.4' | '5'): '' | 'wrong-key' | 'not-found' {
+  if (!apExists(sta.ssid, band)) return 'not-found';
+  if (sta.key === 'sbagliata') return 'wrong-key';
+  return '';
+}
+
+/**
+ * Il log di sistema, per la parte che riguarda le STA.
+ *
+ * Si accumula invece di essere generato al momento della domanda, ed e'
+ * l'accumulo il punto: sul router il log e' la storia di tutta la radio, il
+ * nome dell'interfaccia non cambia da una rete all'altra, e la riga di un
+ * tentativo di ieri resta li' a corrispondere anche oggi. E' esattamente la
+ * trappola che il segnalibro di `sta_diagnose` deve evitare, e un simulatore
+ * che ricostruisse il log ogni volta non la riprodurrebbe.
+ */
+let staLog: string[] = [];
+
+/** Le righe che wpa_supplicant scriverebbe per il tentativo appena applicato. */
+function noteStaAttempt(name: string): void {
+  const radio = radios[name];
+  if (!radio || !radio.sta) return;
+
+  const iface = `phy${radio.index}-sta0`;
+  staLog.push(`daemon.notice netifd: ${name} (1299): Interface setup`);
+
+  switch (staFailure(radio.sta, radio.band)) {
+    case 'wrong-key':
+      staLog.push(
+        `daemon.notice wpa_supplicant[1428]: ${iface}: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid="${radio.sta.ssid}" auth_failures=1 duration=10 reason=WRONG_KEY`,
+      );
+      break;
+    case 'not-found':
+      staLog.push(`daemon.notice wpa_supplicant[1428]: ${iface}: CTRL-EVENT-SCAN-STARTED`);
+      staLog.push(`daemon.notice wpa_supplicant[1428]: ${iface}: CTRL-EVENT-NETWORK-NOT-FOUND`);
+      break;
+    default:
+      staLog.push(
+        `daemon.notice wpa_supplicant[1428]: ${iface}: CTRL-EVENT-CONNECTED - Connection to ${fakeBssid(radio.sta.ssid)} completed`,
+      );
+  }
+}
 
 /**
  * Verdetto sull'uscita di una WAN, con la stessa forma di `travel.portal_probe`.
@@ -745,8 +845,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           hostname: wanHostnames[`wwan_${name}`] ?? '',
         };
 
-        // Password sbagliata: la radio non si aggancia, quindi niente SSID.
-        if (sta.key === 'sbagliata') return { ...base, ssid: '' };
+        const failure = staFailure(sta, r.band);
+        if (failure !== '') {
+          // La password sbagliata passa per un'associazione breve prima di
+          // cadere; una rete che non c'e' non si aggancia proprio mai. Dopo la
+          // caduta i due casi si vedono uguali, come sul router: a
+          // distinguerli e' `travel.sta_diagnose`, che legge il log.
+          const associating =
+            failure === 'wrong-key' && Date.now() - sta.since < HANDSHAKE_MS;
+          return { ...base, ssid: associating ? sta.ssid : '' };
+        }
 
         const hasIp = Date.now() - sta.since > DHCP_MS;
         const octet = r.index === 0 ? '76' : '43';
@@ -1562,8 +1670,48 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   }),
 
   'travel.networks': () => ({
-    networks: Object.values(savedNetworks),
+    // La chiave non esce, come non esce da `travel.networks` sul router: si
+    // dice solo se c'e'.
+    networks: Object.values(savedNetworks).map(({ key, ...net }) => ({
+      ...net,
+      has_key: key !== '',
+    })),
   }),
+
+  /**
+   * Perche' la STA non si e' agganciata, leggendo il log come fa il router.
+   *
+   * Senza `after` si risponde solo con il segnalibro e nessun verdetto: e' il
+   * contratto del metodo vero, e serve a non attribuire a questo tentativo le
+   * righe di quello prima. Le righe sono quelle di wpa_supplicant, perche' la
+   * schermata le mostra alla lettera.
+   */
+  'travel.sta_diagnose': (args) => {
+    const name = String(args.radio ?? '');
+    const radio = radios[name];
+    const mark = staLog.length;
+
+    const raw = Number(args.after ?? 0);
+    const after = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+    if (!radio || after === 0) return { state: '', detail: '', mark };
+
+    // Come sul router: si salta tutto cio' che precede il segnalibro, e di
+    // quel che resta si guardano solo le righe di questa interfaccia.
+    const iface = `phy${radio.index}-sta0`;
+    const lines = staLog.slice(after).filter((line) => line.includes(`${iface}:`));
+    const last = (needle: RegExp) => [...lines].reverse().find((line) => needle.test(line)) ?? '';
+
+    const wrong = last(/reason=WRONG_KEY|pre-shared key may be incorrect/);
+    if (wrong) return { state: 'wrong-key', detail: wrong, mark };
+
+    const missing = last(/CTRL-EVENT-NETWORK-NOT-FOUND/);
+    if (missing) return { state: 'not-found', detail: missing, mark };
+
+    const rejected = last(/CTRL-EVENT-ASSOC-REJECT/);
+    if (rejected) return { state: 'rejected', detail: rejected, mark };
+
+    return { state: '', detail: '', mark };
+  },
 
   'travel.stage_connect_saved': (args) => {
     const entry = savedNetworks[String(args.section ?? '')];
@@ -1572,7 +1720,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     pending.push(() => {
       const radio = radios[name];
       if (radio) {
-        radio.sta = { ssid: entry.ssid, key: 'ok', mac: entry.mac_value, since: Date.now() };
+        radio.sta = { ssid: entry.ssid, key: entry.key, mac: entry.mac_value, since: Date.now() };
       }
       // Come sul router: il nome DHCP e' salvato con la rete ma vive
       // sull'interfaccia, e viene riscritto a ogni connessione.
@@ -1582,6 +1730,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           : entry.hostname_mode === 'custom' && entry.hostname_value
             ? entry.hostname_value
             : '*';
+      noteStaAttempt(name);
     });
     return { staged: true };
   },
@@ -1733,7 +1882,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           disabled: values.disabled === '1',
           last_used: 0,
           last_result: '',
-          has_key: Boolean(values.key),
+          key: values.key ?? '',
         };
       });
       return {};
@@ -1749,6 +1898,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         mac: values.macaddr ?? '',
         since: Date.now(),
       };
+      noteStaAttempt(name);
     });
     return {};
   },
@@ -1903,6 +2053,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       pending.push(() => {
         const entry = savedNetworks[section];
         if (!entry) return;
+        // Il nome si riscrive solo sulle reti nascoste, ed e' il rimedio a un
+        // refuso: senza, correggerlo dal simulatore non avrebbe nessun effetto
+        // e la prova del giro "sbaglia, correggi, riprova" non direbbe niente.
+        if (values.ssid !== undefined) entry.ssid = values.ssid;
         if (values.mac_mode !== undefined) entry.mac_mode = values.mac_mode;
         if (values.mac_value !== undefined) entry.mac_value = values.mac_value;
         if (values.note !== undefined) entry.note = values.note;
@@ -1910,7 +2064,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         if (values.hostname_value !== undefined) entry.hostname_value = values.hostname_value;
         if (values.disabled !== undefined) entry.disabled = values.disabled === '1';
         if (values.priority !== undefined) entry.priority = Number(values.priority);
-        if (values.key !== undefined) entry.has_key = values.key.length > 0;
+        if (values.key !== undefined) entry.key = values.key;
       });
       return {};
     }

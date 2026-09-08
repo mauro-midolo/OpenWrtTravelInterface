@@ -12,7 +12,15 @@ import {
   stageDisconnect,
   uplinkState,
 } from '../lib/wifi';
-import type { ApSection, ConnectionPlan, Radio, ScanResult, Uplink, UplinkState } from '../lib/wifi';
+import type {
+  ApSection,
+  Band,
+  ConnectionPlan,
+  Radio,
+  ScanResult,
+  Uplink,
+  UplinkState,
+} from '../lib/wifi';
 import { listSaved } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import { getDaemon } from '../lib/autoreconnect';
@@ -21,6 +29,7 @@ import { AutoCard, AutoSheet } from './AutoReconnect';
 import { ConnectSheet } from './Connect';
 import { ApCard, ApSheet } from './AccessPoint';
 import { SavedEntryCard, SavedNetworksScreen } from './SavedNetworks';
+import { HiddenSheet } from './HiddenNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
 import { PORTAL_LABEL, getPortals } from '../lib/portal';
 import type { PortalResult, PortalStatus } from '../lib/portal';
@@ -123,19 +132,28 @@ function Network({
   net,
   connected,
   onPick,
+  onAddHidden,
 }: {
   net: ScanResult;
   connected: boolean;
   onPick: () => void;
+  /** Per le righe senza nome: l'unico modo di usarle e' scriverlo a mano. */
+  onAddHidden: () => void;
 }) {
   return (
     <li>
-      <button class="net" onClick={onPick} disabled={net.hidden}>
+      {/* Una rete che non annuncia il nome si vede - il punto di accesso e'
+          li' e trasmette - ma non si puo' toccare per collegarsi, perche' non
+          c'e' un SSID da mettere nella configurazione. Prima la riga era
+          disattivata e finiva li'; ora porta al modulo che chiede il nome, che
+          e' esattamente cio' che manca. */}
+      <button class="net" onClick={net.hidden ? onAddHidden : onPick}>
         <span class="net__main">
           <span class={net.hidden ? 'net__ssid net__ssid--hidden' : 'net__ssid'}>
             {net.hidden ? 'rete nascosta' : net.ssid}
           </span>
           <span class="net__meta">
+            {net.hidden ? 'tocca per aggiungerla scrivendo il nome · ' : ''}
             ch {net.channel} · {net.security}
             {net.count > 1 && ` · ${net.count} punti di accesso`}
           </span>
@@ -212,6 +230,7 @@ function RadioCard({
   onPick,
   onAp,
   onDisconnect,
+  onAddHidden,
 }: {
   radio: Radio;
   uplink: Uplink | null;
@@ -223,6 +242,7 @@ function RadioCard({
   onPick: (net: ScanResult) => void;
   onAp: (enable: boolean) => void;
   onDisconnect: () => void;
+  onAddHidden: () => void;
 }) {
   const busy = radio.staSection !== null;
   const label = radio.band ? `${radio.band} GHz` : radio.name;
@@ -264,6 +284,13 @@ function RadioCard({
             Disconnetti
           </button>
         )}
+        {/* Sta qui e non altrove perche' e' l'altra meta' della stessa scelta:
+            l'elenco sopra mostra le reti che si annunciano, questa serve per
+            quelle che non lo fanno. Sotto la scheda della radio ne eredita
+            anche la banda, che e' il primo campo del modulo. */}
+        <button class="button button--ghost" onClick={onAddHidden}>
+          Aggiungi rete nascosta
+        </button>
       </div>
 
       {scanning && <p class="muted">La connessione può bloccarsi per qualche secondo.</p>}
@@ -280,6 +307,7 @@ function RadioCard({
               net={net}
               connected={Boolean(uplink?.ssid) && uplink?.ssid === net.ssid}
               onPick={() => onPick(net)}
+              onAddHidden={onAddHidden}
             />
           ))}
         </ul>
@@ -303,6 +331,15 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
    * - reti, radio e uplink - invece di rifarne una loro.
    */
   const [view, setView] = useState<'radios' | 'saved'>('radios');
+  /**
+   * Banda con cui aprire il modulo della rete nascosta, oppure chiuso.
+   *
+   * Non un booleano: il modulo si apre dalla scheda di una radio, e partire
+   * dalla banda di quella radio evita di doverla riscegliere. Resta comunque
+   * cambiabile dentro il modulo, perche' la banda e' una decisione sulla rete
+   * e non su da dove si e' entrati.
+   */
+  const [addingHidden, setAddingHidden] = useState<Band | null>(null);
   const [daemon, setDaemon] = useState<DaemonStatus | null>(null);
   const [portals, setPortals] = useState<PortalStatus | null>(null);
   const [editingAuto, setEditingAuto] = useState(false);
@@ -473,8 +510,20 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
           onPick={pick}
           onAp={(enable) => toggleAp(radio, enable)}
           onDisconnect={() => disconnect(radio)}
+          onAddHidden={() => setAddingHidden(radio.band ?? '2.4')}
         />
       ))}
+
+      {addingHidden && (
+        <HiddenSheet
+          saved={saved}
+          band={addingHidden}
+          onClose={(changed) => {
+            setAddingHidden(null);
+            if (changed) reload();
+          }}
+        />
+      )}
 
       {picked && (
         <ConnectSheet

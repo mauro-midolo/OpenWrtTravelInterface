@@ -66,7 +66,7 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 
 | Scheda | Funzioni |
 |---|---|
-| WiFi | Radio e uplink, scansione, connessione e disconnessione, MAC e hostname DHCP, riconnessione automatica, impostazioni comuni e interruttori degli AP, stato dei portali. Le reti salvate hanno una pagina dedicata, aperta dalla voce "Gestione reti salvate" col totale accanto. |
+| WiFi | Radio e uplink, scansione, connessione e disconnessione, aggiunta manuale di reti nascoste, MAC e hostname DHCP, riconnessione automatica, impostazioni comuni e interruttori degli AP, stato dei portali. Le reti salvate hanno una pagina dedicata, aperta dalla voce "Gestione reti salvate" col totale accanto. |
 | LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli delle porte ethernet, elenco dei dispositivi collegati. |
 | Internet | Dashboard per WAN, traffico corrente e della sessione, stato del collegamento e dei portali, multi-WAN, regole di routing e health check. |
 | VPN | Accesso e impostazioni Tailscale, nodi del tailnet, importazione e controllo WireGuard, diagnostica del routing, kill switch e sospensione temporanea. |
@@ -243,10 +243,81 @@ dell'ultimo tentativo se diverso da "ok" e nota, più le targhette *collegata*,
 nota; il numero di priorità mostrato resta quello dell'elenco intero anche
 mentre si filtra.
 
-`hidden` è letta da uci e riportata da `travel.networks`, ma nessuna schermata
-la scrive: una rete che non annuncia il proprio SSID non compare nella
-scansione, quindi non c'è un punto da cui salvarla. Serve a riconoscere nella
-lista le voci aggiunte a mano.
+### Reti nascoste
+
+Una rete che non annuncia il proprio SSID non compare in nessuna scansione, e
+quindi non c'è una riga da toccare per collegarsi: si aggiunge a mano dalla
+scheda della radio, con "Aggiungi rete nascosta", oppure toccando la riga
+"rete nascosta" nei risultati della scansione. Il modulo chiede SSID, banda e
+tipo di sicurezza, e la password solo per le cifrature che ne hanno una
+(`psk2`, `sae`, `sae-mixed`; `none` non la chiede). SSID da 1 a 32 byte e
+passphrase da 8 a 63 caratteri sono validati prima del salvataggio.
+
+Salvare scrive solo in `/etc/config/travel`, che non tocca la rete in
+funzione: una rete nascosta si configura anche se in quel momento non è
+raggiungibile. `hidden='1'` resta nella sezione insieme agli altri parametri —
+non è uno stato del modulo — ed è ciò che distingue la voce nell'elenco e ciò
+che il motore automatico consulta. Da lì in poi la rete si modifica, si
+riordina, si disattiva e si elimina come qualsiasi altra rete salvata, e le due
+bande restano configurazioni distinte.
+
+Per collegarsi non serve nessuna scansione: la STA viene scritta con l'SSID
+salvato e OpenWrt genera sempre `scan_ssid=1` per `mode=sta`, quindi
+wpa_supplicant sonda direttamente quel nome invece di aspettare un beacon. Non
+serve quindi nessuna opzione `hidden` nella sezione `wireless`: l'opzione uci
+con quel nome riguarda solo la modalità AP.
+
+Il motore automatico salta per le reti nascoste il controllo di visibilità e la
+soglia RSSI — non c'è un segnale da misurare finché non ci si aggancia — e le
+prova in ordine di priorità come le altre; il backoff e la blacklist esistenti
+frenano i tentativi a vuoto. Restano invece escluse dal roaming: si passa a una
+rete migliore confrontando i segnali, e quello di una rete mai vista non è
+confrontabile.
+
+### Perché una connessione non riesce
+
+Dall'esterno la password sbagliata e la rete che non c'è si vedono uguali:
+nessuna associazione, nessun indirizzo. Nessuno stato di netifd le distingue,
+perché in entrambi i casi la configurazione è valida ed è stata applicata senza
+errori — per questo `wirelessCameUp` conferma comunque l'apply. La differenza
+la sa solo wpa_supplicant, che la scrive nel log: `travel.sta_diagnose` filtra
+`logread` sull'interfaccia della radio e restituisce `wrong-key`,
+`not-found`, `rejected` o vuoto, con la riga che lo dice.
+
+Il log però è la storia di tutta la radio, e il nome dell'interfaccia non
+cambia da una rete all'altra: una riga `WRONG_KEY` di un tentativo precedente
+corrisponderebbe ancora e verrebbe data come il motivo di quello attuale, cioè
+manderebbe a correggere la password quando il problema è che la rete non c'è.
+Per questo il metodo legge solo ciò che segue un segnalibro: la schermata ne
+chiede uno (`sta_diagnose` senza `after`, che risponde solo con `mark` e
+nessun verdetto) prima di toccare la radio, e lo ripassa dopo. Se il buffer
+circolare nel frattempo ha girato non si trova nulla e la risposta è vuota —
+un motivo mancante, mai uno sbagliato.
+
+Dopo l'apply la schermata guarda l'uplink per 30 secondi, **confrontando
+l'SSID**: cambiando rete sulla stessa radio l'associazione precedente può
+essere ancora in piedi e con indirizzo, e un controllo sul solo stato darebbe
+per riuscita una connessione non ancora cominciata.
+
+Di quelle letture conta **l'ultima, non la migliore**. Con una password
+sbagliata la stazione si associa comunque e cade subito dopo, quando fallisce
+l'handshake a quattro vie: per un paio di secondi l'uplink mostra l'SSID senza
+indirizzo, indistinguibile da un DHCP lento. Tenendo la prima lettura buona
+quel momento rappresenterebbe tutto il tentativo e l'esito sarebbe
+`no-address` — cioè "la password è giusta, non risponde il DHCP" — proprio nel
+caso in cui la password è l'unico problema, e per giunta saltando la lettura
+del log che avrebbe detto `wrong-key`. Il simulatore riproduce quella finestra
+di associazione apposta.
+
+Se nessuna lettura riesce, o l'ultima riuscita è più vecchia di circa tre giri
+di polling, l'esito è `unknown`: non un fallimento, ma l'assenza di una
+misura. Non viene scritto in `last_result`, perché sostituirebbe una storia
+vera con un guasto che nessuno ha osservato. Gli altri
+esiti ci finiscono tramite `mark_used`, che ora accetta anche `wrong-key` e
+`not-found`. In nessun caso un fallimento cancella la rete salvata: resta
+configurata e modificabile, e il foglio offre "Modifica" accanto all'errore —
+per una rete nascosta anche sull'SSID, che è la causa più probabile di
+`not-found`.
 
 Il motore automatico è disabilitato per default (`autoreconnect=0`) e valuta
 la situazione ogni 10 secondi. Ordina le reti abilitate per priorità
@@ -587,7 +658,7 @@ dal frontend.
 | Oggetto | Area | Metodi |
 |---|---|---|
 | `travel` | Stato e dispositivo | `status`, `system`, `usb`, `usb_devices`, `usb_mode`, `usb_reset` |
-| `travel` | WiFi | `radios`, `uplinks`, `ap`, `scan`, `networks`, `stage_connect_saved`, `mark_used` |
+| `travel` | WiFi | `radios`, `uplinks`, `ap`, `scan`, `networks`, `stage_connect_saved`, `mark_used`, `sta_diagnose` |
 | `travel` | LAN e multi-WAN | `lan`, `ethports`, `clients`, `mwan`, `mwan_apply` |
 | `travel` | Portali | `portal_probe`, `portal_networks`, `portal_forget` |
 | `travel` | VPN | `vpn`, `ts_login`, `ts_apply`, `ts_down`, `ts_logout`, `wg_get`, `wg_toggle`, `wg_import` |

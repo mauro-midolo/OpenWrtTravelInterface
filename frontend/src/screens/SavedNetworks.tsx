@@ -24,8 +24,14 @@ import {
   updateNetwork,
 } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
-import { encryptionLabel, wirelessCameUp } from '../lib/wifi';
-import type { Radio, Uplink } from '../lib/wifi';
+import {
+  awaitConnection,
+  encryptionLabel,
+  isValidSsid,
+  logMark,
+  wirelessCameUp,
+} from '../lib/wifi';
+import type { ConnectOutcome, Radio, Uplink } from '../lib/wifi';
 import { getSystem, hostnameLabel, isValidHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { HostnamePicker } from '../components/HostnamePicker';
@@ -40,6 +46,16 @@ import { ApplyStatus } from '../components/ApplyStatus';
  * lento.
  */
 const SEARCH_FROM = 6;
+
+/**
+ * Quanto si guarda l'uplink prima di dare un verdetto sulla connessione.
+ *
+ * E' lo stesso tempo che si concede collegandosi da una scansione: dentro ci
+ * stanno l'associazione e il giro di DHCP. Su una rete nascosta serve tutto,
+ * perche' wpa_supplicant deve prima sondare il nome invece di trovarselo in un
+ * beacon gia' ricevuto.
+ */
+const CONNECT_WAIT_SECONDS = 30;
 
 function whenUsed(epoch: number): string {
   if (!epoch) return 'mai usata';
@@ -57,6 +73,11 @@ const RESULT_LABEL: Record<string, string> = {
   portal: 'ultima volta: portale di accesso',
   'no-address': 'ultima volta: senza indirizzo',
   unassociated: 'ultima volta: non agganciata',
+  // I due modi di non agganciarsi che hanno rimedi opposti: correggere la
+  // password, oppure avvicinarsi. Tenerli separati e' il motivo per cui il
+  // router va a leggere il log di wpa_supplicant.
+  'wrong-key': 'ultima volta: password rifiutata',
+  'not-found': 'ultima volta: rete non trovata',
 };
 
 /**
@@ -70,6 +91,8 @@ const RESULT_SHORT: Record<string, string> = {
   portal: 'portale di accesso',
   'no-address': 'senza indirizzo',
   unassociated: 'non agganciata',
+  'wrong-key': 'password rifiutata',
+  'not-found': 'rete non trovata',
 };
 
 /** Quante reti per banda, in una frase: "3 a 2.4 GHz · 2 a 5 GHz". */
@@ -344,12 +367,26 @@ export function SavedSheet({
   const apply = useApply();
   const [mode, setMode] = useState<Mode>('menu');
   const [password, setPassword] = useState('');
+  /**
+   * Il nome, modificabile solo per le reti nascoste.
+   *
+   * Per le altre l'SSID viene da una scansione, quindi e' giusto per
+   * costruzione e riscriverlo a mano puo' solo romperlo. Per una nascosta e'
+   * l'opposto: e' stato digitato, ed e' il primo posto in cui guardare quando
+   * il router risponde "rete non trovata". Senza questo campo l'unico rimedio a
+   * un refuso sarebbe cancellare la rete e riscriverla tutta.
+   */
+  const [ssid, setSsid] = useState(net.ssid);
   const [note, setNote] = useState(net.note);
   const [hostname, setHostname] = useState<HostnameChoice>(() => hostnameOf(net));
   const [deviceHostname, setDeviceHostname] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
+  /** Com'e' finita la connessione appena chiesta, quando si sa. */
+  const [outcome, setOutcome] = useState<ConnectOutcome | null>(null);
+  /** La riga di log che spiega l'esito, se il router ne ha trovata una. */
+  const [detail, setDetail] = useState('');
+  const [checking, setChecking] = useState(false);
 
   // Solo per dire cosa verrebbe inviato scegliendo "nome del router".
   useEffect(() => {
@@ -363,6 +400,7 @@ export function SavedSheet({
   }, []);
 
   const hostnameOk = hostname.mode !== 'custom' || isValidHostname(hostname.value.trim());
+  const ssidOk = !net.hidden || isValidSsid(ssid.trim());
 
   // Si sposta dentro la propria banda: e' l'insieme fra cui la radio sceglie,
   // e spostarsi rispetto a una rete che l'altra radio non vedra' mai non
@@ -387,20 +425,56 @@ export function SavedSheet({
     }
   };
 
+  /**
+   * Chiede la connessione e poi guarda com'e' andata.
+   *
+   * Applicare non e' collegarsi: `wirelessCameUp` dice che le radio hanno
+   * accettato la configurazione, e una password sbagliata e' una
+   * configurazione validissima. L'esito vero arriva dopo, guardando l'uplink
+   * per un po' e - se non si e' agganciata - chiedendo al router perche'.
+   *
+   * Per una rete nascosta non si aspetta nessuna scansione: la STA viene
+   * scritta con l'SSID salvato e wpa_supplicant va a cercarla sondando
+   * direttamente quel nome. E' anche il motivo per cui qui serve una diagnosi:
+   * senza un beacon da confrontare, "non trovata" e "password sbagliata" sono
+   * indistinguibili da fuori.
+   *
+   * Qualunque sia l'esito la rete salvata resta dov'e': niente in questa
+   * funzione la cancella, e dopo un errore si passa a "Modifica" per
+   * correggerla.
+   */
   const connect = async () => {
     if (!target) {
       setError('Nessuna radio disponibile.');
       return;
     }
     setMode('connecting');
-    const ok = await apply.run(() => stageConnectSaved(net.section, target.name), {
+    setOutcome(null);
+    setDetail('');
+
+    // Il segnalibro si prende prima di toccare la radio: da qui in poi tutto
+    // quello che compare nel log riguarda questo tentativo e nessun altro.
+    // Se non si riesce a prenderlo si va avanti lo stesso con zero, che vuol
+    // dire "nessun verdetto": meglio un motivo mancante che uno vecchio.
+    const mark = await logMark(target.name).catch(() => 0);
+
+    const applied = await apply.run(() => stageConnectSaved(net.section, target.name), {
       verify: wirelessCameUp,
     });
-    if (ok) {
-      setConnected(true);
-      // L'esito fine (indirizzo o no) lo si vede nella scheda dell'uplink:
-      // qui basta annotare che la rete e' stata usata.
-      void markUsed(net.section, 'ok').catch(() => undefined);
+    if (!applied) return;
+
+    setChecking(true);
+    const result = await awaitConnection(target.name, net.ssid, CONNECT_WAIT_SECONDS, mark);
+    setChecking(false);
+    setOutcome(result.outcome);
+    setDetail(result.detail);
+
+    // L'esito si annota, ma solo se e' un esito: e' quello che l'elenco mostra
+    // la volta dopo, e distingue una rete che non ha mai funzionato da una che
+    // ha smesso. `unknown` non e' un esito - nessuno ha visto niente - e
+    // scriverlo sostituirebbe una storia vera con un guasto immaginario.
+    if (result.outcome !== 'unknown') {
+      void markUsed(net.section, result.outcome).catch(() => undefined);
     }
   };
 
@@ -412,6 +486,7 @@ export function SavedSheet({
         {mode === 'menu' && (
           <>
             <p class="muted">
+              {net.hidden ? 'Rete nascosta · ' : ''}
               {encryptionLabel(net.encryption)} · {bandLabel(net.band)} ·{' '}
               {whenUsed(net.last_used)}
               {net.last_result && RESULT_LABEL[net.last_result]
@@ -482,6 +557,28 @@ export function SavedSheet({
 
         {mode === 'edit' && (
           <>
+            {net.hidden && (
+              <label class="field">
+                <span>Nome della rete (SSID)</span>
+                <input
+                  type="text"
+                  value={ssid}
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck={false}
+                  onInput={(e) => setSsid((e.target as HTMLInputElement).value)}
+                />
+                <span class="muted">
+                  Il router cerca questo nome sondando, non leggendolo da un elenco: deve
+                  essere esatto, maiuscole comprese.
+                </span>
+              </label>
+            )}
+
+            {net.hidden && ssid !== '' && !ssidOk && (
+              <p class="alert alert--error">Il nome può essere lungo al massimo 32 byte.</p>
+            )}
+
             <label class="field">
               <span>Password</span>
               <input
@@ -522,7 +619,9 @@ export function SavedSheet({
               </button>
               <button
                 class="button button--primary"
-                disabled={busy || !hostnameOk || (password !== '' && password.length < 8)}
+                disabled={
+                  busy || !hostnameOk || !ssidOk || (password !== '' && password.length < 8)
+                }
                 onClick={() =>
                   void guard(() =>
                     updateNetwork(net.section, {
@@ -530,6 +629,7 @@ export function SavedSheet({
                       hostname_mode: hostname.mode,
                       hostname_value: hostname.mode === 'custom' ? hostname.value.trim() : '',
                       ...(password ? { key: password } : {}),
+                      ...(net.hidden ? { ssid: ssid.trim() } : {}),
                     }),
                   )
                 }
@@ -543,17 +643,91 @@ export function SavedSheet({
         {mode === 'connecting' && (
           <>
             <ApplyStatus apply={apply} onClose={() => onClose(true)} />
-            {connected && (
-              <>
-                <p class="alert alert--ok">
-                  Connessione applicata. L'esito lo trovi nella scheda dell'uplink.
-                </p>
-                <div class="sheet__actions">
-                  <button class="button button--primary" onClick={() => onClose(true)}>
-                    Chiudi
+
+            {checking && (
+              <p class="muted">
+                Configurazione applicata. Aspetto che la radio si agganci e prenda un
+                indirizzo: fino a {CONNECT_WAIT_SECONDS} secondi.
+              </p>
+            )}
+
+            {outcome === 'ok' && (
+              <p class="alert alert--ok">
+                Connessa a «{net.ssid}». L'indirizzo e lo stato dell'uscita li trovi nella
+                scheda WiFi.
+              </p>
+            )}
+
+            {outcome === 'no-address' && (
+              <p class="alert alert--warn">
+                Agganciata a «{net.ssid}», ma la rete non ha assegnato nessun indirizzo. La
+                password è giusta: a non rispondere è il DHCP della rete. La configurazione
+                resta salvata.
+              </p>
+            )}
+
+            {outcome === 'wrong-key' && (
+              <p class="alert alert--error">
+                «{net.ssid}» ha rifiutato la password. La configurazione resta salvata:
+                correggi la password con <strong>Modifica</strong> e riprova.
+              </p>
+            )}
+
+            {outcome === 'not-found' && (
+              <p class="alert alert--warn">
+                «{net.ssid}» non è stata trovata.
+                {net.hidden
+                  ? ' Su una rete nascosta il nome deve essere esatto, maiuscole comprese, e la banda deve essere quella giusta: il router lo cerca sondando, non leggendolo da un elenco.'
+                  : ' Può essere spenta o fuori portata.'}{' '}
+                La configurazione resta salvata.
+              </p>
+            )}
+
+            {outcome === 'unassociated' && (
+              <p class="alert alert--warn">
+                Non si è agganciata a «{net.ssid}» e il router non ha saputo dire perché.
+                Può essere fuori portata, oppure rifiutare questo dispositivo. La
+                configurazione resta salvata.
+              </p>
+            )}
+
+            {/* Non un fallimento: un'assenza di misura. Dirlo com'è evita di
+                annotare nella storia della rete un guasto che nessuno ha
+                visto - il router potrebbe essersi agganciato benissimo. */}
+            {outcome === 'unknown' && (
+              <p class="alert alert--warn">
+                Il router non ha risposto mentre verificavo, quindi non so come sia
+                andata. Guarda lo stato della radio nella scheda WiFi: la configurazione
+                resta salvata in ogni caso.
+              </p>
+            )}
+
+            {/* La riga di log alla lettera: e' il dettaglio che distingue due
+                guasti che a parole si somigliano, e nasconderlo costringerebbe
+                ad andarlo a cercare da terminale. */}
+            {detail !== '' && <p class="alert alert--warn alert--code">{detail}</p>}
+
+            {outcome !== null && (
+              <div class="sheet__actions">
+                {/* Dopo un errore la rete non e' cambiata: si corregge da qui,
+                    che e' l'unico posto da cui e' venuta la notizia. */}
+                {outcome !== 'ok' && (
+                  <button
+                    class="button button--ghost"
+                    onClick={() => {
+                      setOutcome(null);
+                      setDetail('');
+                      apply.reset();
+                      setMode('edit');
+                    }}
+                  >
+                    Modifica
                   </button>
-                </div>
-              </>
+                )}
+                <button class="button button--primary" onClick={() => onClose(true)}>
+                  Chiudi
+                </button>
+              </div>
             )}
           </>
         )}

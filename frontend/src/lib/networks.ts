@@ -26,10 +26,11 @@ export interface SavedNetwork {
   /**
    * La rete non annuncia il proprio SSID.
    *
-   * Si legge e basta: nessuna schermata la scrive, perche' una rete nascosta
-   * non compare nella scansione e il pannello non ha da dove salvarla. Chi ne
-   * ha aggiunta una a mano deve pero' riconoscerla nell'elenco, perche' e'
-   * l'unica voce che non si puo' ritrovare confrontandola con le reti viste.
+   * Si configura a mano, perche' in una scansione non c'e' niente da cui
+   * dedurla, e resta scritta nella sezione insieme al resto: serve dopo il
+   * salvataggio, non solo durante. E' quello che dice all'elenco di
+   * riconoscerla e alla riconnessione automatica di non pretendere di averla
+   * vista prima di provarci.
    */
   hidden: boolean;
   mac_mode: string;
@@ -80,6 +81,7 @@ export interface SaveInput {
   password: string;
   encryption: string;
   band: string;
+  hidden: boolean;
   macMode: MacMode;
   macValue: string;
   hostname: HostnameChoice;
@@ -100,6 +102,10 @@ export async function saveNetwork(input: SaveInput, existing: SavedNetwork[]): P
     ssid: input.ssid,
     encryption: input.encryption,
     band: input.band,
+    // Si scrive sempre, anche a zero: una sezione senza il campo e' una nata
+    // prima che esistesse, e va letta come "non nascosta". Scriverlo solo
+    // quando e' vero renderebbe impossibile distinguere le due cose.
+    hidden: input.hidden ? '1' : '0',
     mac_mode: input.macMode,
     mac_value: input.macMode === 'device' ? '' : input.macValue,
     // Il nome DHCP viaggia con la rete: e' un'impostazione per rete, non per
@@ -196,6 +202,9 @@ export function fromScan(
     password,
     encryption,
     band: net.band,
+    // Una rete che si e' vista scansionando annuncia il proprio nome: per
+    // definizione non e' nascosta.
+    hidden: false,
     macMode,
     macValue,
     hostname,

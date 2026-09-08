@@ -141,6 +141,11 @@ function savedNetworks() {
 				key: s.key ? s.key : '',
 				encryption: s.encryption ? s.encryption : 'psk2',
 				band: s.band ? s.band : '',
+				// Rete che non annuncia il proprio SSID: non comparira' mai in
+				// una scansione, quindi la si prova senza pretendere di averla
+				// vista. Chi non ha il campo e' nato prima che esistesse e vale
+				// come "normale", cioe' come si e' sempre comportato.
+				hidden: s.hidden == '1',
 				mac_mode: s.mac_mode ? s.mac_mode : 'device',
 				mac_value: s.mac_value ? s.mac_value : '',
 				// Chi non ha il campo e' nato prima che l'impostazione
@@ -385,8 +390,24 @@ function bandMatches(net, radio) {
 	return net.band == radio.band;
 }
 
-// Cerca fra le reti salvate la migliore visibile su questa radio.
-function bestCandidate(radio, saved, g, now) {
+// Cerca fra le reti salvate la migliore utilizzabile su questa radio.
+//
+// "Visibile" non basta piu' come criterio: una rete nascosta non compare in
+// nessuna scansione, e pretenderla nei risultati significherebbe non provarla
+// mai. Per quelle si salta il controllo di visibilita' e quello sull'RSSI - non
+// c'e' un segnale da misurare finche' non ci si aggancia - e si lascia che sia
+// il tentativo a dire se sono a portata. Se non lo sono fallisce, e ci pensa il
+// backoff gia' esistente a non insistere: e' lo stesso meccanismo che regge le
+// reti visibili che rifiutano la password.
+//
+// L'ultimo parametro esiste perche' i due chiamanti hanno bisogni opposti.
+// Quando non si e' agganciati a niente, provare alla cieca e' l'unica mossa
+// possibile e non si perde nulla. Nel roaming invece si e' gia' connessi, e la
+// decisione si prende confrontando i segnali: una candidata di cui il segnale
+// non si conosce non e' confrontabile, e sostituire una connessione che
+// funziona con una scommessa e' esattamente il salto avanti e indietro che
+// l'isteresi esiste per evitare.
+function bestCandidate(radio, saved, g, now, allowHidden) {
 	let result = callUbus('travel', 'scan', { radio: radio.name });
 	if (!result || !result.results) {
 		lastError = "scansione di " + radio.name + " senza risultati";
@@ -407,14 +428,23 @@ function bestCandidate(radio, saved, g, now) {
 		if (!bandMatches(net, radio))
 			continue;
 
+		// La penalita' vale per tutte allo stesso modo: e' il freno che
+		// impedisce di riprovare all'infinito una rete che non funziona, ed e'
+		// anche quello che rende sicuro provare una nascosta senza averla vista.
+		if (isBlocked(net.section, now))
+			continue;
+
+		if (net.hidden) {
+			if (!allowHidden)
+				continue;
+			// Nessun segnale da riportare: non e' stata vista, si prova.
+			return { net: net, signal: null };
+		}
+
 		let signal = strongest[net.ssid];
 		if (signal == null)
 			continue;
 		if (signal < g.rssi_min)
-			continue;
-
-		let blocked = isBlocked(net.section, now);
-		if (blocked)
 			continue;
 
 		return { net: net, signal: signal };
@@ -449,7 +479,7 @@ function considerRoam(radio, current, saved, g, now) {
 	if (currentPriority < 0)
 		return;
 
-	let choice = bestCandidate(radio, saved, g, now);
+	let choice = bestCandidate(radio, saved, g, now, false);
 	if (!choice)
 		return;
 
@@ -515,12 +545,13 @@ function evaluate() {
 		if (last && last.section && (now - last.at) >= SETTLE_SECONDS)
 			recordFailure(last.section, g);
 
-		let choice = bestCandidate(radio, saved, g, now);
+		let choice = bestCandidate(radio, saved, g, now, true);
 		if (!choice) {
 			continue;
 		}
 
-		note('connessione', radio.name + " -> " + choice.net.ssid + " (" + choice.signal + " dBm)");
+		note('connessione', radio.name + " -> " + choice.net.ssid +
+			(choice.signal == null ? " (nascosta)" : " (" + choice.signal + " dBm)"));
 		applyConnection(radio.name, choice.net);
 	}
 }

@@ -336,6 +336,30 @@ export function isValidMac(mac: string): boolean {
   return (parseInt(mac.slice(0, 2), 16) & 0x01) === 0;
 }
 
+/**
+ * Un SSID valido secondo 802.11: da 1 a 32 byte.
+ *
+ * Il limite e' in byte e non in caratteri, e la differenza si vede appena si
+ * usa un accento: "Località" sono 9 caratteri ma 10 byte in UTF-8. Contando i
+ * caratteri si lascerebbe salvare un nome che il driver poi tronca, e una rete
+ * col nome troncato non si aggancia mai senza che si capisca perche'.
+ */
+export function isValidSsid(ssid: string): boolean {
+  const bytes = new TextEncoder().encode(ssid).length;
+  return bytes >= 1 && bytes <= 32;
+}
+
+/**
+ * Una passphrase WPA valida: da 8 a 63 caratteri.
+ *
+ * Sono i limiti dello standard, non una scelta nostra: sotto gli 8 wpa_supplicant
+ * rifiuta la configurazione, e a 64 il valore verrebbe letto come una chiave
+ * gia' derivata in esadecimale invece che come una password.
+ */
+export function isValidPassphrase(key: string): boolean {
+  return key.length >= 8 && key.length <= 63;
+}
+
 // --- Connessione -------------------------------------------------------------
 
 export interface ConnectionPlan {
@@ -516,6 +540,47 @@ export const AP_ENCRYPTIONS = [
   },
 ] as const;
 
+/**
+ * Le cifrature fra cui si sceglie configurando una rete a mano.
+ *
+ * Sono esattamente i quattro valori che `encryptionForSta` deduce da una
+ * scansione: configurando a mano non si inventa niente di nuovo, si dice a
+ * parole quello che li' si sarebbe capito dai beacon. WEP ed Enterprise restano
+ * fuori perche' il resto del pannello non li sa gestire, e offrirli qui vorrebbe
+ * dire salvare una rete che poi non si aggancia.
+ */
+export const STA_ENCRYPTIONS = [
+  {
+    value: 'psk2',
+    label: 'WPA2',
+    note: 'Il caso normale: quasi tutte le reti protette di oggi.',
+    needsKey: true,
+  },
+  {
+    value: 'sae-mixed',
+    label: 'WPA2 / WPA3',
+    note: 'Reti che accettano entrambi. Se WPA2 non basta, di solito è questa.',
+    needsKey: true,
+  },
+  {
+    value: 'sae',
+    label: 'WPA3',
+    note: 'Solo WPA3. Una rete così rifiuta i dispositivi più vecchi.',
+    needsKey: true,
+  },
+  {
+    value: 'none',
+    label: 'Nessuna (rete aperta)',
+    note: 'Senza password. Il traffico viaggia in chiaro fino al punto di accesso.',
+    needsKey: false,
+  },
+] as const;
+
+/** Vero se questa cifratura richiede una password. */
+export function needsKey(encryption: string): boolean {
+  return STA_ENCRYPTIONS.find((e) => e.value === encryption)?.needsKey ?? true;
+}
+
 export function encryptionLabel(value: string): string {
   // "none" e' il valore che uci si aspetta per una rete aperta, ed e' quello
   // che `encryptionForSta` salva: mostrarlo com'e' faceva comparire la parola
@@ -546,6 +611,158 @@ export async function wirelessCameUp(): Promise<boolean> {
   const shouldHaveAp = radios.filter((r) => r.apEnabled);
   if (shouldHaveAp.length === 0) return true;
   return shouldHaveAp.every((r) => r.up && r.device !== null);
+}
+
+/**
+ * Esito di una connessione, dal punto di vista di chi l'ha chiesta.
+ *
+ * "Non agganciata" da sola non e' una risposta utile: la password sbagliata e
+ * la rete che non c'e' si vedono uguali da fuori - nessuna associazione - ma
+ * hanno rimedi opposti, correggere la chiave o avvicinarsi. La differenza la
+ * sa solo wpa_supplicant, e infatti la scrive nel log.
+ */
+export type ConnectOutcome =
+  | 'ok'
+  | 'no-address'
+  | 'wrong-key'
+  | 'not-found'
+  | 'unassociated'
+  /**
+   * Non si e' potuto guardare.
+   *
+   * Non e' un fallimento: e' l'assenza di una misura. Il router non ha
+   * risposto per tutta la finestra, quindi non si sa se la rete e' salita o
+   * no. Chiamarlo "non agganciata" scriverebbe nella storia della rete un
+   * guasto che nessuno ha visto.
+   */
+  | 'unknown';
+
+export interface StaDiagnosis {
+  /** Vuoto quando dal log non si ricava niente di conclusivo. */
+  state: '' | 'wrong-key' | 'not-found' | 'rejected';
+  /** La riga di log che lo dice, da mostrare cosi' com'e'. */
+  detail: string;
+  /** Quante righe aveva il log: si ripassa come `after` per leggere solo il seguito. */
+  mark: number;
+}
+
+/**
+ * Perche' la STA di questa radio non si e' agganciata, secondo il log.
+ *
+ * Senza `after` non si ottiene nessun verdetto, solo il segnalibro: il log e'
+ * la storia di tutta la radio, e il nome dell'interfaccia non cambia da una
+ * rete all'altra, quindi senza un punto da cui partire si finirebbe a
+ * riportare il motivo di un tentativo precedente.
+ */
+export async function diagnoseSta(radio: string, after = 0): Promise<StaDiagnosis> {
+  const response = await call<Partial<StaDiagnosis>>('travel', 'sta_diagnose', { radio, after });
+  return {
+    state: response.state ?? '',
+    detail: response.detail ?? '',
+    mark: response.mark ?? 0,
+  };
+}
+
+/** Segnalibro nel log, da prendere prima di provare a connettersi. */
+export async function logMark(radio: string): Promise<number> {
+  return (await diagnoseSta(radio)).mark;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Ogni quanto si guarda l'uplink mentre si aspetta l'esito. */
+const POLL_MS = 2000;
+
+/**
+ * Quanto puo' essere vecchia l'ultima lettura riuscita e valere ancora come
+ * "com'e' finita": circa tre giri a vuoto.
+ *
+ * Oltre, il router se n'e' andato prima della fine e quello che si e' visto
+ * descrive un momento intermedio, non l'esito. Meglio dire che non si sa.
+ */
+const STALE_AFTER_MS = 8000;
+
+/**
+ * Aspetta l'esito di una connessione appena applicata su una radio.
+ *
+ * Si ferma appena c'e' un indirizzo, perche' quello e' il caso buono e non ha
+ * senso far aspettare oltre. Scaduto il tempo si guarda com'e' finita, e solo
+ * se non si e' agganciata si va a leggere il log: e' una chiamata in piu' che
+ * ha senso fare solo quando c'e' davvero qualcosa da spiegare.
+ *
+ * L'SSID atteso e' un parametro e non un dettaglio: cambiando rete sulla
+ * stessa radio, l'associazione precedente puo' essere ancora in piedi e con
+ * indirizzo nei primi secondi. Un controllo sul solo stato direbbe "connessa"
+ * guardando la rete di prima, cioe' darebbe per riuscita una connessione che
+ * non e' ancora nemmeno cominciata.
+ *
+ * Non tocca niente: qualunque sia l'esito, la configurazione salvata resta
+ * dov'e' e resta modificabile.
+ */
+export async function awaitConnection(
+  radioName: string,
+  ssid: string,
+  seconds: number,
+  /** Segnalibro nel log preso prima di applicare, da `logMark`. */
+  mark: number,
+): Promise<{ outcome: ConnectOutcome; uplink: Uplink | null; detail: string }> {
+  const deadline = Date.now() + seconds * 1000;
+  /**
+   * L'ultima lettura, non la migliore vista.
+   *
+   * La differenza non e' una sfumatura. Con una password sbagliata la stazione
+   * si associa lo stesso e cade subito dopo, quando fallisce l'handshake a
+   * quattro vie: per un paio di secondi l'uplink mostra l'SSID senza
+   * indirizzo. Tenendo la prima lettura buona invece dell'ultima, quel momento
+   * resterebbe li' a rappresentare tutto il tentativo, e l'esito sarebbe
+   * "agganciata, manca solo l'indirizzo" - cioe' "la password e' giusta, non
+   * risponde il DHCP" - proprio nel caso in cui la password e' l'unico
+   * problema. Si riscrive a ogni giro, cosi' quello che resta alla fine
+   * descrive la fine.
+   */
+  let last: Uplink | null = null;
+  /** Quando risale l'ultima lettura riuscita. Zero se non se n'e' fatta nessuna. */
+  let lastAt = 0;
+
+  while (Date.now() < deadline) {
+    try {
+      const found = (await getUplinks()).find((u) => u.radio === radioName) ?? null;
+      lastAt = Date.now();
+      // Solo l'uplink sulla rete che si e' chiesta. Finche' la radio riporta
+      // ancora quella di prima, la riconfigurazione non e' arrivata; e se
+      // l'aggancio cade, torna a non esserci nulla da tenere.
+      last = found && found.ssid === ssid ? found : null;
+      if (last && uplinkState(last) === 'addressed') {
+        return { outcome: 'ok', uplink: last, detail: '' };
+      }
+    } catch {
+      // Il router puo' non rispondere per qualche secondo mentre la radio si
+      // riconfigura: non e' un esito, e' l'attesa. La lettura di prima resta
+      // valida ancora per un po', ed e' `lastAt` a dire per quanto.
+    }
+    await sleep(POLL_MS);
+  }
+
+  // Niente che si sia visto abbastanza di recente da raccontare come sia
+  // finita: nessuna lettura riuscita, oppure l'ultima e' troppo vecchia.
+  // Inventare un esito lo scriverebbe nella storia della rete.
+  if (lastAt === 0 || Date.now() - lastAt > STALE_AFTER_MS) {
+    return { outcome: 'unknown', uplink: null, detail: '' };
+  }
+
+  if (last && uplinkState(last) === 'no-address') {
+    return { outcome: 'no-address', uplink: last, detail: '' };
+  }
+
+  const why = await diagnoseSta(radioName, mark).catch<StaDiagnosis>(() => ({
+    state: '',
+    detail: '',
+    mark: 0,
+  }));
+  const outcome: ConnectOutcome =
+    why.state === 'wrong-key' ? 'wrong-key' : why.state === 'not-found' ? 'not-found' : 'unassociated';
+
+  return { outcome, uplink: last, detail: why.detail };
 }
 
 export interface ApSettings {

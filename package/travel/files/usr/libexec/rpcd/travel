@@ -725,6 +725,93 @@ method_networks() {
 	json_dump
 }
 
+# Perche' la STA di una radio non si e' agganciata.
+#
+# Dall'esterno la password sbagliata e la rete che non c'e' si vedono uguali:
+# nessuna associazione, nessun indirizzo. Nessuno stato di netifd le distingue,
+# perche' per netifd la configurazione e' valida in entrambi i casi ed e' stata
+# applicata senza errori. L'unico che sa la differenza e' wpa_supplicant, che
+# la scrive nel log di sistema: qui la si va a leggere.
+#
+# Il log pero' e' la storia di tutta la radio, non di questo tentativo. Il nome
+# dell'interfaccia e' lo stesso per ogni rete che ci passa - `sta_radio1` resta
+# `sta_radio1` - quindi una riga WRONG_KEY dell'albergo di ieri corrisponderebbe
+# ancora, e verrebbe data come il motivo per cui non si aggancia la rete di
+# adesso. Un motivo sbagliato e' peggio di nessun motivo: manda a correggere la
+# password quando il problema e' che la rete non c'e'.
+#
+# Per questo si legge solo cio' che viene dopo un segnalibro. Il chiamante ne
+# chiede uno prima di provare a connettersi - `after` assente o zero: si
+# risponde solo con `mark`, senza verdetto - e lo ripassa dopo. Se il buffer
+# circolare nel frattempo ha girato, `after` supera le righe rimaste e non si
+# trova nulla: si risponde "non lo so", che e' il modo giusto di sbagliare.
+method_sta_diagnose() {
+	local input radio after status ifname log mark lines line state detail
+
+	input=$(cat)
+	[ -n "$input" ] || input='{}'
+	json_init
+	json_load "$input"
+	json_get_var _radio radio
+	json_get_var _after after
+
+	radio=$(valid_radio "$_radio") || { fail_json "radio sconosciuta"; return; }
+
+	# `after` finisce in un'espressione aritmetica: solo cifre, e niente segno.
+	case "$_after" in
+		''|*[!0-9]*) after=0 ;;
+		*) after="$_after" ;;
+	esac
+
+	# Il log intero e non `logread -l`: il conteggio deve essere assoluto,
+	# perche' e' quello che il chiamante si tiene come segnalibro.
+	log=$(logread 2>/dev/null)
+	mark=$(printf '%s' "$log" | grep -c '' 2>/dev/null)
+	[ -n "$mark" ] || mark=0
+
+	status=$(wireless_status)
+	ifname=$(ifname_of_section "$status" "$radio" "sta_$radio")
+
+	state=""
+	detail=""
+
+	# Senza interfaccia non c'e' niente da leggere - la STA non e' mai salita -
+	# e senza segnalibro non c'e' un tentativo a cui attribuire le righe.
+	if [ -n "$ifname" ] && [ "$after" -gt 0 ]; then
+		lines=$(printf '%s' "$log" | tail -n +"$((after + 1))" | grep -F "$ifname:")
+
+		# WRONG_KEY e' il verdetto esplicito di wpa_supplicant; la riga sul
+		# 4-Way Handshake e' quella che compare quando non lo emette. Dicono la
+		# stessa cosa, quindi si accettano tutte e due.
+		line=$(printf '%s' "$lines" | grep -E 'reason=WRONG_KEY|pre-shared key may be incorrect' | tail -n 1)
+		if [ -n "$line" ]; then
+			state="wrong-key"
+			detail="$line"
+		else
+			# Nessuna rete adatta trovata: e' il caso della rete nascosta
+			# scritta con un nome sbagliato, o semplicemente fuori portata.
+			line=$(printf '%s' "$lines" | grep -F 'CTRL-EVENT-NETWORK-NOT-FOUND' | tail -n 1)
+			if [ -n "$line" ]; then
+				state="not-found"
+				detail="$line"
+			else
+				# Trovata ma respinta: succede con un filtro sui MAC, o quando
+				# il punto di accesso e' pieno.
+				line=$(printf '%s' "$lines" | grep -F 'CTRL-EVENT-ASSOC-REJECT' | tail -n 1)
+				if [ -n "$line" ]; then
+					state="rejected"
+					detail="$line"
+				fi
+			fi
+		fi
+	fi
+
+	json_init
+	json_add_string state  "$state"
+	json_add_string detail "$detail"
+	json_add_int    mark   "$mark"
+	json_dump
+}
 # Prepara la connessione a una rete salvata.
 #
 # La password resta sul router: viene letta qui e scritta direttamente nelle
@@ -835,8 +922,12 @@ method_mark_used() {
 	# `portal` e' un esito a se': la connessione e' riuscita, l'indirizzo c'e', e
 	# Internet non passa lo stesso. Metterlo insieme a `ok` nasconderebbe
 	# proprio la cosa che si vuole sapere prima di ricollegarsi a quella rete.
+	# `wrong-key` e `not-found` sono i due modi di non agganciarsi che hanno
+	# rimedi opposti - correggere la chiave, o avvicinarsi - e tenerli distinti
+	# e' l'unica ragione per cui `sta_diagnose` esiste. `unassociated` resta
+	# per quando dal log non si e' ricavato niente di conclusivo.
 	case "$result" in
-		ok|portal|no-address|unassociated) ;;
+		ok|portal|no-address|unassociated|wrong-key|not-found) ;;
 		*) result="" ;;
 	esac
 
@@ -4394,6 +4485,10 @@ case "$1" in
 		json_add_string section ""
 		json_add_string result ""
 		json_close_object
+		json_add_object sta_diagnose
+		json_add_string radio ""
+		json_add_string after ""
+		json_close_object
 		json_add_object lan
 		json_close_object
 		json_add_object ethports
@@ -4510,6 +4605,7 @@ case "$1" in
 			networks)            method_networks ;;
 			stage_connect_saved) method_stage_connect_saved ;;
 			mark_used)           method_mark_used ;;
+			sta_diagnose)        method_sta_diagnose ;;
 			lan)                 method_lan ;;
 			ethports)            method_ethports ;;
 			clients)             method_clients ;;
