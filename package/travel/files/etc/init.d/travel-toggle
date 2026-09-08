@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+# Dopo travel-led, che allo stesso START=99 viene prima in ordine alfabetico:
+# prima si ripristina la preferenza salvata del LED, poi la levetta ha l'ultima
+# parola. Se l'evento della levetta e' arrivato prima che i servizi fossero
+# pronti, e' qui che la sua posizione torna a contare.
+START=99
+
+start() {
+	sh /usr/share/travel/toggle.sh apply ||
+		logger -t travel-toggle 'Allineamento alla levetta fallito'
+}

@@ -178,6 +178,12 @@ label.row {
   margin: 0;
 }
 
+.row__select {
+  max-width: 60%;
+  align-self: center;
+  font-size: 0.9rem;
+}
+
 .login {
   gap: 16px;
 }

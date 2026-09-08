@@ -30,7 +30,16 @@ beforeEach(() => {
 afterEach(() => {
   act(() => render(null, container));
   container.remove();
+  vi.useRealTimers();
 });
+/** Fa scattare una rilettura di fondo e lascia risolvere le promesse. */
+async function waitReread() {
+  await act(async () => {
+    vi.advanceTimersByTime(5000);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 describe('LED di stato', () => {
   it('reads the router, applies OFF immediately and rereads the saved choice on reopening', async () => {
@@ -90,6 +99,97 @@ describe('LED di stato', () => {
     await act(async () => { await Promise.resolve(); });
     expect(toggle()!.disabled).toBe(false);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('rereads the LED, which the physical switch can change from outside', async () => {
+    vi.useFakeTimers();
+    await mount();
+    expect(toggle()!.checked).toBe(true);
+    // Nessuno ha toccato l'interfaccia: il LED si e' spento dalla levetta.
+    rpc.mockResolvedValue({ supported: true, enabled: false });
+    await waitReread();
+    expect(rpc).toHaveBeenLastCalledWith('travel', 'led_get', {});
+    expect(toggle()!.checked).toBe(false);
+    // La rilettura non deve disabilitare il comando mentre gira.
+    expect(toggle()!.disabled).toBe(false);
+  });
+
+  it('stops rereading while the tab is hidden', async () => {
+    vi.useFakeTimers();
+    await mount();
+    const seen = rpc.mock.calls.length;
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    await waitReread();
+    expect(rpc.mock.calls.length).toBe(seen);
+    hidden.mockReturnValue(false);
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+    expect(rpc.mock.calls.length).toBe(seen + 1);
+    hidden.mockRestore();
+  });
+
+  it('does not let a reread already in flight undo a fresh choice', async () => {
+    vi.useFakeTimers();
+    await mount();
+    let stale!: (value: unknown) => void;
+    rpc.mockImplementation((_object, method) =>
+      method === 'led_get'
+        ? new Promise((resolve) => { stale = resolve; })
+        : Promise.resolve({ supported: true, enabled: false }));
+    await waitReread();
+    await flip(false);
+    expect(toggle()!.checked).toBe(false);
+    // La lettura era partita prima del comando: la sua risposta e' vecchia.
+    await act(async () => { stale({ supported: true, enabled: true }); await Promise.resolve(); });
+    expect(toggle()!.checked).toBe(false);
+  });
+
+  it('keeps the last confirmed value when a reread fails', async () => {
+    vi.useFakeTimers();
+    await mount();
+    rpc.mockRejectedValue(new Error('Timeout'));
+    await waitReread();
+    expect(toggle()!.checked).toBe(true);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('rereads at once when told the router lined the LED up with the switch', async () => {
+    await act(() => render(<StatusLedRow refresh={0} />, container));
+    await act(async () => { await Promise.resolve(); });
+    expect(toggle()!.checked).toBe(true);
+    // La scelta della funzione ha appena allineato il LED alla levetta: senza
+    // la rilettura immediata questa riga direbbe il falso per cinque secondi.
+    rpc.mockResolvedValue({ supported: true, enabled: false });
+    await act(() => render(<StatusLedRow refresh={1} />, container));
+    await act(async () => { await Promise.resolve(); });
+    expect(rpc).toHaveBeenLastCalledWith('travel', 'led_get', {});
+    expect(toggle()!.checked).toBe(false);
+  });
+
+  it('discards a reread already in flight when told the LED has just moved', async () => {
+    vi.useFakeTimers();
+    await act(() => render(<StatusLedRow refresh={0} />, container));
+    await act(async () => { await Promise.resolve(); });
+    // Una rilettura periodica parte: e' stata chiesta prima dell'allineamento.
+    let inFlight!: (value: unknown) => void;
+    rpc.mockImplementationOnce(() => new Promise((resolve) => { inFlight = resolve; }));
+    await act(async () => { vi.advanceTimersByTime(5000); await Promise.resolve(); });
+    // Adesso la levetta ha allineato il LED, che risulta spento.
+    rpc.mockResolvedValue({ supported: true, enabled: false });
+    await act(() => render(<StatusLedRow refresh={1} />, container));
+    await act(async () => { await Promise.resolve(); });
+    // La risposta vecchia arriva ora: non deve riaccendere niente, e la
+    // rilettura accodata deve comunque partire.
+    await act(async () => {
+      inFlight({ supported: true, enabled: true });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(toggle()!.checked).toBe(false);
+    expect(rpc).toHaveBeenLastCalledWith('travel', 'led_get', {});
   });
 
   it('reports unsupported hardware without allowing writes', async () => {

@@ -70,7 +70,7 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 | LAN | Indirizzo IPv4, pool DHCP, DNS, conflitti con le WAN, ruoli e indirizzo MAC delle porte ethernet, elenco dei dispositivi collegati. |
 | Internet | Dashboard per WAN, traffico corrente e della sessione, stato del collegamento e dei portali, multi-WAN, regole di routing e health check. |
 | VPN | Accesso e impostazioni Tailscale, nodi del tailnet, importazione e controllo WireGuard, diagnostica del routing, kill switch e sospensione temporanea. |
-| Impostazioni | Stato e nome del router, interruttore del LED di stato, periferiche e modalità USB, profili, backup e ripristino, orologio/NTP, riavvio e collegamento a LuCI. |
+| Impostazioni | Stato e nome del router, interruttore del LED di stato e funzione della levetta fisica, periferiche e modalità USB, profili, backup e ripristino, orologio/NTP, riavvio e collegamento a LuCI. |
 
 `src/lib/` contiene client RPC, tipi, trasformazioni, validazioni e sequenze
 di scrittura UCI. `src/screens/` contiene schermate e pannelli;
@@ -714,10 +714,103 @@ fine avvio; le indicazioni del bootloader, dell'avvio iniziale e del failsafe
 restano possibili. Senza una preferenza salvata viene conservato il
 comportamento OpenWrt e la prima lettura mostra la luminosità corrente.
 
+Da quando la levetta fisica puo' accendere e spegnere il LED, la riga non e'
+piu' l'unica a cambiarlo: rilegge `led_get` ogni 5 secondi, lo stesso passo
+della schermata, con le regole di `usePoll` (ferma a scheda nascosta, una
+rilettura al ritorno). Le riletture non disabilitano il comando e cedono il
+passo a una scrittura, anche a una cominciata mentre la lettura era gia'
+partita: una risposta piu' vecchia del comando viene scartata invece di
+rimettere il segno di spunta dov'era. Una rilettura fallita non cancella
+l'ultimo valore confermato e non mostra errori.
+
 I test coprono UI, simulatore e helper shell con sysfs/UCI simulati, inclusi
-ripristino in un nuovo processo, errori di scrittura, rollback e lock.
+ripristino in un nuovo processo, errori di scrittura, rollback, lock, le
+riletture che si incrociano con un comando, i due percorsi d'errore
+dell'allineamento e un evento della levetta che arriva mentre una scelta e'
+ancora in corso.
 Su Windows i test shell richiedono Git Bash nel percorso di installazione
 standard. La verifica fisica del LED e del reboot resta da eseguire sul router.
+
+### Interruttore fisico
+
+La levetta sul fianco del router e' configurabile: la riga sotto quella del LED
+sceglie che cosa deve fare. Le voci sono `none` (non fare nulla, ed e' come
+parte un router appena installato) e `led` (accendere e spegnere il LED di
+stato). La scelta sta in `/etc/config/travel_toggle`, quindi resta dopo il
+riavvio.
+
+Quattro pezzi separati, perche' il quinto arrivera':
+
+| pezzo | dove | cosa sa |
+| --- | --- | --- |
+| rilevamento | `/etc/rc.button/BTN_0`, `BTN_1` → `toggle-button.sh` | tradurre l'evento del kernel in `on`/`off` |
+| configurazione | `toggle_get` / `toggle_set` in `toggle.sh` | quale azione e' associata, e come si salva |
+| registro | `TOGGLE_ACTIONS` e `toggle_do_*` in `toggle.sh` | quali azioni esistono e cosa fanno |
+| esecuzione | `toggle_run`, `toggle_align` e il turno in `toggle.sh` | mettere in fila le tre cose sopra, una alla volta |
+
+Aggiungere una funzione vuole tre righe: l'id in `TOGGLE_ACTIONS`, la funzione
+`toggle_do_<id>` accanto, e la stessa coppia id/etichetta in `TOGGLE_ACTIONS`
+di `src/lib/toggle.ts`. Il rilevamento non si tocca: non sa quale azione
+girera', e le azioni non sanno da dove arriva l'evento. L'elenco che
+l'interfaccia mostra e' quello che risponde il router, non quello compilato
+nella SPA, cosi' una UI piu' recente del pacchetto non propone azioni che sul
+router non esistono; `normalizeToggle()` regge anche il caso opposto.
+
+Scegliere una funzione non sposta la levetta, e all'avvio nessuno la tocca: in
+tutti e due i casi `toggle_align` riallinea l'uscita alla posizione attuale,
+altrimenti la levetta direbbe una cosa e il LED un'altra fino al primo
+spostamento. Alla scelta si salva prima e si allinea dopo, cosi' nel momento
+rischioso l'unica cosa gia' fatta e' una scrittura che si sa disfare: se il LED
+non risponde, `led_set` ha gia' rimesso a posto luminosita' e preferenza per
+conto suo e `toggle_set` riporta indietro anche la scelta, invece di lasciare
+scritta una funzione senza effetto o un LED spostato per una funzione mai
+registrata. Se e' il salvataggio a fallire, il LED non e' ancora stato
+toccato. All'avvio ci pensa `/etc/init.d/travel-toggle` (START=99, dopo
+`travel-led`, che allo stesso numero viene prima in ordine alfabetico): prima
+si ripristina la preferenza salvata del LED, poi la levetta ha l'ultima parola.
+
+Salvataggio, allineamento, ritorno indietro ed eventi della levetta prendono
+tutti lo stesso turno (`/var/lock/travel-toggle`). Serve perche' la scelta
+diventa visibile appena salvata, mentre chi la sta salvando non ha ancora
+finito di allinearla: un evento che entrasse in quel mezzo agirebbe sulla
+funzione nuova - accendendo e salvando il LED per conto suo - e il ritorno
+indietro rimetterebbe a posto la scelta lasciando il LED dove l'evento l'ha
+messo. L'evento aspetta il suo turno per qualche secondo; chi chiede
+dall'interfaccia invece non aspetta, perche' ha un "Riprova" e una chiamata
+appesa sarebbe peggio. La posizione pero' viene registrata sempre e subito,
+anche quando l'evento non riesce ad agire: cosi' il prossimo allineamento sa
+dov'e' finita davvero la levetta.
+
+Dove sia la levetta lo sa solo il kernel, che lo dice con un evento - anche
+all'avvio, quando registra l'`EV_SW`. Non esiste un file da leggere: finche'
+quell'evento non e' arrivato la posizione resta `unknown` e non si riallinea
+niente, invece di tirare a indovinare e spegnere un LED che andava lasciato
+acceso. Se l'evento arriva prima che i servizi siano pronti, la posizione
+registrata in `/var/run` fa comunque effetto all'avvio dell'init.
+
+Lato interfaccia le due righe restano indipendenti: la schermata passa alla
+riga del LED un contatore che la riga dell'interruttore incrementa dopo una
+scrittura andata a buon fine, cosi' il LED si rilegge subito invece di dire il
+falso per un giro di polling. Una rilettura periodica gia' partita e' stata
+chiesta prima dell'allineamento: la sua risposta nasce vecchia, quindi viene
+invalidata invece di essere scritta, e la rilettura nuova si accoda dietro di
+lei invece di essere buttata via.
+
+L'azione `led` chiama `led_set` di `led.sh`, lo stesso che usa l'interfaccia:
+lock, rollback e persistenza sono quelli, e la levetta e la riga della UI non
+possono contraddirsi al riavvio. Un interruttore a levetta e' un `EV_SW`, non
+un tasto: il kernel manda `pressed` quando e' chiuso e `released` quando e'
+aperto, una volta per spostamento e una all'avvio - le pressioni lunghe e i
+`timeout` non arrivano e vengono ignorati. Finche' non si muove, la posizione
+resta `unknown`: sta in `/var/run` perche' e' dove si trova una levetta adesso,
+non una preferenza da conservare.
+
+I nomi `BTN_0` e `BTN_1` coprono i due codici con cui i router da viaggio
+dichiarano la levetta; entrambi i file rimandano allo stesso gestore. OpenWrt
+di suo non installa gestori con questi nomi - i suoi si chiamano `reset`,
+`wps`, `rfkill` - ma un firmware che ne avesse gia' uno se lo vedrebbe
+sostituito dal deploy. La verifica sul router vero, levetta compresa, resta da
+fare.
 
 ### Backup, orologio e riavvio
 
@@ -749,7 +842,7 @@ dal frontend.
 
 | Oggetto | Area | Metodi |
 |---|---|---|
-| `travel` | Stato e dispositivo | `status`, `system`, `led_get`, `led_set`, `usb`, `usb_devices`, `usb_mode`, `usb_reset` |
+| `travel` | Stato e dispositivo | `status`, `system`, `led_get`, `led_set`, `toggle_get`, `toggle_set`, `usb`, `usb_devices`, `usb_mode`, `usb_reset` |
 | `travel` | WiFi | `radios`, `uplinks`, `ap`, `scan`, `networks`, `stage_connect_saved`, `mark_used`, `sta_diagnose` |
 | `travel` | LAN e multi-WAN | `lan`, `ethports`, `clients`, `mwan`, `mwan_apply` |
 | `travel` | Portali | `portal_probe`, `portal_networks`, `portal_forget` |
@@ -767,8 +860,9 @@ o condividono lo stesso meccanismo di rollback.
 ```text
 frontend/                  sorgenti e build della SPA
 package/travel/files/      albero copiato nel filesystem del router
-  etc/init.d/              servizio procd
+  etc/init.d/              servizi procd: daemon, LED e levetta all'avvio
   etc/hotplug.d/           gestione USB e comparsa dei tunnel
+  etc/rc.button/           levetta fisica del router
   usr/libexec/rpcd/        plugin travel
   usr/share/rpcd/acl.d/    ACL
   usr/share/travel/        daemon, setup, helper e versione

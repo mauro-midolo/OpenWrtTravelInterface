@@ -21,6 +21,11 @@ chmod 0755 /usr/share/travel/setup.sh
 chmod 0755 /etc/init.d/travel
 chmod 0755 /etc/init.d/travel-led
 chmod 0755 /usr/share/travel/led.sh
+chmod 0755 /etc/init.d/travel-toggle
+chmod 0755 /usr/share/travel/toggle.sh
+chmod 0755 /usr/share/travel/toggle-button.sh
+chmod 0755 /etc/rc.button/BTN_0
+chmod 0755 /etc/rc.button/BTN_1
 chmod 0755 /etc/hotplug.d/net/30-travel-usb
 chmod 0755 /etc/hotplug.d/net/40-travel-vpn
 chmod 0755 /etc/hotplug.d/usb/20-travel-usb-mode
@@ -446,6 +451,8 @@ say "avvio travelD"
 /etc/init.d/travel enable  >/dev/null 2>&1
 /etc/init.d/travel-led enable
 /etc/init.d/travel-led start
+/etc/init.d/travel-toggle enable
+/etc/init.d/travel-toggle start
 /etc/init.d/travel restart >/dev/null 2>&1
 
 say "riavvio rpcd"

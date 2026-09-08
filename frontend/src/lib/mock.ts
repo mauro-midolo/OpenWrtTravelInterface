@@ -325,9 +325,18 @@ const ethState = {
  * `*` significa "non inviarlo" ed e' il default del progetto: setup.sh lo
  * scrive su tutte le WAN, e il simulatore parte dallo stesso stato.
  */
+const systemState = { hostname: 'OpenWrt', section: 'cfg01e48a' };
+
+/** LED di stato: hardware presente e acceso, come parte un router di fabbrica. */
 const statusLedState = { supported: true, enabled: true };
 
-const systemState = { hostname: 'OpenWrt', section: 'cfg01e48a' };
+/**
+ * Interruttore fisico: nessuna funzione associata e levetta in basso, cioe' il
+ * router appena installato. `toggleActions` e' il registro che sul router sta
+ * in `toggle.sh`: il simulatore offre gli stessi id.
+ */
+const toggleActions = ['none', 'led'];
+const physicalToggleState = { action: 'none', position: 'off' };
 
 /**
  * Porta USB. Parte alla velocita' piena, che e' il default dopo che il limite
@@ -1798,6 +1807,20 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       disabled: !usbDevices[0]?.netdev,
     },
   }),
+
+  // La levetta non si puo' muovere da un browser, ma la posizione conta lo
+  // stesso: come sul router, scegliere una funzione la applica subito a dov'e'
+  // la levetta adesso, altrimenti resterebbe da vedere un LED che la smentisce.
+  'travel.toggle_get': () => ({ ...physicalToggleState, actions: [...toggleActions] }),
+  'travel.toggle_set': (args) => {
+    if (typeof args.action !== 'string') return { error: 'action deve essere una stringa.' };
+    if (!toggleActions.includes(args.action)) return { error: 'Azione non valida.' };
+    if (args.action === 'led' && physicalToggleState.position !== 'unknown') {
+      statusLedState.enabled = physicalToggleState.position === 'on';
+    }
+    physicalToggleState.action = args.action;
+    return { ...physicalToggleState, actions: [...toggleActions] };
+  },
 
   'travel.led_get': () => ({ ...statusLedState }),
   'travel.led_set': (args) => {

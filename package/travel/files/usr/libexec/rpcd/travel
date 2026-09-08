@@ -71,6 +71,37 @@ method_led_set() {
 	method_led_get
 }
 
+# Configurazione dell'interruttore fisico. L'elenco delle azioni lo dice il
+# router, non l'interfaccia: e' li' che vive il registro, e una UI piu' vecchia
+# del pacchetto non deve poter proporre qualcosa che qui non esiste.
+method_toggle_get() {
+	local action
+	. /usr/share/travel/toggle.sh
+	toggle_get || { fail_json "Configurazione dell'interruttore non valida."; return; }
+	toggle_position
+	json_init
+	json_add_string action "$TOGGLE_ACTION"
+	json_add_string position "$TOGGLE_POSITION"
+	json_add_array actions
+	for action in $TOGGLE_ACTIONS; do
+		json_add_string '' "$action"
+	done
+	json_close_array
+	json_dump
+}
+
+method_toggle_set() {
+	local input action type error
+	input=$(cat)
+	json_load "$input" || { fail_json "Richiesta dell'interruttore non valida."; return; }
+	json_get_type type action
+	json_get_var action action
+	[ "$type" = string ] || { fail_json "action deve essere una stringa."; return; }
+	. /usr/share/travel/toggle.sh
+	error=$(toggle_set "$action" 2>&1) || { fail_json "$error"; return; }
+	method_toggle_get
+}
+
 method_status() {
 	local uptime idle load1 load5 load15 temp
 
@@ -4537,6 +4568,11 @@ case "$1" in
 		json_add_object led_set
 		json_add_boolean enabled 0
 		json_close_object
+		json_add_object toggle_get
+		json_close_object
+		json_add_object toggle_set
+		json_add_string action ""
+		json_close_object
 		json_add_object radios
 		json_close_object
 		json_add_object uplinks
@@ -4687,6 +4723,8 @@ case "$1" in
 			usb_mode)             method_usb_mode ;;
 			led_get)              method_led_get ;;
 			led_set)              method_led_set ;;
+			toggle_get)           method_toggle_get ;;
+			toggle_set)           method_toggle_set ;;
 			usb_reset)            method_usb_reset ;;
 			portal_probe)         method_portal_probe ;;
 			portal_networks)      method_portal_networks ;;
