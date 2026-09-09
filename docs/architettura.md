@@ -606,6 +606,24 @@ attende fino a 15 secondi la comparsa del device prima di riapplicare il
 routing; lo stesso avviene dopo una modifica al profilo attivo, che ne rifà
 le sezioni.
 
+I profili, la policy e l'accensione stanno in `/usr/share/travel/wg.sh`, che il
+plugin rpcd carica in cima. Il file esiste perché le strade che accendono un
+tunnel sono due — la scheda WireGuard e l'interruttore fisico — e i cancelli
+devono essere gli stessi: `wg_switch <id> on|off <ui|toggle>` è l'unico punto in
+cui una configurazione cambia stato, e `method_wg_toggle` non fa che leggere gli
+argomenti e raccontare com'è finita. È la stessa scelta per cui l'azione `led`
+della levetta chiama `led_set` invece di scrivere in sysfs.
+
+Il terzo argomento dice da dove arriva la richiesta e cambia due cose sole. Lo
+**scambio**: da `ui` si rifiuta e si dice quale spegnere, perché fra il tunnel
+che cade e quello che sale c'è un istante di traffico in chiaro che nessuno ha
+chiesto; da `toggle` si scambia, perché associare una configurazione alla
+levetta *è* quella richiesta e una levetta non ha un secondo gesto da offrire.
+Lo scambio resta comunque una sola scrittura uci e un solo `network reload`. E
+il **comando della levetta**: da `ui` si rifiuta del tutto finché
+l'interruttore comanda una configurazione. Chiedere uno stato già vero non
+scrive e non ricarica niente, così un allineamento non fa cadere il traffico.
+
 ### Tabelle, regole e firewall
 
 `vpn-setup.sh runtime` riapplica inoltro IPv4, rotte e regole. Lo invocano
@@ -727,17 +745,31 @@ I test coprono UI, simulatore e helper shell con sysfs/UCI simulati, inclusi
 ripristino in un nuovo processo, errori di scrittura, rollback, lock, le
 riletture che si incrociano con un comando, i due percorsi d'errore
 dell'allineamento e un evento della levetta che arriva mentre una scelta e'
-ancora in corso.
+ancora in corso. `toggle-wireguard.test.ts` fa girare `toggle.sh` e `wg.sh`
+veri con `uci`, `ubus` e netifd simulati: elenco delle voci nominate,
+accensione al momento della scelta, scambio, spegnimento di quello che restava
+acceso, blocco e sblocco dell'interfaccia, scelta non salvata quando non si
+puo' applicare, e profilo eliminato.
 Su Windows i test shell richiedono Git Bash nel percorso di installazione
 standard. La verifica fisica del LED e del reboot resta da eseguire sul router.
 
 ### Interruttore fisico
 
 La levetta sul fianco del router e' configurabile: la riga sotto quella del LED
-sceglie che cosa deve fare. Le voci sono `none` (non fare nulla, ed e' come
-parte un router appena installato) e `led` (accendere e spegnere il LED di
-stato). La scelta sta in `/etc/config/travel_toggle`, quindi resta dopo il
-riavvio.
+sceglie che cosa deve fare. Le voci fisse sono `none` (non fare nulla, ed e'
+come parte un router appena installato) e `led` (accendere e spegnere il LED di
+stato). A queste si aggiunge una voce per ogni configurazione WireGuard
+salvata, con id `wg:<sezione>`. La scelta sta in `/etc/config/travel_toggle`,
+quindi resta dopo il riavvio.
+
+Le configurazioni WireGuard non hanno una voce generica: ne puo' portare il
+traffico una alla volta, quindi non esiste "attiva WireGuard" - esiste "attiva
+*questa*". L'id riusa il nome della sezione uci, che e' gia' l'identificatore
+con cui il resto del sistema chiama quel profilo, e l'etichetta e' il nome che
+gli ha dato l'utente: la manda il router in `names`, perche' non e' una
+traduzione da compilare nella SPA. `toggle_actions` elenca le fisse e poi
+quelle nominate; `toggle_do` smista, e le nominate portano dentro l'id perche'
+il nome di una funzione shell non lo puo' contenere.
 
 Quattro pezzi separati, perche' il quinto arrivera':
 
@@ -745,16 +777,30 @@ Quattro pezzi separati, perche' il quinto arrivera':
 | --- | --- | --- |
 | rilevamento | `/etc/rc.button/BTN_0`, `BTN_1` → `toggle-button.sh` | tradurre l'evento del kernel in `on`/`off` |
 | configurazione | `toggle_get` / `toggle_set` in `toggle.sh` | quale azione e' associata, e come si salva |
-| registro | `TOGGLE_ACTIONS` e `toggle_do_*` in `toggle.sh` | quali azioni esistono e cosa fanno |
+| registro | `TOGGLE_ACTIONS`, `toggle_actions` e `toggle_do_*` in `toggle.sh` | quali azioni esistono e cosa fanno |
 | esecuzione | `toggle_run`, `toggle_align` e il turno in `toggle.sh` | mettere in fila le tre cose sopra, una alla volta |
 
-Aggiungere una funzione vuole tre righe: l'id in `TOGGLE_ACTIONS`, la funzione
-`toggle_do_<id>` accanto, e la stessa coppia id/etichetta in `TOGGLE_ACTIONS`
-di `src/lib/toggle.ts`. Il rilevamento non si tocca: non sa quale azione
-girera', e le azioni non sanno da dove arriva l'evento. L'elenco che
-l'interfaccia mostra e' quello che risponde il router, non quello compilato
-nella SPA, cosi' una UI piu' recente del pacchetto non propone azioni che sul
-router non esistono; `normalizeToggle()` regge anche il caso opposto.
+Aggiungere una funzione fissa vuole tre righe: l'id in `TOGGLE_ACTIONS`, la
+funzione `toggle_do_<id>` accanto, e la stessa coppia id/etichetta in
+`TOGGLE_ACTIONS` di `src/lib/toggle.ts`. Il rilevamento non si tocca: non sa
+quale azione girera', e le azioni non sanno da dove arriva l'evento. L'elenco
+che l'interfaccia mostra e' quello che risponde il router, non quello compilato
+nella SPA - per le voci WireGuard non potrebbe nemmeno esserlo - cosi' una UI
+piu' recente del pacchetto non propone azioni che sul router non esistono;
+`normalizeToggle()` regge anche il caso opposto, e senza `names` mostra la
+sezione invece di una riga vuota.
+
+L'azione WireGuard non tocca `uci` e non rifa' l'instradamento: chiama
+`wg_switch` di `wg.sh` con `toggle`, lo stesso cancello della scheda. Ne segue
+da solo il vincolo di una configurazione accesa alla volta - accendendo questa,
+`wg_switch` spegne quella che trova, in una sola scrittura e un solo
+`network reload`. Con la levetta in basso non resta acceso nulla: la
+configurazione associata e' spenta per definizione, e un'altra accesa da prima
+verrebbe spenta anche lei, perche' l'interfaccia da quel momento non potrebbe
+piu' fermarla e un blocco che lascia un tunnel senza interruttore e' una
+trappola. Un profilo eliminato lascia una scelta che indica il vuoto:
+`toggle_get` la degrada a `none` e `wg_toggle_owner` non riconosce nessun
+padrone, invece di bloccare la riga che serve a cambiarla.
 
 Scegliere una funzione non sposta la levetta, e all'avvio nessuno la tocca: in
 tutti e due i casi `toggle_align` riallinea l'uscita alla posizione attuale,
@@ -780,6 +826,31 @@ dall'interfaccia invece non aspetta, perche' ha un "Riprova" e una chiamata
 appesa sarebbe peggio. La posizione pero' viene registrata sempre e subito,
 anche quando l'evento non riesce ad agire: cosi' il prossimo allineamento sa
 dov'e' finita davvero la levetta.
+
+E prima di mollare il turno, chi ce l'ha riguarda la posizione. Serve da quando
+un'azione puo' essere lenta: alzare un tunnel WireGuard tiene il turno per una
+quindicina di secondi, cioe' piu' dei cinque che un evento aspetta in coda, e
+senza questo giro in piu' un movimento avvenuto in quel mezzo andrebbe perso -
+resterebbe un tunnel acceso su una levetta che dice "no", fino al movimento
+successivo o al riavvio. `toggle_align` cicla finche' la posizione letta prima e
+dopo l'azione coincide, al massimo `TOGGLE_ALIGN_TRIES` volte: chi sposta la
+levetta avanti e indietro senza fermarsi non merita un ciclo infinito, e la sua
+ultima posizione resta comunque scritta. Un'azione fallita non si rincorre:
+inseguire la levetta con qualcosa che non funziona vuol dire solo fallire piu'
+volte. Ne segue che rinunciare al turno non e' un fallimento: `toggle_run` torna
+0, perche' il movimento e' registrato e lo applica chi il turno ce l'ha.
+
+`toggle_align` ha percio' tre esiti, e i due negativi non sono la stessa cosa:
+`1` vuol dire che non e' stato toccato niente, `2` che qualcosa era stato
+applicato e poi la rincorsa e' finita male - un tentativo fallito dopo uno
+riuscito, o la levetta che non si ferma. La distinzione esiste per chi disfa.
+Il ritorno indietro di `toggle_set` puo' funzionare solo perche' l'allineamento
+e' l'ultimo passo e un primo tentativo fallito non lascia niente dietro di se';
+col `2` quella premessa non vale piu', e disfare la scelta lascerebbe l'uscita
+dove l'ultimo tentativo riuscito l'ha messa con nessuno a comandarla - il
+contrario di cio' che il ritorno indietro serve a ottenere. Quindi con `2` la
+scelta resta: non e' scritta a meta', funziona, ed e' l'unica cosa che potra'
+riallineare l'uscita al prossimo spostamento.
 
 Dove sia la levetta lo sa solo il kernel, che lo dice con un evento - anche
 all'avvio, quando registra l'`EV_SW`. Non esiste un file da leggere: finche'
@@ -811,6 +882,25 @@ registro delle azioni e non nella schermata: se un domani un'altra azione
 muovesse il LED, e' quella riga a saperlo. Finche' la configurazione della
 levetta non e' stata letta il LED resta comandabile - bloccarlo per un dubbio
 lo lascerebbe bloccato anche quando di levetta non ce n'e' nessuna.
+
+Lo stesso vale per WireGuard, con una differenza: li' il blocco non e' di sola
+interfaccia. Finche' la levetta comanda una configurazione, `wg_switch` rifiuta
+ogni accensione e spegnimento che arrivi da `ui`, e la scheda spegne i pulsanti
+leggendo `wg.toggle` - un campo che `wg_get` restituisce gia' risolto, come
+`policy`, invece di far fare alla UI una seconda chiamata che arriverebbe dopo
+la prima. Il divieto vale per tutte le configurazioni e non solo per quella
+associata: accenderne un'altra spegnerebbe questa, e la levetta resterebbe dov'e'
+a dire il contrario. Tutto il resto della gestione - elenco, stato, modifica,
+reimportazione - resta disponibile. Togliendo l'associazione i pulsanti tornano
+utilizzabili e lo stato del tunnel non viene toccato: si restituisce il
+comando, non si cambia niente.
+
+Un'azione che alza un tunnel non e' istantanea come una che accende un LED, e
+due cose ne tengono conto. `toggle_set` ha sessanta secondi di respiro invece
+dei dieci di default, perche' l'accensione aspetta la comparsa del device. E
+`toggle_run`, preso il turno, rilegge la posizione dal file invece di usare
+quella con cui e' partito: chi ha aspettato il turno per una quindicina di
+secondi puo' aver visto la levetta muoversi ancora, e conta dov'e' adesso.
 
 L'azione `led` chiama `led_set` di `led.sh`, lo stesso che usa l'interfaccia:
 lock, rollback e persistenza sono quelli, e la levetta e la riga della UI non

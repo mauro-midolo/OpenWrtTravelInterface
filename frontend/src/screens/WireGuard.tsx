@@ -11,8 +11,10 @@ import {
   wgImport,
   wgProfiles,
   wgRoutingSteps,
+  wgLockedByToggle,
   wgSave,
   wgToggle,
+  wgToggleProfile,
 } from '../lib/vpn';
 import type { WgFields, WgProfile, WgState } from '../lib/vpn';
 
@@ -377,6 +379,11 @@ function ProfileSheet({
   const active = wgActiveProfile(wg);
   const other = active && active.id !== profile.id ? active : null;
   const isBlocked = blocked(wg.policy, 'wireguard');
+  // La levetta comanda: da qui si guarda e basta. Vale per tutte le
+  // configurazioni e non solo per quella associata — accenderne un'altra la
+  // spegnerebbe, e la levetta resterebbe dov'è a dire il contrario.
+  const byToggle = wgToggleProfile(wg);
+  const locked = wgLockedByToggle(wg);
 
   const guard = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -429,16 +436,27 @@ function ProfileSheet({
 
             {/* Il vincolo, detto prima che si provi. Il router lo rifiuterebbe
                 comunque, ma scoprirlo dopo aver premuto è un giro a vuoto. */}
-            {!profile.active && other && (
+            {!profile.active && other && !locked && (
               <p class="alert alert--info">
                 Per attivare questa devi prima disattivare «{other.name}»: una sola
                 configurazione WireGuard alla volta può portare il traffico.
               </p>
             )}
-            {!profile.active && !other && isBlocked && (
+            {!profile.active && !other && !locked && isBlocked && (
               <p class="alert alert--info">
                 Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}. Al
                 massimo una cosa alla volta può decidere da dove esce il traffico.
+              </p>
+            )}
+
+            {/* Il divieto della levetta viene prima di tutti gli altri: quando
+                c'è, gli altri non si possono nemmeno provare. */}
+            {locked && (
+              <p class="alert alert--info">
+                {byToggle?.id === profile.id
+                  ? 'Questa configurazione segue l’interruttore fisico: si accende e si spegne muovendo la levetta, non da qui.'
+                  : `L’interruttore fisico comanda «${byToggle?.name ?? 'una configurazione'}»: finché è così, da qui non si attiva e non si disattiva nessuna configurazione.`}{' '}
+                Per tornare a decidere da qui, cambia la funzione dell’interruttore in Sistema.
               </p>
             )}
 
@@ -447,7 +465,12 @@ function ProfileSheet({
             <div class="radio__actions">
               <button
                 class="button button--primary"
-                disabled={busy || !wg.installed || (!profile.active && (Boolean(other) || isBlocked))}
+                disabled={
+                  busy ||
+                  !wg.installed ||
+                  locked ||
+                  (!profile.active && (Boolean(other) || isBlocked))
+                }
                 onClick={() => setMode('toggle')}
               >
                 {profile.active ? 'Disattiva' : 'Attiva'}
@@ -580,6 +603,11 @@ export function WireGuardCard({
   const active = wgActiveProfile(wg);
   const isBlocked = blocked(wg.policy, 'wireguard');
   const alive = wgAlive(wg.status);
+  // Chi comanda l'accensione: la levetta sul fianco del router, o questa
+  // scheda. Non tutte e due, mai — è ciò che tiene d'accordo posizione della
+  // levetta, tunnel acceso e quello che si legge qui.
+  const byToggle = wgToggleProfile(wg);
+  const locked = wgLockedByToggle(wg);
 
   // Gli anelli fra "il tunnel è su" e "i client ci passano dentro", e il
   // giudizio che ne segue. Stanno in vpn.ts perché la stessa domanda la fa
@@ -628,10 +656,22 @@ export function WireGuardCard({
 
       {/* Il vincolo esterno, detto una volta sola sulla scheda: dentro al
           foglio di un profilo si ripete solo quando lì si sta per premere. */}
-      {!active && isBlocked && profiles.length > 0 && (
+      {!active && isBlocked && !locked && profiles.length > 0 && (
         <p class="alert alert--info">
           Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}. Al
           massimo una cosa alla volta può decidere da dove esce il traffico.
+        </p>
+      )}
+
+      {/* Chi comanda si dice qui, non solo dentro al foglio di un profilo: chi
+          apre la scheda per capire perché il tunnel si è acceso da solo deve
+          trovarne la ragione senza doverla cercare. */}
+      {locked && (
+        <p class="alert alert--info">
+          L’attivazione la comanda l’interruttore fisico:{' '}
+          <strong>{byToggle?.name ?? wg.toggle}</strong> segue la levetta e da qui non si
+          attiva né si disattiva nessuna configurazione. Le altre cose — modificare,
+          reimportare, guardare — restano come sempre.
         </p>
       )}
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { TOGGLE_ACTIONS, getToggle, setToggle } from '../lib/toggle';
+import { getToggle, setToggle, toggleLabel } from '../lib/toggle';
 import type { ToggleAction, ToggleConfig } from '../lib/toggle';
 
 /**
@@ -48,9 +48,12 @@ export function PhysicalToggleRow({ onConfig }: {
     return () => { mounted.current = false; };
   }, []);
 
-  // Le voci le decide il router: l'etichetta la mette questa lista, ma un'azione
-  // che il pacchetto installato non conosce non deve comparire.
-  const options = config && TOGGLE_ACTIONS.filter((action) => config.actions.includes(action.id));
+  // Le voci le decide il router, e adesso non sono piu' solo quelle fisse: fra
+  // di esse ci sono le configurazioni WireGuard salvate, una per una. Un'azione
+  // che il pacchetto installato non conosce non compare, e il nome di un tunnel
+  // lo mette il router perche' l'ha scritto una persona.
+  const options =
+    config && config.actions.map((id) => ({ id, label: toggleLabel(id, config.names) }));
 
   return (
     <>

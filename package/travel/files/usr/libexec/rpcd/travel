@@ -7,6 +7,14 @@
 
 . /usr/share/libubox/jshn.sh
 
+# I profili WireGuard, chi decide da dove esce il traffico, e come si accende un
+# tunnel: stanno in un file a parte perche' li usa anche l'interruttore fisico,
+# che a una configurazione ci puo' essere associato. Si carica in cima e non
+# dentro i metodi come `led.sh`, perche' i lettori qui sono parecchi - la policy
+# la guardano mwan3, Tailscale e i profili di luogo - e sono solo definizioni:
+# sorgerlo non fa niente.
+. /usr/share/travel/wg.sh
+
 VERSION_FILE=/usr/share/travel/version
 
 # Legge la prima riga di un file, stringa vuota se assente o illeggibile.
@@ -73,9 +81,11 @@ method_led_set() {
 
 # Configurazione dell'interruttore fisico. L'elenco delle azioni lo dice il
 # router, non l'interfaccia: e' li' che vive il registro, e una UI piu' vecchia
-# del pacchetto non deve poter proporre qualcosa che qui non esiste.
+# del pacchetto non deve poter proporre qualcosa che qui non esiste. Da quando
+# in elenco ci sono anche le configurazioni WireGuard, questa non e' piu' solo
+# una precauzione: quelle voci il frontend non potrebbe nemmeno inventarsele.
 method_toggle_get() {
-	local action
+	local action section
 	. /usr/share/travel/toggle.sh
 	toggle_get || { fail_json "Configurazione dell'interruttore non valida."; return; }
 	toggle_position
@@ -83,10 +93,18 @@ method_toggle_get() {
 	json_add_string action "$TOGGLE_ACTION"
 	json_add_string position "$TOGGLE_POSITION"
 	json_add_array actions
-	for action in $TOGGLE_ACTIONS; do
+	for action in $(toggle_actions); do
 		json_add_string '' "$action"
 	done
 	json_close_array
+	# Le etichette delle azioni fisse le mette la SPA, in italiano; il nome di
+	# una configurazione WireGuard invece lo ha scritto una persona, e puo'
+	# arrivare solo da qui.
+	json_add_object names
+	for section in $(wg_profiles); do
+		json_add_string "wg:$section" "$(wg_name "$section")"
+	done
+	json_close_object
 	json_dump
 }
 
@@ -2303,152 +2321,6 @@ method_portal_forget() {
 	json_dump
 }
 
-# --- I profili WireGuard, elencati --------------------------------------------
-#
-# Le configurazioni WireGuard vivono in `/etc/config/network` come interfacce
-# netifd e si chiamano `travel_wg`, `travel_wg1`, `travel_wg2`... Il nome della
-# sezione **e'** il nome dell'interfaccia - netifd funziona cosi' - quindi e'
-# anche l'identificatore con cui l'interfaccia parla di un profilo: non serve
-# inventarne un secondo, e uno solo non puo' divergere dall'altro.
-#
-# `travel_wg` senza numero e' il tunnel unico delle versioni precedenti. Resta
-# com'e' invece di essere rinominato: rinominare un'interfaccia significa
-# abbatterla e rifarla, e chi aggiorna il router mentre e' in albergo non se lo
-# merita. Diventa semplicemente la prima voce dell'elenco.
-#
-# Queste funzioni stanno qui sopra, prima della policy, perche' la policy e' il
-# loro primo lettore: "c'e' un tunnel acceso?" e "quale?" sono la stessa
-# domanda, e devono avere una risposta sola.
-WG_PREFIX=travel_wg
-
-# Le sezioni interfaccia dei profili, una per riga. Le sezioni peer si chiamano
-# `<profilo>_peer` e non finiscono qui: hanno tipo `wireguard_<profilo>`, non
-# `interface`, e il filtro le lascia fuori da solo.
-wg_profiles() {
-	uci -q show network 2>/dev/null |
-		sed -n "s/^network\.\(${WG_PREFIX}[0-9]*\)=interface\$/\1/p"
-}
-
-# Il profilo acceso, o niente.
-#
-# Al massimo uno: e' il vincolo di tutta la fase, e qui si legge come "il primo
-# che non e' disabilitato". Se una configurazione scritta a mano - LuCI, ssh -
-# ne avesse accesi due, questa ne nomina uno e i cancelli piu' sotto rifiutano
-# di accenderne altri: si torna a uno solo spegnendo, che e' la strada normale.
-wg_active() {
-	local section
-
-	for section in $(wg_profiles); do
-		[ "$(uci -q get "network.$section.disabled")" = "1" ] && continue
-		printf '%s' "$section"
-		return 0
-	done
-
-	return 1
-}
-
-# Il nome che gli ha dato chi lo ha salvato.
-#
-# E' obbligatorio da quando si crea un profilo in poi. Non c'e' per il tunnel
-# unico che arriva da una versione precedente: li' si mostra l'endpoint, che e'
-# l'unica cosa che lo distingue, e il primo salvataggio gli da' un nome vero.
-wg_name() {
-	local section="$1" name
-
-	name=$(uci -q get "network.$section.travel_name")
-	[ -n "$name" ] || name=$(uci -q get "network.${section}_peer.endpoint_host")
-	[ -n "$name" ] || name="$section"
-	printf '%s' "$name"
-}
-
-# --- Chi decide da dove esce il traffico (Fase 6b) ----------------------------
-#
-# Tre cose, e **al massimo una alla volta**:
-#
-#   balance    il bilanciamento multi-WAN sparpaglia le connessioni su piu' WAN
-#   ts_exit    un exit node Tailscale porta tutto dentro il tailnet
-#   wireguard  un tunnel WireGuard porta tutto dall'altra parte
-#
-# Sembrano quattro vincoli distinti - "in bilanciamento niente exit node", "con
-# WireGuard niente bilanciamento", "WireGuard ed exit node si escludono"... - e
-# invece sono lo stesso enunciato visto da tre lati: **sono tre modi di
-# decidere la stessa cosa, e due decisioni contemporanee sulla stessa cosa non
-# esistono.**
-#
-# Il perche', per ciascuna coppia:
-#
-# - **balance con un tunnel completo** non ha niente da bilanciare e tutto da
-#   rompere. Il tunnel e' una connessione sola: mwan3 non la puo' sparpagliare,
-#   ma la puo' spostare, e a ogni spostamento cambia l'indirizzo di partenza e
-#   costringe a un handshake nuovo su *tutto* il traffico, perche' tutto e' li'
-#   dentro (il ragionamento lungo sta piu' su, nella Fase 6);
-# - **due tunnel completi insieme** vorrebbe dire due rotte predefinite dentro
-#   due tunnel diversi. Vincerebbe quella con la priorita' piu' alta e l'altra
-#   resterebbe li' a non fare niente, con l'interfaccia che ne mostra due
-#   accesi: uno stato che sembra una configurazione e invece e' un errore
-#   silenzioso.
-#
-# Scritta una volta sola, qui. La UI la rilegge da `travel.vpn` per spegnere le
-# opzioni giuste, e i metodi che applicano la ricontrollano prima di agire: se
-# l'interfaccia venisse scavalcata - LuCI, ssh, un backup importato - il vincolo
-# regge lo stesso, perche' vive nel punto in cui la modifica prende effetto e
-# non in quello in cui viene chiesta.
-
-# Vero se il multi-WAN e' in bilanciamento.
-policy_balance() {
-	[ "$(uci -q get mwan3.travel_default.use_policy)" = "travel_balance" ]
-}
-
-# Vero se un exit node Tailscale e' configurato. Conta la CONFIGURAZIONE, non
-# se il tunnel sta funzionando in questo momento: il vincolo deve valere anche
-# mentre la rete e' giu', altrimenti basterebbe un momento di disconnessione per
-# infilare una configurazione incompatibile che poi torna su da sola.
-policy_ts_exit() {
-	[ -n "$(uci -q get travel.tailscale.exit_node)" ]
-}
-
-# Vero se un tunnel WireGuard e' acceso - uno qualunque dei profili salvati.
-#
-# I profili sono tanti, la decisione su dove esce il traffico e' una: quello che
-# conta qui non e' quale sia acceso ma che ce ne sia uno. Quale, lo chiede chi
-# deve scrivere la frase da mostrare.
-policy_wireguard() {
-	wg_active >/dev/null
-}
-
-# Chi sta gia' decidendo, escludendo quello che si sta per accendere.
-#
-# Torna il nome dell'occupante, o niente se la strada e' libera. Il chiamante
-# passa cio' che vuole accendere, cosi' la stessa funzione risponde a tutte e
-# tre le domande senza tre elenchi da tenere allineati.
-policy_holder() {
-	local want="$1"
-
-	[ "$want" != "balance" ]   && policy_balance   && { printf 'balance';   return 0; }
-	[ "$want" != "ts_exit" ]   && policy_ts_exit   && { printf 'ts_exit';   return 0; }
-	[ "$want" != "wireguard" ] && policy_wireguard && { printf 'wireguard'; return 0; }
-
-	return 1
-}
-
-# La stessa frase per tutti: la scrive il router, non tre schermate diverse.
-policy_reason() {
-	case "$1" in
-		balance)
-			printf 'il multi-WAN e in bilanciamento: sparpaglia le connessioni su piu WAN, e un tunnel non si puo sparpagliare' ;;
-		ts_exit)
-			printf 'un exit node Tailscale sta gia portando fuori tutto il traffico' ;;
-		wireguard)
-			# Col nome del profilo, adesso che ce ne puo' essere piu' d'uno:
-			# "un tunnel WireGuard" non basta piu' a dire quale spegnere.
-			_wg_on=$(wg_active) &&
-				printf 'il tunnel WireGuard "%s" sta gia portando fuori tutto il traffico' "$(wg_name "$_wg_on")" ||
-				printf 'un tunnel WireGuard sta gia portando fuori tutto il traffico' ;;
-		*)
-			printf '' ;;
-	esac
-}
-
 # Lo stato completo, per l'interfaccia: i tre atomi e cosa e' bloccato da chi.
 #
 # La UI non ricalcola niente e non conosce le regole: legge quale opzione e'
@@ -3155,28 +3027,6 @@ method_ts_logout() {
 # mwan3, che sta sotto lo 0x3f00.
 WG_MARK=0x1000000
 
-# Il pacchetto c'e'? Senza, la configurazione si scrive ma non si alza.
-wg_installed() {
-	[ -x /usr/bin/wg ] && [ -f /lib/netifd/proto/wireguard.sh ]
-}
-
-# Il profilo esiste davvero?
-#
-# Ogni metodo che riceve un identificatore dal browser passa di qui prima di
-# toccare uci: senza, un `id` inventato scriverebbe una sezione nuova con un
-# nome qualunque in `/etc/config/network`, che e' il modo piu' silenzioso di
-# rompere la configurazione di rete di un router.
-wg_known() {
-	local want="$1" section
-
-	[ -n "$want" ] || return 1
-	for section in $(wg_profiles); do
-		[ "$section" = "$want" ] && return 0
-	done
-
-	return 1
-}
-
 # Il primo nome di sezione libero.
 #
 # I nuovi partono da 1 perche' `travel_wg` senza numero puo' esistere gia': e'
@@ -3371,34 +3221,6 @@ wg_write() {
 	wg_join_zone "$section"
 }
 
-# Fa prendere effetto a cio' che e' appena stato scritto, e rimette
-# l'instradamento.
-#
-# **Aspettare che il device esista prima di instradarlo.**
-#
-# `network reload` torna subito: netifd alza l'interfaccia per conto suo,
-# qualche istante dopo. La prima versione lanciava l'instradamento appena
-# tornata la chiamata, non trovava il device in /sys, e - peggio - concludeva
-# che il tunnel fosse giu': cancellava la regola invece di scriverla. Il tunnel
-# saliva un secondo dopo, faceva handshake, e il traffico dei client continuava
-# a uscire dalla WAN. Tutto sembrava a posto tranne l'unica cosa che contava.
-wg_reload() {
-	local section="$1" tries=0
-
-	ubus call network reload >/dev/null 2>&1
-
-	if [ "$(uci -q get "network.$section.disabled")" != "1" ]; then
-		ubus call network.interface."$section" up >/dev/null 2>&1
-		while [ "$tries" -lt 15 ]; do
-			[ -e "/sys/class/net/$section" ] && break
-			sleep 1
-			tries=$((tries + 1))
-		done
-	fi
-
-	sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
-}
-
 # I campi di un profilo, per l'elenco. `has_private_key` e non la chiave: un
 # segreto che entra non torna indietro (D3).
 wg_config_json() {
@@ -3502,29 +3324,30 @@ method_wg_get() {
 	json_add_boolean in_zone "$([ -n "$active" ] && uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$active" && echo 1 || echo 0)"
 	json_close_object
 
+	# La configurazione comandata dall'interruttore fisico, stringa vuota se la
+	# levetta non ne comanda nessuna. E' cio' che spegne i pulsanti di accensione
+	# nella scheda: la UI legge un fatto gia' risolto invece di andarselo a
+	# cercare con una seconda chiamata che potrebbe arrivare dopo la prima.
+	json_add_string toggle "$(wg_toggle_owner || true)"
+
 	policy_json
 	json_dump
 }
 
 # Accende o spegne un profilo.
 #
-# **Qui sta il cancello.** L'interfaccia spegne gia' il pulsante quando non si
-# puo', ma il vincolo non puo' vivere solo li': LuCI, un `uci set` da ssh o un
-# backup importato arriverebbero a una configurazione che l'interfaccia non sa
-# nemmeno rappresentare. Il controllo sta nel punto in cui la modifica prende
-# effetto, che e' l'unico posto da cui non si passa per sbaglio.
+# **Qui non c'e' nessuna regola.** Le regole - una configurazione accesa alla
+# volta, niente scambio automatico, al massimo una cosa che decide da dove esce
+# il traffico, e la levetta che quando comanda comanda da sola - stanno tutte in
+# `wg_switch` di `wg.sh`, perche' le strade che accendono un tunnel sono due:
+# questa e l'interruttore fisico. Due copie dei cancelli sarebbero due copie che
+# prima o poi divergono, e divergerebbero nel caso raro - che qui vuol dire: in
+# albergo, di sera, senza SSH.
 #
-# **Accendere non scambia.** Con un altro profilo gia' acceso si rifiuta e si
-# dice quale, invece di spegnerlo di nascosto. Uno scambio automatico avrebbe
-# un istante - fra il tunnel vecchio che cade e quello nuovo che sale - in cui
-# il traffico esce in chiaro dalla rete dell'albergo, e nessuno lo avrebbe
-# chiesto. Due passi espliciti valgono quell'istante.
-#
-# Il controllo e' a se' e non passa da `policy_holder`: quella funzione esclude
-# dal confronto cio' che si sta accendendo, quindi "WireGuard" non blocca mai
-# "WireGuard". Giusto quando i tunnel erano uno, cieco adesso che sono tanti.
+# Resta a questo metodo cio' che e' suo: leggere gli argomenti che arrivano dal
+# browser e raccontare com'e' finita.
 method_wg_toggle() {
-	local input want id holder busy
+	local input want id busy error
 
 	input=$(cat)
 	[ -n "$input" ] || input='{}'
@@ -3533,33 +3356,16 @@ method_wg_toggle() {
 	json_get_var want enabled
 	json_get_var id id
 
+	# Chi era acceso prima: serve solo alla risposta, perche' "spegni" senza
+	# dire quale spegne quello acceso e il nome poi va ripetuto qui sotto.
 	busy=$(wg_active) || busy=""
 
 	if [ "$want" = "1" ] || [ "$want" = "true" ]; then
-		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
-		wg_installed || { fail_json "wireguard-tools non e' installato"; return; }
-
-		[ -n "$busy" ] && [ "$busy" != "$id" ] && {
-			fail_json "e' gia' attiva la configurazione \"$(wg_name "$busy")\": disattivala prima di attivarne un'altra"
-			return
-		}
-
-		holder=$(policy_holder wireguard) && {
-			fail_json "non posso accendere WireGuard: $(policy_reason "$holder")"
-			return
-		}
-		uci set "network.$id.disabled=0"
+		error=$(wg_switch "$id" on ui 2>&1) || { fail_json "$error"; return; }
 	else
-		# Spegnere senza dire quale spegne quello acceso: e' l'unico che possa
-		# esserlo, e chiederne il nome per dire "spegni" sarebbe cerimonia.
+		error=$(wg_switch "$id" off ui 2>&1) || { fail_json "$error"; return; }
 		[ -n "$id" ] || id="$busy"
-		[ -n "$id" ] || { fail_json "nessuna configurazione WireGuard attiva"; return; }
-		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
-		uci set "network.$id.disabled=1"
 	fi
-
-	uci commit network
-	wg_reload "$id"
 
 	json_init
 	json_add_string  active "$(wg_active || true)"

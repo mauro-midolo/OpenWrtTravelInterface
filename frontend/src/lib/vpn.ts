@@ -287,6 +287,17 @@ export interface WgState {
   enabled: boolean;
   /** L'id di quella accesa, stringa vuota se non ce n'e' nessuna. */
   active?: string;
+  /**
+   * L'id di quella comandata dall'interruttore fisico, stringa vuota se la
+   * levetta non ne comanda nessuna.
+   *
+   * Arriva gia' risolto dal router, come `policy`: la UI non sa come sono fatti
+   * gli id delle azioni della levetta e non deve chiederli con una seconda
+   * chiamata che arriverebbe dopo la prima. Puo' mancare - un pacchetto piu'
+   * vecchio di questa interfaccia - e allora vale "nessuna", che e' come si
+   * comportava il router prima che l'associazione esistesse.
+   */
+  toggle?: string;
   profiles?: WgProfile[];
   /** La configurazione accesa, ripetuta fuori dall'elenco per comodita'. */
   config: WgConfig;
@@ -346,6 +357,24 @@ export function wgProfiles(wg: WgState): WgProfile[] {
 /** Quella accesa, o niente. */
 export function wgActiveProfile(wg: WgState): WgProfile | null {
   return wgProfiles(wg).find((p) => p.active) ?? null;
+}
+
+/**
+ * Quella comandata dall'interruttore fisico, o niente.
+ *
+ * Finche' c'e', accendere e spegnere dall'interfaccia non si puo': la levetta
+ * resterebbe dov'e', e schermo, tunnel e levetta direbbero tre cose diverse.
+ * Il resto della gestione non e' toccato - si guarda, si modifica, si reimporta
+ * come sempre: il divieto riguarda solo chi decide se il tunnel e' su.
+ */
+export function wgToggleProfile(wg: WgState): WgProfile | null {
+  if (!wg.toggle) return null;
+  return wgProfiles(wg).find((p) => p.id === wg.toggle) ?? null;
+}
+
+/** L'interruttore fisico comanda WireGuard: da qui si guarda e basta. */
+export function wgLockedByToggle(wg: WgState): boolean {
+  return Boolean(wg.toggle);
 }
 
 /**

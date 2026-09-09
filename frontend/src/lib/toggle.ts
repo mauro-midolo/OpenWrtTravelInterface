@@ -13,7 +13,22 @@ export const TOGGLE_ACTIONS = [
   { id: 'led', label: 'Controllo LED di stato' },
 ] as const;
 
-export type ToggleAction = (typeof TOGGLE_ACTIONS)[number]['id'];
+/** Le azioni scritte nel registro: quelle che esistono su ogni router. */
+export type FixedAction = (typeof TOGGLE_ACTIONS)[number]['id'];
+
+/**
+ * Le azioni che nominano qualcosa creato da chi usa il router.
+ *
+ * Le configurazioni WireGuard sono tante e ne puo' portare il traffico una
+ * sola: "attiva WireGuard" non vorrebbe dire niente, e la voce e' quindi
+ * "attiva *questa*". Dopo i due punti c'e' la sezione uci, che e' gia'
+ * l'identificatore con cui il resto dell'interfaccia chiama quel profilo.
+ */
+export type WgAction = `wg:${string}`;
+
+export type ToggleAction = FixedAction | WgAction;
+
+const WG = 'wg:';
 
 export interface ToggleConfig {
   /** Azione associata adesso. */
@@ -22,11 +37,22 @@ export interface ToggleConfig {
   actions: ToggleAction[];
   /** Dove sta la levetta, per quanto ne sa il router: `unknown` finche' non si muove. */
   position: 'on' | 'off' | 'unknown';
+  /**
+   * Il nome di ogni configurazione WireGuard associabile, per id di azione.
+   *
+   * Non sta nell'elenco compilato qui sopra perche' non e' una traduzione: e' il
+   * nome che una persona ha dato al suo tunnel, e lo sa solo il router.
+   */
+  names: Record<string, string>;
 }
 
-const ids: readonly string[] = TOGGLE_ACTIONS.map((action) => action.id);
+const fixed: readonly string[] = TOGGLE_ACTIONS.map((action) => action.id);
 const isAction = (value: unknown): value is ToggleAction =>
-  typeof value === 'string' && ids.includes(value);
+  typeof value === 'string' && (fixed.includes(value) || value.startsWith(WG));
+
+/** L'azione nomina una configurazione WireGuard. */
+export const isWgAction = (action: ToggleAction | null): action is WgAction =>
+  typeof action === 'string' && action.startsWith(WG);
 
 /**
  * Se il LED lo comanda la levetta, chi lo mostra non lo comanda piu'.
@@ -37,24 +63,66 @@ const isAction = (value: unknown): value is ToggleAction =>
 export const controlsLed = (action: ToggleAction | null): boolean => action === 'led';
 
 /**
+ * La configurazione WireGuard comandata dalla levetta, o stringa vuota.
+ *
+ * Stessa idea di `controlsLed`, e per la stessa ragione: chi decide se i
+ * pulsanti di accensione della scheda WireGuard sono ancora premibili non deve
+ * conoscere il formato degli id.
+ */
+export const controlsWg = (action: ToggleAction | null): string =>
+  isWgAction(action) ? action.slice(WG.length) : '';
+
+/**
+ * Come si chiama un'azione in elenco.
+ *
+ * Le fisse hanno l'etichetta qui sopra; una configurazione WireGuard porta il
+ * nome che le ha dato chi l'ha salvata, e se il router non lo manda - un
+ * pacchetto piu' vecchio di questa interfaccia - resta la sezione, che e'
+ * brutta ma vera. Mostrare una riga vuota sarebbe peggio.
+ */
+export function toggleLabel(action: ToggleAction, names: Record<string, string>): string {
+  const known = TOGGLE_ACTIONS.find((entry) => entry.id === action);
+  if (known) return known.label;
+  return `WireGuard – ${names[action] || action.slice(WG.length)}`;
+}
+
+/**
  * Forma canonica al confine: un router non ancora aggiornato risponde senza
- * `actions` o senza `position`, e un'azione che questa UI non conosce non va
- * mostrata come una voce vuota. Chi legge riceve sempre i tre campi pieni.
+ * `actions`, senza `names` o senza `position`, e un'azione che questa UI non
+ * conosce non va mostrata come una voce vuota. Chi legge riceve sempre i
+ * quattro campi pieni.
  */
 export function normalizeToggle(raw: Partial<ToggleConfig> | undefined): ToggleConfig {
   const action = isAction(raw?.action) ? raw.action : 'none';
   const offered = Array.isArray(raw?.actions) ? raw.actions.filter(isAction) : [];
   // Senza elenco si mostra tutto quello che si sa fare: il router e' vecchio,
-  // non povero. L'azione in corso resta comunque selezionabile, altrimenti la
-  // lista si aprirebbe su una riga vuota.
-  const actions = offered.length > 0 ? offered : [...ids as ToggleAction[]];
+  // non povero. Solo le fisse, pero' - le configurazioni WireGuard non si
+  // possono indovinare. L'azione in corso resta comunque selezionabile,
+  // altrimenti la lista si aprirebbe su una riga vuota.
+  const actions = offered.length > 0 ? offered : [...(fixed as ToggleAction[])];
   if (!actions.includes(action)) actions.unshift(action);
   const position = raw?.position === 'on' || raw?.position === 'off' ? raw.position : 'unknown';
-  return { action, actions, position };
+  const names: Record<string, string> = {};
+  if (raw?.names && typeof raw.names === 'object') {
+    for (const [id, name] of Object.entries(raw.names)) {
+      if (typeof name === 'string' && name !== '') names[id] = name;
+    }
+  }
+  return { action, actions, position, names };
 }
 
 async function request(method: string, args: Record<string, unknown> = {}): Promise<ToggleConfig> {
-  const result = await call<Partial<ToggleConfig> & { error?: string }>('travel', method, args);
+  const result = await call<Partial<ToggleConfig> & { error?: string }>(
+    'travel',
+    method,
+    args,
+    // Associare una configurazione WireGuard alla levetta la accende subito, e
+    // alzare un tunnel vuole il suo tempo: netifd risponde prima che
+    // l'interfaccia esista, e il router aspetta che compaia prima di
+    // instradarla. Lo stesso respiro che ha gia' `wg_toggle`, con il margine
+    // dello scambio - una configurazione da spegnere e una da accendere.
+    60_000,
+  );
   if (result.error) throw new Error(result.error);
   return normalizeToggle(result);
 }

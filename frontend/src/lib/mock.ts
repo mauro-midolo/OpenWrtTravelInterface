@@ -332,11 +332,28 @@ const statusLedState = { supported: true, enabled: true };
 
 /**
  * Interruttore fisico: nessuna funzione associata e levetta in basso, cioe' il
- * router appena installato. `toggleActions` e' il registro che sul router sta
- * in `toggle.sh`: il simulatore offre gli stessi id.
+ * router appena installato. `TOGGLE_FIXED` e' il registro che sul router sta in
+ * `toggle.sh`: il simulatore offre gli stessi id, piu' una voce per ogni
+ * configurazione WireGuard salvata - che qui, come sul router, non si possono
+ * elencare in anticipo perche' le crea chi usa l'interfaccia.
  */
-const toggleActions = ['none', 'led'];
+const TOGGLE_FIXED = ['none', 'led'];
 const physicalToggleState = { action: 'none', position: 'off' };
+
+const toggleActions = (): string[] => [
+  ...TOGGLE_FIXED,
+  ...wgState.profiles.map((p) => `wg:${p.id}`),
+];
+
+const toggleNames = (): Record<string, string> =>
+  Object.fromEntries(wgState.profiles.map((p) => [`wg:${p.id}`, p.name]));
+
+/** La configurazione WireGuard comandata dalla levetta, o niente. */
+function toggleWgMock(): MockWgProfile | undefined {
+  const action = physicalToggleState.action;
+  if (!action.startsWith('wg:')) return undefined;
+  return wgState.profiles.find((p) => p.id === action.slice(3));
+}
 
 /**
  * Porta USB. Parte alla velocita' piena, che e' il default dopo che il limite
@@ -1235,6 +1252,9 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       configured: wgState.profiles.length > 0,
       enabled: on != null,
       active: on?.id ?? '',
+      // Chi comanda l'accensione. Arriva gia' risolto, come sul router: la
+      // scheda spegne i pulsanti leggendo questo, non ricalcolandolo.
+      toggle: toggleWgMock()?.id ?? '',
       profiles: wgState.profiles.map((p) => ({
         id: p.id,
         name: p.name,
@@ -1382,6 +1402,15 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
     if (!profile) {
       return { error: want ? 'configurazione WireGuard sconosciuta' : 'nessuna configurazione WireGuard attiva' };
+    }
+
+    // Lo stesso cancello del router, e viene prima di tutti gli altri: quando
+    // la levetta comanda, l'interfaccia non accende e non spegne piu' niente.
+    const owner = toggleWgMock();
+    if (owner) {
+      return {
+        error: `la comanda l'interruttore fisico: "${owner.name}" segue la levetta. Cambia la funzione dell'interruttore per tornare a decidere da qui`,
+      };
     }
 
     if (want) {
@@ -1811,15 +1840,42 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   // La levetta non si puo' muovere da un browser, ma la posizione conta lo
   // stesso: come sul router, scegliere una funzione la applica subito a dov'e'
   // la levetta adesso, altrimenti resterebbe da vedere un LED che la smentisce.
-  'travel.toggle_get': () => ({ ...physicalToggleState, actions: [...toggleActions] }),
+  'travel.toggle_get': () => ({
+    ...physicalToggleState,
+    actions: toggleActions(),
+    names: toggleNames(),
+  }),
   'travel.toggle_set': (args) => {
     if (typeof args.action !== 'string') return { error: 'action deve essere una stringa.' };
-    if (!toggleActions.includes(args.action)) return { error: 'Azione non valida.' };
-    if (args.action === 'led' && physicalToggleState.position !== 'unknown') {
-      statusLedState.enabled = physicalToggleState.position === 'on';
-    }
+    if (!toggleActions().includes(args.action)) return { error: 'Azione non valida.' };
+    const previous = physicalToggleState.action;
     physicalToggleState.action = args.action;
-    return { ...physicalToggleState, actions: [...toggleActions] };
+    // L'allineamento e' la parte che conta, ed e' la stessa del router: la
+    // scelta si applica subito a dov'e' la levetta adesso, altrimenti
+    // resterebbe da vedere un LED - o un tunnel - che la smentisce.
+    if (physicalToggleState.position !== 'unknown') {
+      const on = physicalToggleState.position === 'on';
+      if (args.action === 'led') statusLedState.enabled = on;
+      const wanted = toggleWgMock();
+      if (wanted) {
+        // Non si duplica la logica di accensione: si chiede la stessa cosa che
+        // chiederebbe la scheda, con lo scambio che la levetta si puo'
+        // permettere - a differenza dell'interfaccia, che invece deve dire
+        // quale spegnere prima.
+        const busy = wgActiveMock();
+        const holder = on ? mockHolder('wireguard') : '';
+        if (holder) {
+          physicalToggleState.action = previous;
+          return { error: `non posso accendere WireGuard: ${MOCK_REASON[holder]}` };
+        }
+        // Con la levetta in basso non resta acceso niente: da adesso
+        // l'interfaccia non accende e non spegne piu', e un tunnel acceso da
+        // prima resterebbe senza interruttore.
+        if (busy && busy !== wanted) busy.active = false;
+        wanted.active = on;
+      }
+    }
+    return { ...physicalToggleState, actions: toggleActions(), names: toggleNames() };
   },
 
   'travel.led_get': () => ({ ...statusLedState }),

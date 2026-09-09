@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { PhysicalToggleRow } from '../src/components/PhysicalToggleRow';
-import { normalizeToggle } from '../src/lib/toggle';
+import { controlsLed, controlsWg, isWgAction, normalizeToggle } from '../src/lib/toggle';
 import { call } from '../src/lib/ubus';
 
 vi.mock('../src/lib/ubus', () => ({ call: vi.fn() }));
@@ -23,9 +23,17 @@ async function choose(action: string) {
   await act(() => menu.dispatchEvent(new Event('change', { bubbles: true })));
   await act(async () => { await Promise.resolve(); });
 }
+/** Come risponde il router: `names` c'è solo per le voci che nomina lui. */
+const reply = (over: Record<string, unknown> = {}) => ({
+  action: 'none',
+  position: 'off',
+  actions: ['none', 'led'],
+  names: {},
+  ...over,
+});
 beforeEach(() => {
   rpc.mockReset();
-  rpc.mockResolvedValue({ action: 'none', position: 'off', actions: ['none', 'led'] });
+  rpc.mockResolvedValue(reply());
   container = document.createElement('div');
   document.body.append(container);
 });
@@ -37,7 +45,10 @@ afterEach(() => {
 describe('interruttore fisico', () => {
   it('sits under the LED row and offers the actions the router knows', async () => {
     await mount();
-    expect(rpc).toHaveBeenCalledWith('travel', 'toggle_get', {});
+    // Il tempo largo è per le azioni lente: associare una configurazione
+    // WireGuard alla levetta alza un tunnel, e un tunnel non sale in dieci
+    // secondi.
+    expect(rpc).toHaveBeenCalledWith('travel', 'toggle_get', {}, 60_000);
     expect(container.querySelector('.row__label')?.textContent).toBe('Interruttore fisico');
     expect(labels()).toEqual(['Non fare nulla', 'Controllo LED di stato']);
     expect(select()!.value).toBe('none');
@@ -45,9 +56,9 @@ describe('interruttore fisico', () => {
 
   it('saves the chosen action and shows it again on reopening', async () => {
     await mount();
-    rpc.mockResolvedValue({ action: 'led', position: 'off', actions: ['none', 'led'] });
+    rpc.mockResolvedValue(reply({ action: 'led' }));
     await choose('led');
-    expect(rpc).toHaveBeenLastCalledWith('travel', 'toggle_set', { action: 'led' });
+    expect(rpc).toHaveBeenLastCalledWith('travel', 'toggle_set', { action: 'led' }, 60_000);
     expect(select()!.value).toBe('led');
     await act(() => render(null, container));
     await mount();
@@ -62,28 +73,22 @@ describe('interruttore fisico', () => {
 
   it('reports the function it read, so the screen knows who owns the LED', async () => {
     const seen = vi.fn();
-    rpc.mockResolvedValue({ action: 'led', position: 'on', actions: ['none', 'led'] });
+    rpc.mockResolvedValue(reply({ action: 'led', position: 'on' }));
     await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
     await act(async () => { await Promise.resolve(); });
     // La sola lettura iniziale dice chi comanda, ma non ha mosso niente.
     expect(seen).toHaveBeenCalledTimes(1);
-    expect(seen).toHaveBeenLastCalledWith(
-      { action: 'led', position: 'on', actions: ['none', 'led'] },
-      false,
-    );
+    expect(seen).toHaveBeenLastCalledWith(reply({ action: 'led', position: 'on' }), false);
   });
 
   it('tells the screen to reread what the router has just lined up', async () => {
     const seen = vi.fn();
     await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
     await act(async () => { await Promise.resolve(); });
-    rpc.mockResolvedValue({ action: 'led', position: 'on', actions: ['none', 'led'] });
+    rpc.mockResolvedValue(reply({ action: 'led', position: 'on' }));
     await choose('led');
     expect(seen).toHaveBeenCalledTimes(2);
-    expect(seen).toHaveBeenLastCalledWith(
-      { action: 'led', position: 'on', actions: ['none', 'led'] },
-      true,
-    );
+    expect(seen).toHaveBeenLastCalledWith(reply({ action: 'led', position: 'on' }), true);
   });
 
   it('does not claim anything was lined up when the write failed', async () => {
@@ -97,9 +102,46 @@ describe('interruttore fisico', () => {
   });
 
   it('hides actions the installed package does not know about', async () => {
-    rpc.mockResolvedValue({ action: 'none', position: 'on', actions: ['none'] });
+    rpc.mockResolvedValue(reply({ position: 'on', actions: ['none'] }));
     await mount();
     expect(labels()).toEqual(['Non fare nulla']);
+  });
+
+  // Le configurazioni WireGuard non sono una voce generica: ne può portare il
+  // traffico una alla volta, quindi "attiva WireGuard" non vorrebbe dire
+  // niente. Si sceglie quale, e con il nome che le ha dato chi la usa.
+  it('lists each saved WireGuard configuration by the name its owner gave it', async () => {
+    rpc.mockResolvedValue(reply({
+      actions: ['none', 'led', 'wg:travel_wg1', 'wg:travel_wg2'],
+      names: { 'wg:travel_wg1': 'Casa', 'wg:travel_wg2': 'Ufficio' },
+    }));
+    await mount();
+    expect(labels()).toEqual([
+      'Non fare nulla',
+      'Controllo LED di stato',
+      'WireGuard – Casa',
+      'WireGuard – Ufficio',
+    ]);
+  });
+
+  it('associates the switch with one configuration, by its section id', async () => {
+    rpc.mockResolvedValue(reply({
+      actions: ['none', 'led', 'wg:travel_wg1'],
+      names: { 'wg:travel_wg1': 'Casa' },
+    }));
+    await mount();
+    await choose('wg:travel_wg1');
+    expect(rpc).toHaveBeenLastCalledWith(
+      'travel', 'toggle_set', { action: 'wg:travel_wg1' }, 60_000,
+    );
+  });
+
+  // Un pacchetto più vecchio di questa interfaccia manda l'elenco senza i nomi:
+  // meglio la sezione che una riga vuota da scegliere alla cieca.
+  it('falls back to the section when the router sends no name', async () => {
+    rpc.mockResolvedValue(reply({ actions: ['none', 'wg:travel_wg3'], names: undefined }));
+    await mount();
+    expect(labels()).toEqual(['Non fare nulla', 'WireGuard – travel_wg3']);
   });
 
   it('disables the list while a write is pending', async () => {
@@ -109,14 +151,14 @@ describe('interruttore fisico', () => {
     expect(select()).toBeNull();
     expect(container.textContent).toContain('Caricamento');
     await act(async () => {
-      finish({ action: 'none', position: 'off', actions: ['none', 'led'] });
+      finish(reply());
       await Promise.resolve();
     });
     rpc.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     await choose('led');
     expect(select()!.disabled).toBe(true);
     await act(async () => {
-      finish({ action: 'led', position: 'off', actions: ['none', 'led'] });
+      finish(reply({ action: 'led' }));
       await Promise.resolve();
     });
     expect(select()!.disabled).toBe(false);
@@ -148,8 +190,9 @@ describe('interruttore fisico', () => {
 
 describe('forma canonica della configurazione', () => {
   it('fills in what an older package leaves out', () => {
-    expect(normalizeToggle({})).toEqual({ action: 'none', actions: ['none', 'led'], position: 'unknown' });
-    expect(normalizeToggle(undefined)).toEqual({ action: 'none', actions: ['none', 'led'], position: 'unknown' });
+    const bare = { action: 'none', actions: ['none', 'led'], position: 'unknown', names: {} };
+    expect(normalizeToggle({})).toEqual(bare);
+    expect(normalizeToggle(undefined)).toEqual(bare);
   });
 
   it('drops actions this interface has no label for', () => {
@@ -157,15 +200,47 @@ describe('forma canonica della configurazione', () => {
     expect(normalizeToggle(raw as never).actions).toEqual(['none', 'led']);
   });
 
+  // Le voci `wg:` invece passano tutte: non sono un'azione che questa
+  // interfaccia deve conoscere, sono un profilo che il router ha e noi no.
+  it('keeps every WireGuard configuration the router offers', () => {
+    const raw = { action: 'wg:travel_wg2', actions: ['none', 'wg:travel_wg2'], position: 'on' };
+    expect(normalizeToggle(raw as never).actions).toEqual(['none', 'wg:travel_wg2']);
+    expect(normalizeToggle(raw as never).action).toBe('wg:travel_wg2');
+  });
+
+  it('keeps only the names that are really names', () => {
+    const raw = { names: { 'wg:travel_wg1': 'Casa', 'wg:travel_wg2': '', 'wg:travel_wg3': 7 } };
+    expect(normalizeToggle(raw as never).names).toEqual({ 'wg:travel_wg1': 'Casa' });
+  });
+
   it('keeps the saved action selectable even when the router omits it', () => {
     const raw = { action: 'led', actions: ['none'], position: 'off' };
     expect(normalizeToggle(raw as never)).toEqual({
-      action: 'led', actions: ['led', 'none'], position: 'off',
+      action: 'led', actions: ['led', 'none'], position: 'off', names: {},
     });
   });
 
   it('falls back to doing nothing when the saved action is unknown', () => {
     expect(normalizeToggle({ action: 'apri-il-garage' } as never).action).toBe('none');
     expect(normalizeToggle({ position: 'meta strada' } as never).position).toBe('unknown');
+  });
+
+  // Senza elenco si mostrano le fisse: un tunnel WireGuard non si puo'
+  // indovinare, e proporne uno che non esiste sarebbe peggio che tacere.
+  it('never invents WireGuard entries when the router sends no list', () => {
+    expect(normalizeToggle({ action: 'led' } as never).actions).toEqual(['none', 'led']);
+  });
+});
+
+describe('chi comanda cosa', () => {
+  it('tells which WireGuard configuration follows the switch, if any', () => {
+    expect(controlsWg('wg:travel_wg1')).toBe('travel_wg1');
+    expect(controlsWg('led')).toBe('');
+    expect(controlsWg('none')).toBe('');
+    expect(controlsWg(null)).toBe('');
+    // Le due funzioni si escludono: una levetta ha una posizione sola.
+    expect(controlsLed('wg:travel_wg1')).toBe(false);
+    expect(isWgAction('wg:travel_wg1')).toBe(true);
+    expect(isWgAction('led')).toBe(false);
   });
 });
