@@ -230,6 +230,13 @@ solo la clonazione e vive dentro un flusso suo. Il MAC casuale è generato nel
 browser, unicast e localmente amministrato; salvandolo nella rete viene
 riutilizzato nelle riconnessioni.
 
+I tre modi che scrivono un indirizzo — `random`, `manual`, `clone` — vanno
+elencati identici ovunque si riscriva la STA da una rete salvata:
+`travel.stage_connect_saved` e `applyConnection` di travelD. Omettere `clone` da
+uno dei due significa agganciare la rete con l'indirizzo di fabbrica proprio nel
+caso in cui il MAC scelto era l'unica cosa che contava — un portale che
+autorizza gli indirizzi — e senza dirlo a nessuno.
+
 Sulla STA WiFi il MAC si scrive nella sezione `wifi-iface`. Sulle porte
 ethernet si scrive invece in una sezione `device` di `/etc/config/network`
 (`option macaddr`): da OpenWrt 21.02 netifd lo legge solo da lì, e messo
@@ -321,6 +328,40 @@ password è quella. L'altra si può aggiungere subito, ed è modificabile dopo.
 Collegandosi a una rete già salvata sull'altra banda non si crea una seconda
 voce: si propone di aggiungere la banda a quella che c'è, e succede solo se la
 connessione riesce.
+
+### Una rete già salvata, ritrovata cercando
+
+Il popup di connessione è lo stesso per tutte le reti trovate cercando, ma
+quando quella scelta è già salvata — sulla banda della scansione o sull'altra —
+parte dalla **configurazione memorizzata** invece che da zero: MAC della banda
+interessata e nome DHCP arrivano da lì e restano modificabili, perché la
+configurazione salvata è il valore iniziale del modulo, non una gabbia.
+
+La password è l'eccezione, e per una ragione strutturale: non esce mai dal
+router, quindi non c'è niente da precompilare. Il campo resta vuoto ed è
+**facoltativo**, **Connetti** è subito premibile, e da lì si separano le due
+strade:
+
+- campo vuoto → la configurazione la prepara il router con
+  `travel.stage_connect_saved`, che legge la chiave da `/etc/config/travel`
+  senza farla passare dal browser. I valori del modulo che divergono da quelli
+  salvati — MAC, nome DHCP — vengono riscritti sopra la sezione appena
+  preparata, nello stesso lotto di modifiche in sospeso; se non è cambiato
+  niente le chiamate sono esattamente quelle di "Connetti" dalla pagina delle
+  reti salvate. Il confronto sul MAC è fra **indirizzi**, non fra modalità:
+  quello che il router ha scritto è il MAC salvato per quella banda, vuoto se è
+  quello della radio;
+- campo compilato → percorso normale `stageConnection`, e la nuova password
+  viene scritta nella voce salvata **dopo** che la rete si è agganciata, con la
+  stessa regola di sempre: non si salva una credenziale che non ha funzionato.
+
+Un campo vuoto non è mai una cancellazione. Su una rete non ancora salvata la
+regola resta invariata: senza password **Connetti** è disabilitato, perché lì
+non c'è nessuna chiave da riusare. L'unico caso in cui la password torna
+necessaria su una rete conosciuta è salvarla come **voce separata** dopo aver
+rifiutato di estendere quella esistente: per collegarsi basta la chiave del
+router, ma una voce nuova nascerebbe senza, e sarebbe una rete salvata che non
+si aggancia.
 
 ### Condivisione delle reti salvate
 

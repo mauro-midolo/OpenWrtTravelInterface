@@ -425,6 +425,108 @@ describe('saving a network found by scanning', () => {
     expect(container.textContent).toContain('aggiungi anche');
   });
 
+  it('opens on the saved configuration and connects with no password retyped', async () => {
+    const known = net({
+      ssid: 'Hotel-Guest',
+      bands: { '2.4': true, '5': false },
+      mac: { '2.4': { mode: 'clone', value: '02:00:00:00:00:24' }, '5': device },
+      hostname_mode: 'custom',
+      hostname_value: 'beryl',
+    });
+    await act(() =>
+      render(<ConnectSheet net={found} plan={plan} saved={[known]} onClose={() => {}} />, container),
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    // Il messaggio che dice che la rete c'è già resta dov'era, con le sue bande.
+    expect(container.textContent).toContain('Questa rete è già salvata (2.4 GHz)');
+
+    // I campi partono dalla configurazione salvata, e restano modificabili.
+    expect(container.textContent).toContain('02:00:00:00:00:24');
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe('');
+    // Connetti è subito premibile: la password non serve, ce l'ha il router.
+    expect(button('Connetti').disabled).toBe(false);
+
+    await act(() => button('Connetti').click());
+    await act(async () => { await Promise.resolve(); });
+
+    // La chiave non passa dal browser: la configurazione la prepara il router
+    // a partire dalla voce salvata, e non si scrive nessuna sezione nuova.
+    expect(rpc).toHaveBeenCalledWith('travel', 'stage_connect_saved', {
+      section: known.section,
+      radio: 'radio0',
+    });
+    expect(rpc).not.toHaveBeenCalledWith('uci', 'add', expect.anything());
+    // Niente da riscrivere sopra: MAC e nome DHCP sono quelli salvati.
+    expect(rpc).not.toHaveBeenCalledWith(
+      'uci',
+      'set',
+      expect.objectContaining({ config: 'wireless' }),
+    );
+  });
+
+  it('writes the MAC over the staged section only when the popup shows a different one', async () => {
+    // Il MAC clonato serve a farsi riconoscere da un portale: e' salvato, il
+    // router lo scrive preparando la sezione, e il modulo non deve ripeterlo.
+    const known = net({
+      ssid: 'Hotel-Guest',
+      bands: { '2.4': true, '5': false },
+      mac: { '2.4': { mode: 'clone', value: '02:00:00:00:00:24' }, '5': device },
+    });
+    await act(() =>
+      render(<ConnectSheet net={found} plan={plan} saved={[known]} onClose={() => {}} />, container),
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    // Cambiandolo in "quello della radio", l'indirizzo salvato va tolto dalla
+    // sezione appena preparata: altrimenti si andrebbe in rete con un MAC che
+    // il modulo non mostra più.
+    await act(() => button('Della scheda').click());
+    await act(() => button('Connetti').click());
+    await act(async () => { await Promise.resolve(); });
+
+    expect(rpc).toHaveBeenCalledWith('uci', 'delete', {
+      config: 'wireless',
+      section: 'sta_radio0',
+      option: 'macaddr',
+    });
+  });
+
+  it('writes the retyped password itself instead of asking the router for the saved one', async () => {
+    const known = net({ ssid: 'Hotel-Guest', bands: { '2.4': true, '5': false } });
+    await act(() =>
+      render(<ConnectSheet net={found} plan={plan} saved={[known]} onClose={() => {}} />, container),
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    const field = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(() => {
+      field.value = 'passwordnuova';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(() => button('Connetti').click());
+    await act(async () => { await Promise.resolve(); });
+
+    expect(rpc).not.toHaveBeenCalledWith('travel', 'stage_connect_saved', expect.anything());
+    expect(rpc).toHaveBeenCalledWith(
+      'uci',
+      'add',
+      expect.objectContaining({
+        values: expect.objectContaining({ key: 'passwordnuova', ssid: 'Hotel-Guest' }),
+      }),
+    );
+  });
+
+  it('keeps the password mandatory on a network nobody has saved yet', async () => {
+    await act(() =>
+      render(<ConnectSheet net={found} plan={plan} saved={[]} onClose={() => {}} />, container),
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    // Regola invariata dove non c'e' niente da riusare.
+    expect(button('Connetti').disabled).toBe(true);
+  });
+
   it('still lets the network be saved on its own when that offer is declined', async () => {
     const known = net({ ssid: 'Hotel-Guest', bands: { '2.4': false, '5': true } });
     await act(() =>

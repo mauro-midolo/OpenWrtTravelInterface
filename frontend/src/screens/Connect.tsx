@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useApply } from '../lib/apply';
-import { getUplinks, isValidMac, stageConnection, uplinkState, wirelessCameUp } from '../lib/wifi';
+import {
+  getUplinks,
+  isValidMac,
+  stageConnection,
+  stageStaMac,
+  uplinkState,
+  wirelessCameUp,
+} from '../lib/wifi';
 import { encryptionForSta } from '../lib/wifi';
 import type { ConnectionPlan, MacChoice, ScanResult, Uplink } from '../lib/wifi';
 import {
   BANDS,
-  bandLabel,
   bandConflicts,
+  bandLabel,
   bandValues,
   bandsFromScan,
   bandsLabel,
@@ -17,10 +24,12 @@ import {
   macForNewBand,
   markUsed,
   saveNetwork,
+  stageConnectSaved,
+  updateMacOnBand,
   updateNetwork,
 } from '../lib/networks';
 import type { BandSet, MacByBand, SavedNetwork } from '../lib/networks';
-import { HOSTNAME_OFF, getSystem, isValidHostname } from '../lib/hostname';
+import { HOSTNAME_OFF, getSystem, isValidHostname, stageWanHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { checkPortal, portalReason } from '../lib/portal';
 import type { PortalResult } from '../lib/portal';
@@ -46,7 +55,6 @@ export function ConnectSheet({
 }) {
   const apply = useApply();
   const [password, setPassword] = useState('');
-  const [mac, setMac] = useState<MacChoice>({ mode: 'device', value: '' });
   const [remember, setRemember] = useState(true);
   /** Se aggiungere questa banda a una rete gia' salvata sull'altra. */
   const [addBand, setAddBand] = useState(true);
@@ -107,6 +115,22 @@ export function ConnectSheet({
   /** La voce salvata che questa connessione riguarda, su questa o sull'altra banda. */
   const known = savedHere ?? savedElsewhere;
 
+  /**
+   * Il modulo parte dalla configurazione salvata, non da zero.
+   *
+   * Ritrovare la rete di casa in una scansione e doverne ridigitare MAC e nome
+   * DHCP - o peggio la password - vuol dire riconfigurarla ogni volta da capo,
+   * mentre il router la conosce gia'. Qui i campi partono da quello che c'e'
+   * salvato e restano tutti modificabili: la configurazione e' il valore
+   * iniziale del modulo, non una gabbia.
+   *
+   * Il MAC e' quello della banda su cui si sta per andare, perche' e' della
+   * radio: le due bande della stessa rete possono averne due diversi.
+   */
+  const [mac, setMac] = useState<MacChoice>(() =>
+    known ? { ...known.mac[net.band] } : { mode: 'device', value: '' },
+  );
+
   // Il nome DHCP si chiede a ogni rete nuova, e parte da "non inviarlo": e' una
   // scelta per rete, perche' la rete di casa e quella di un albergo non
   // meritano lo stesso trattamento. Su una rete gia' salvata si riprende
@@ -143,15 +167,77 @@ export function ConnectSheet({
   };
 
   const macOk = mac.mode === 'device' || isValidMac(mac.value);
-  const passwordOk = net.open || password.length >= 8;
+  /**
+   * La password puo' mancare solo su una rete gia' salvata.
+   *
+   * Li' non e' un campo vuoto, e' "quella di prima": la chiave sta sul router e
+   * non e' mai uscita, quindi non c'e' niente da mostrare e niente da
+   * ridigitare. Su una rete nuova la regola resta quella di sempre, perche' non
+   * c'e' nessuna password da riusare. Digitarne una qui e' una modifica, e come
+   * tale viene validata con le stesse regole.
+   */
+  const passwordOk = net.open || password.length >= 8 || (known !== undefined && password === '');
   const hostnameOk = hostname.mode !== 'custom' || isValidHostname(hostname.value.trim());
+
+  /**
+   * Se c'e' di che scrivere una voce salvata nuova.
+   *
+   * Riguarda un caso solo: la stessa rete e' gia' salvata sull'altra banda, si
+   * e' rifiutato di estenderla, e la password non e' stata ridigitata. Ci si
+   * collega lo stesso - la chiave ce l'ha il router - ma una voce nuova
+   * nascerebbe senza, e sarebbe una rete salvata che non si aggancia. Per
+   * salvarla a parte la password va scritta; per collegarsi no.
+   */
+  const canSaveApart = net.open || password !== '';
+
+  /**
+   * Prepara la configurazione della STA.
+   *
+   * Due strade, e la differenza e' una sola: chi ha la password. Se e' stata
+   * ridigitata qui, la scrive il browser come per qualunque rete trovata
+   * cercando. Se il campo e' vuoto su una rete salvata, la chiave esiste solo
+   * sul router: se la prende lui da `/etc/config/travel` senza farla passare di
+   * qui, che e' esattamente cio' per cui `stage_connect_saved` e' nato.
+   *
+   * In quel secondo caso i valori del modulo che l'utente ha cambiato si
+   * riscrivono sopra la sezione appena preparata, nello stesso lotto di
+   * modifiche in sospeso. Si riscrivono solo se sono davvero diversi da quelli
+   * salvati: senza modifiche, le chiamate sono le stesse che fa "Connetti"
+   * dalla pagina delle reti salvate.
+   */
+  const stage = async (chosen: MacChoice) => {
+    if (!known || password !== '') {
+      await stageConnection(net, password, plan, chosen, hostname);
+      return;
+    }
+
+    await stageConnectSaved(known.section, plan.staRadio.name);
+
+    // Il confronto e' fra indirizzi, non fra modi: quello che il router ha
+    // appena scritto nella sezione e' il MAC salvato per questa banda - vuoto
+    // se e' quello della radio - e qui si riscrive sopra solo se il modulo ne
+    // mostra un altro. Confrontare i modi farebbe partire una riscrittura
+    // anche passando da "casuale" a "manuale" sullo stesso indirizzo, e
+    // soprattutto ne farebbe saltare una dove il modo coincide ma il valore no.
+    const savedMac = known.mac[net.band];
+    const staged = savedMac.mode === 'device' ? '' : savedMac.value;
+    const wanted = chosen.mode === 'device' ? '' : chosen.value;
+    if (wanted !== staged) {
+      await stageStaMac(`sta_${plan.staRadio.name}`, wanted);
+    }
+
+    const savedHostname = hostnameOf(known);
+    if (hostname.mode !== savedHostname.mode || hostname.value !== savedHostname.value) {
+      await stageWanHostname(`wwan_${plan.staRadio.name}`, hostname);
+    }
+  };
 
   const start = async (event: Event) => {
     event.preventDefault();
     // Il valore arriva gia' normalizzato da MacPicker: qui non si ritocca.
     const chosen: MacChoice = { mode: mac.mode, value: mac.value };
 
-    const confirmed = await apply.run(() => stageConnection(net, password, plan, chosen, hostname), {
+    const confirmed = await apply.run(() => stage(chosen), {
       // "Il router risponde" non basta: da cavo risponde sempre. Si conferma
       // solo se le radio hanno davvero accettato la configurazione.
       verify: wirelessCameUp,
@@ -240,6 +326,12 @@ export function ConnectSheet({
           hostname_value: hostname.mode === 'custom' ? hostname.value.trim() : '',
         };
 
+        // La password ridigitata qui e' una correzione a quella salvata, e si
+        // scrive solo adesso: la rete si e' agganciata, quindi quella nuova
+        // funziona. Il campo lasciato vuoto non e' una cancellazione - vuol
+        // dire "usa quella che c'e' gia'" - e infatti non compare.
+        if (password) values.key = password;
+
         // La rete era salvata solo sull'altra banda e adesso ha funzionato
         // anche qui: la banda si aggiunge alla voce che c'e' gia', con il MAC
         // che ha appena funzionato. Non si crea una seconda voce - sarebbe la
@@ -255,7 +347,16 @@ export function ConnectSheet({
         }
 
         await updateNetwork(update.section, values);
-      } else if (remember && !net.hidden) {
+
+        // Il MAC cambiato nel modulo appartiene alla banda su cui si e' appena
+        // andati, e va scritto senza toccare quello dell'altra. Estendendo una
+        // banda ci ha gia' pensato `bandValues` qui sopra, che le scrive tutte
+        // e due di proposito.
+        const savedMac = update.mac[net.band];
+        if (!extend && (mac.mode !== savedMac.mode || mac.value !== savedMac.value)) {
+          await updateMacOnBand(update.section, net.band, mac);
+        }
+      } else if (remember && !net.hidden && canSaveApart) {
         await saveNetwork(
           fromScan(net, password, bandsToSave, macByBand(), encryptionForSta(net), hostname),
           saved,
@@ -322,9 +423,20 @@ export function ConnectSheet({
                   type="password"
                   value={password}
                   autocomplete="off"
-                  autofocus
+                  autofocus={known === undefined}
+                  placeholder={
+                    known?.has_key ? 'lascia vuoto per usare quella salvata' : undefined
+                  }
                   onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
                 />
+                {/* La chiave salvata non si mostra: non esce mai dal router.
+                    Lasciare il campo vuoto non la cancella - la usa. */}
+                {known?.has_key && (
+                  <span class="muted">
+                    Questa rete ha già una password salvata: lascia il campo vuoto per
+                    usarla, oppure scrivine una nuova per correggerla.
+                  </span>
+                )}
               </label>
             )}
 
@@ -371,8 +483,8 @@ export function ConnectSheet({
                 <label class="check">
                   <input
                     type="checkbox"
-                    checked={remember}
-                    disabled={net.hidden}
+                    checked={remember && canSaveApart}
+                    disabled={net.hidden || !canSaveApart}
                     onChange={(e) => setRemember((e.target as HTMLInputElement).checked)}
                   />
                   <span>
@@ -381,6 +493,16 @@ export function ConnectSheet({
                     connessione riesce.
                   </span>
                 </label>
+
+                {/* La chiave salvata sta sul router e non passa di qui: basta a
+                    collegarsi, non a scrivere una voce nuova che deve averne
+                    una sua. */}
+                {!canSaveApart && (
+                  <p class="muted">
+                    Per salvarla come voce a parte serve la password: scrivila qui sopra.
+                    Per collegarti e basta non serve — quella salvata la usa il router.
+                  </p>
+                )}
 
                 {/* La banda da cui l'hai trovata resta accesa e non si può
                     togliere: e' l'unica su cui si sa che questa rete c'e' e che

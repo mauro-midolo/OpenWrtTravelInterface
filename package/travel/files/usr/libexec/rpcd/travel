@@ -982,8 +982,15 @@ method_stage_connect_saved() {
 	json_add_string encryption "${encryption:-psk2}"
 	json_add_string disabled 0
 	[ -n "$key" ] && json_add_string key "$key"
+	# `clone` sta nell'elenco insieme agli altri due, e non e' un dettaglio:
+	# e' il MAC di un dispositivo gia' autenticato, salvato apposta per farsi
+	# riconoscere da un portale che autorizza gli indirizzi. Mancando da qui,
+	# collegarsi a quella rete salvata la agganciava con l'indirizzo di fabbrica
+	# della radio - cioe' proprio nel caso in cui il MAC scelto era l'unica cosa
+	# che contava, e senza dirlo a nessuno. travelD lo scrive da sempre: erano i
+	# due percorsi a non concordare.
 	case "$mac_mode" in
-		random|manual) [ -n "$mac_value" ] && json_add_string macaddr "$mac_value" ;;
+		random|manual|clone) [ -n "$mac_value" ] && json_add_string macaddr "$mac_value" ;;
 	esac
 	json_close_object
 	args=$(json_dump)
