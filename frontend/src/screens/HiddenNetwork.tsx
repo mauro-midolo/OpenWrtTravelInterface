@@ -14,16 +14,19 @@
  */
 
 import { useState } from 'preact/hooks';
-import { saveNetwork, findSaved } from '../lib/networks';
-import type { SavedNetwork } from '../lib/networks';
+import {
+  BANDS,
+  bandConflicts,
+  bandLabel,
+  bandsFromScan,
+  hasAnyBand,
+  macOnBothBands,
+  saveNetwork,
+} from '../lib/networks';
+import type { BandSet, SavedNetwork } from '../lib/networks';
 import { STA_ENCRYPTIONS, isValidPassphrase, isValidSsid, needsKey } from '../lib/wifi';
 import type { Band } from '../lib/wifi';
 import { HOSTNAME_OFF } from '../lib/hostname';
-
-const BANDS: Array<{ value: Band; label: string }> = [
-  { value: '2.4', label: '2.4 GHz' },
-  { value: '5', label: '5 GHz' },
-];
 
 export function HiddenSheet({
   saved,
@@ -36,7 +39,15 @@ export function HiddenSheet({
   onClose: (changed: boolean) => void;
 }) {
   const [ssid, setSsid] = useState('');
-  const [band, setBand] = useState<Band>(initialBand);
+  /**
+   * Le bande su cui vale questa rete.
+   *
+   * Si parte da quella della radio da cui si e' aperto il modulo, ma qui - a
+   * differenza del salvataggio da una scansione - si puo' togliere: nessuno
+   * l'ha vista da nessuna parte, e' un nome scritto a mano, quindi non c'e'
+   * una banda che valga come testimone.
+   */
+  const [bands, setBands] = useState<BandSet>(() => bandsFromScan(initialBand));
   const [encryption, setEncryption] = useState<string>('psk2');
   const [password, setPassword] = useState('');
   const [note, setNote] = useState('');
@@ -46,13 +57,16 @@ export function HiddenSheet({
   const chosen = STA_ENCRYPTIONS.find((e) => e.value === encryption);
   const wantsKey = needsKey(encryption);
 
-  // La banda fa parte dell'identita': la stessa rete nascosta a 2.4 e a 5 GHz
-  // sono due configurazioni, e solo quella sulla stessa banda e' un doppione.
-  const duplicate = findSaved(saved, ssid.trim(), band);
+  // Un doppione e' una voce con lo stesso nome che copre una delle bande
+  // scelte: su quella radio verrebbe usata quella, e questa non sarebbe mai
+  // provata. Le altre bande restano libere, e infatti il messaggio dice quale
+  // e' occupata.
+  const conflicts = bandConflicts(saved, ssid.trim(), bands);
 
   const ssidOk = isValidSsid(ssid.trim());
   const passwordOk = !wantsKey || isValidPassphrase(password);
-  const canSave = ssidOk && passwordOk && !duplicate && !busy;
+  const canSave =
+    ssidOk && passwordOk && hasAnyBand(bands) && conflicts.length === 0 && !busy;
 
   const save = async (event: Event) => {
     event.preventDefault();
@@ -69,10 +83,12 @@ export function HiddenSheet({
           // prima di cambiare cifratura.
           password: wantsKey ? password : '',
           encryption,
-          band,
+          bands,
           hidden: true,
-          macMode: 'device',
-          macValue: '',
+          // Il MAC della radio, su tutte e due le bande: e' il default, e da
+          // qui non si configura. Si cambia dalla rete salvata, una banda alla
+          // volta, come per ogni altra rete.
+          mac: macOnBothBands({ mode: 'device', value: '' }),
           // Il nome DHCP parte dal default del progetto - non inviarlo - e si
           // cambia dalla rete salvata come per tutte le altre.
           hostname: HOSTNAME_OFF,
@@ -123,25 +139,32 @@ export function HiddenSheet({
           )}
 
           <div class="field">
-            <span id="banda-nascosta">Banda</span>
-            <div class="chips" role="group" aria-labelledby="banda-nascosta">
+            <span id="banda-nascosta">Bande</span>
+            <div role="group" aria-labelledby="banda-nascosta">
               {BANDS.map((entry) => (
-                <button
-                  key={entry.value}
-                  type="button"
-                  class={band === entry.value ? 'chip chip--on' : 'chip'}
-                  aria-pressed={band === entry.value}
-                  onClick={() => setBand(entry.value)}
-                >
-                  {entry.label}
-                </button>
+                <label class="check" key={entry}>
+                  <input
+                    type="checkbox"
+                    checked={bands[entry]}
+                    onChange={(e) =>
+                      setBands({ ...bands, [entry]: (e.target as HTMLInputElement).checked })
+                    }
+                  />
+                  <span>{bandLabel(entry)}</span>
+                </label>
               ))}
             </div>
             <span class="muted">
-              Le due bande sono configurazioni distinte: se la stessa rete nascosta c'è su
-              entrambe, va aggiunta due volte.
+              Almeno una. Se la stessa rete nascosta c'è su tutte e due, accendile entrambe:
+              resta una configurazione sola, con una password sola.
             </span>
           </div>
+
+          {!hasAnyBand(bands) && (
+            <p class="alert alert--error">
+              Scegli almeno una banda: senza, nessuna radio userebbe questa rete.
+            </p>
+          )}
 
           <label class="field">
             <span>Sicurezza</span>
@@ -190,14 +213,13 @@ export function HiddenSheet({
             />
           </label>
 
-          {duplicate && (
-            <p class="alert alert--warn">
-              {duplicate.band === ''
-                ? `«${duplicate.ssid}» è già salvata per entrambe le bande.`
-                : `«${duplicate.ssid}» è già salvata a ${duplicate.band} GHz.`}{' '}
-              Modificala dalle reti salvate invece di aggiungerne una seconda uguale.
+          {conflicts.map(({ band, net }) => (
+            <p class="alert alert--warn" key={band}>
+              «{net.ssid}» è già salvata a {bandLabel(band)}. Modificala dalle reti salvate
+              invece di aggiungerne una seconda uguale: sulla stessa radio verrebbe usata
+              solo una delle due.
             </p>
-          )}
+          ))}
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
 

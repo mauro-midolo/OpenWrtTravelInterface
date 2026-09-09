@@ -16,7 +16,9 @@ vi.mock('../src/lib/ubus', async (original) => ({
 }));
 
 const saved = { section: 'net_offline', ssid: 'Vecchio nome', encryption: 'psk2',
-  hidden: false, band: '5', disabled: true } as SavedNetwork;
+  hidden: false, bands: { '2.4': false, '5': true },
+  mac: { '2.4': { mode: 'device', value: '' }, '5': { mode: 'device', value: '' } },
+  disabled: true } as SavedNetwork;
 const values = { '.type': 'network', ssid: 'Nome aggiornato', encryption: 'sae',
   key: ' password aggiornata ', hidden: '1', band: '2.4' };
 let container: HTMLDivElement;

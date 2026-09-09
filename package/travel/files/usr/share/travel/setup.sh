@@ -267,6 +267,128 @@ if [ "$(uci -q get travel.globals.dhcp_hostname_init)" != "1" ]; then
 	uci commit travel
 fi
 
+# Reti salvate: una sola voce per rete, con le bande dentro.
+#
+# Prima le due bande erano due sezioni gemelle, e la stessa rete di casa
+# compariva due volte in due elenchi separati. Adesso l'elenco e' uno e le bande
+# sono due caselle: `band` vuoto significa "tutte e due", ed e' un valore che
+# uci ha sempre avuto, quindi le voci esistenti sono gia' leggibili cosi' come
+# sono e questa migrazione non e' obbligatoria per farle funzionare.
+#
+# Quello che fa e' unire le coppie che sono chiaramente la stessa rete, per non
+# lasciare in eterno due righe dove adesso ne basta una. Il criterio e'
+# volutamente severo: si uniscono solo voci che non perderebbero niente
+# nell'unione - stesso nome, stessa cifratura, stessa password, stesso stato
+# nascosto, stesso nome DHCP, stesso stato di attivazione, e note che non si
+# contraddicono. Tutto il resto resta separato: due configurazioni diverse con
+# lo stesso nome sono un caso legittimo, e fonderle vorrebbe dire scegliere al
+# posto di qualcun altro quale delle due buttare via.
+#
+# Il MAC non e' un ostacolo all'unione: e' l'unico parametro che resta per
+# banda, quindi i due valori sopravvivono entrambi, uno per radio.
+#
+# Una volta sola, segnata in travel: dopo, l'elenco e' dell'utente e rilanciare
+# questo script non deve rimetterci le mani.
+if [ "$(uci -q get travel.globals.saved_bands_init)" != "1" ]; then
+	# `|| true` non e' pignoleria: con `set -e` una lettura di un'opzione che
+	# non c'e' - ed e' il caso normale qui - fermerebbe tutto lo script.
+	net_get() { uci -q get "travel.$1.$2" 2>/dev/null || true; }
+
+	# Il MAC effettivo di una banda: quello suo se c'e', altrimenti il
+	# condiviso, che e' cio' che hanno le voci nate prima che si separassero.
+	# Modo e valore si chiedono separatamente per non doverli riseparare dopo.
+	net_mac_mode() {
+		if [ -n "$(net_get "$1" "mac_mode_$2")" ]; then
+			net_get "$1" "mac_mode_$2"
+		else
+			net_get "$1" mac_mode
+		fi
+	}
+	net_mac_value() {
+		if [ -n "$(net_get "$1" "mac_mode_$2")" ]; then
+			net_get "$1" "mac_value_$2"
+		else
+			net_get "$1" mac_value
+		fi
+	}
+
+	# Due note si uniscono solo se una e' vuota o sono identiche: unirle
+	# davvero significherebbe inventare un testo che nessuno ha scritto.
+	notes_ok() {
+		[ "$1" = "$2" ] || [ -z "$1" ] || [ -z "$2" ]
+	}
+
+	TRAVEL_SECTIONS=$(uci show travel 2>/dev/null | sed -n 's/^travel\.\([^.]*\)=network$/\1/p')
+	MERGED=0
+
+	for a in $TRAVEL_SECTIONS; do
+		[ "$(net_get "$a" band)" = "2.4" ] || continue
+		ssid=$(net_get "$a" ssid)
+		[ -n "$ssid" ] || continue
+
+		for b in $TRAVEL_SECTIONS; do
+			[ "$b" != "$a" ] || continue
+			[ "$(net_get "$b" band)" = "5" ] || continue
+			[ "$(net_get "$b" ssid)" = "$ssid" ] || continue
+			[ "$(net_get "$b" encryption)" = "$(net_get "$a" encryption)" ] || continue
+			[ "$(net_get "$b" key)" = "$(net_get "$a" key)" ] || continue
+			[ "$(net_get "$b" hidden)" = "$(net_get "$a" hidden)" ] || continue
+			[ "$(net_get "$b" disabled)" = "$(net_get "$a" disabled)" ] || continue
+			[ "$(net_get "$b" hostname_mode)" = "$(net_get "$a" hostname_mode)" ] || continue
+			[ "$(net_get "$b" hostname_value)" = "$(net_get "$a" hostname_value)" ] || continue
+			notes_ok "$(net_get "$a" note)" "$(net_get "$b" note)" || continue
+
+			say "reti salvate: «$ssid» diventa una voce sola su tutte e due le bande"
+
+			# I due MAC restano, uno per radio: e' il solo parametro che le due
+			# bande non condividono.
+			mode24=$(net_mac_mode "$a" 24)
+			value24=$(net_mac_value "$a" 24)
+			uci set "travel.$a.mac_mode_24=$mode24"
+			uci set "travel.$a.mac_value_24=$value24"
+			uci set "travel.$a.mac_mode_5=$(net_mac_mode "$b" 5)"
+			uci set "travel.$a.mac_value_5=$(net_mac_value "$b" 5)"
+			# Quello condiviso resta allineato alla prima banda attiva: e'
+			# quello che legge un pacchetto non ancora aggiornato.
+			uci set "travel.$a.mac_mode=$mode24"
+			uci set "travel.$a.mac_value=$value24"
+
+			# La priorita' piu' alta delle due: unendole non si retrocede.
+			pa=$(net_get "$a" priority)
+			pb=$(net_get "$b" priority)
+			if [ "${pb:-0}" -gt "${pa:-0}" ] 2>/dev/null; then
+				uci set "travel.$a.priority=$pb"
+			fi
+
+			# La storia piu' recente delle due, con il suo esito: e' quella che
+			# risponde a "come e' andata l'ultima volta".
+			ua=$(net_get "$a" last_used)
+			ub=$(net_get "$b" last_used)
+			if [ "${ub:-0}" -gt "${ua:-0}" ] 2>/dev/null; then
+				uci set "travel.$a.last_used=$ub"
+				uci set "travel.$a.last_result=$(net_get "$b" last_result)"
+			fi
+
+			# La nota che c'e': se ce n'era una sola, sopravvive.
+			if [ -z "$(net_get "$a" note)" ]; then
+				uci set "travel.$a.note=$(net_get "$b" note)"
+			fi
+
+			# Vuoto = tutte e due le bande.
+			uci set "travel.$a.band="
+			uci delete "travel.$b"
+			MERGED=1
+			break
+		done
+	done
+
+	uci set travel.globals.saved_bands_init=1
+	uci commit travel
+	if [ "$MERGED" != "1" ]; then
+		say "reti salvate: nessuna coppia da unire"
+	fi
+fi
+
 # Migrazione dalla vecchia interfaccia unica: le STA gia' configurate vengono
 # spostate su quella della loro radio, altrimenti dopo l'aggiornamento
 # resterebbero agganciate a un'interfaccia che non usiamo piu'.

@@ -66,9 +66,9 @@ let lastError = "";
 
 // Stato del motore, tutto in RAM: un riavvio del daemon e' anche il modo
 // piu' semplice di azzerare backoff e blacklist.
-let fails = {};       // sezione -> fallimenti consecutivi
-let nextTry = {};     // sezione -> epoch prima del quale non si riprova
-let blacklist = {};   // sezione -> epoch di scadenza
+let fails = {};       // rete@banda -> fallimenti consecutivi
+let nextTry = {};     // rete@banda -> epoch prima del quale non si riprova
+let blacklist = {};   // rete@banda -> epoch di scadenza
 let radioBusyUntil = {};
 let lastAction = {};
 let lastRoamCheck = {};
@@ -140,6 +140,10 @@ function savedNetworks() {
 				ssid: s.ssid ? s.ssid : '',
 				key: s.key ? s.key : '',
 				encryption: s.encryption ? s.encryption : 'psk2',
+				// Vuoto significa "tutte e due le bande", ed e' lo stato in cui
+				// si trova una rete salvata su entrambe. Gli altri due valori
+				// ammessi sono "2.4" e "5": sono i tre stati delle caselle
+				// nell'interfaccia, scritti come uci li ha sempre avuti.
 				band: s.band ? s.band : '',
 				// Rete che non annuncia il proprio SSID: non comparira' mai in
 				// una scansione, quindi la si prova senza pretendere di averla
@@ -148,6 +152,14 @@ function savedNetworks() {
 				hidden: s.hidden == '1',
 				mac_mode: s.mac_mode ? s.mac_mode : 'device',
 				mac_value: s.mac_value ? s.mac_value : '',
+				// Un MAC per banda: l'indirizzo e' della stazione, e le
+				// stazioni sono due, una per radio. Chi non ha questi campi e'
+				// nato prima che si separassero e usa quello condiviso qui
+				// sopra: e' `macFor` a scegliere, in un posto solo.
+				mac_mode_24: s.mac_mode_24 ? s.mac_mode_24 : '',
+				mac_value_24: s.mac_value_24 ? s.mac_value_24 : '',
+				mac_mode_5: s.mac_mode_5 ? s.mac_mode_5 : '',
+				mac_value_5: s.mac_value_5 ? s.mac_value_5 : '',
 				// Chi non ha il campo e' nato prima che l'impostazione
 				// esistesse: vale come "non inviarlo", il default del progetto.
 				hostname_mode: s.hostname_mode ? s.hostname_mode : 'none',
@@ -230,7 +242,26 @@ function uplinkState(u) {
 // vengono mai modificati dal motore: spegnerne uno senza che nessuno lo abbia
 // chiesto significherebbe poter togliere l'unico modo di rientrare nel router.
 
-function applyConnection(radioName, net) {
+// Il MAC che questa rete salvata usa su questa radio.
+//
+// L'indirizzo appartiene alla stazione, e le stazioni sono due: la stessa rete
+// su tutte e due le bande ne ha uno per banda. Copiarne uno solo su entrambe
+// significherebbe, nel caso dell'indirizzo casuale, presentarsi allo stesso
+// punto di accesso due volte con lo stesso MAC.
+//
+// Senza i campi per banda si usa quello condiviso, che e' cio' che hanno le
+// voci salvate prima che si separassero.
+function macFor(net, radio) {
+	let suffix = (radio.band == '2.4') ? '_24' : (radio.band == '5') ? '_5' : '';
+
+	if (suffix != '' && net['mac_mode' + suffix] != '')
+		return { mode: net['mac_mode' + suffix], value: net['mac_value' + suffix] };
+
+	return { mode: net.mac_mode, value: net.mac_value };
+}
+
+function applyConnection(radio, net) {
+	let radioName = radio.name;
 	let section = 'sta_' + radioName;
 
 	try {
@@ -255,8 +286,9 @@ function applyConnection(radioName, net) {
 		// riscrivere. L'elenco dice cosa e' ammesso e non cosa scartare -
 		// un modo nuovo che nessuno avesse pensato di escludere entrerebbe
 		// altrimenti da solo.
-		if ((net.mac_mode == 'random' || net.mac_mode == 'manual' || net.mac_mode == 'clone') && net.mac_value != "")
-			ctx.set('wireless', section, 'macaddr', net.mac_value);
+		let mac = macFor(net, radio);
+		if ((mac.mode == 'random' || mac.mode == 'manual' || mac.mode == 'clone') && mac.value != "")
+			ctx.set('wireless', section, 'macaddr', mac.value);
 
 		ctx.commit('wireless');
 	}
@@ -286,7 +318,7 @@ function applyConnection(radioName, net) {
 	}
 
 	radioBusyUntil[radioName] = time() + COOLDOWN_SECONDS + SETTLE_SECONDS;
-	lastAction[radioName] = { at: time(), section: net.section, ssid: net.ssid };
+	lastAction[radioName] = { at: time(), key: penaltyKey(net.section, radio), ssid: net.ssid };
 
 	return true;
 }
@@ -339,41 +371,54 @@ function applyHostname(network, net) {
 
 // --- Scelta della rete -------------------------------------------------------
 
-function isBlocked(section, now) {
-	if (blacklist[section] && blacklist[section] > now)
+// La chiave con cui si contano i fallimenti: la rete E la banda su cui si e'
+// provata.
+//
+// Una rete salvata vale su tutte e due le bande, ma "non si aggancia" e' un
+// fatto della radio: a 5 GHz puo' essere fuori portata e a 2.4 funzionare
+// benissimo. Con una chiave sola, tre tentativi falliti di la' avrebbero messo
+// da parte anche la banda che andava - ed e' esattamente la regressione che il
+// passaggio all'elenco unico rischiava di introdurre. Prima le due bande erano
+// due sezioni, quindi due contatori: qui restano due.
+function penaltyKey(section, radio) {
+	return section + "@" + (radio.band ? radio.band : radio.name);
+}
+
+function isBlocked(key, now) {
+	if (blacklist[key] && blacklist[key] > now)
 		return 'blacklist';
-	if (nextTry[section] && nextTry[section] > now)
+	if (nextTry[key] && nextTry[key] > now)
 		return 'backoff';
 	return null;
 }
 
-function recordFailure(section, g) {
-	let count = (fails[section] ? fails[section] : 0) + 1;
-	fails[section] = count;
+function recordFailure(key, g) {
+	let count = (fails[key] ? fails[key] : 0) + 1;
+	fails[key] = count;
 
 	// Backoff crescente: 30s, 60s, 120s... fino a un quarto d'ora.
 	let wait = 30 * (1 << (count - 1 < 5 ? count - 1 : 5));
 	if (wait > 900) wait = 900;
-	nextTry[section] = time() + wait;
+	nextTry[key] = time() + wait;
 
 	if (count >= g.blacklist_after) {
-		blacklist[section] = time() + g.blacklist_ttl;
-		note('blacklist', section + " messa da parte per " + g.blacklist_ttl + "s dopo " + count + " tentativi falliti");
+		blacklist[key] = time() + g.blacklist_ttl;
+		note('blacklist', key + " messa da parte per " + g.blacklist_ttl + "s dopo " + count + " tentativi falliti");
 	}
 	else {
-		note('fallita', section + ": nuovo tentativo fra " + wait + "s");
+		note('fallita', key + ": nuovo tentativo fra " + wait + "s");
 	}
 }
 
-function recordSuccess(section) {
-	if (fails[section])
-		note('connessa', section + " ha funzionato, contatori azzerati");
+function recordSuccess(key) {
+	if (fails[key])
+		note('connessa', key + " ha funzionato, contatori azzerati");
 	// Si azzera assegnando null invece di cancellare la chiave: non tutte le
 	// versioni di ucode hanno l'operatore `delete`, e non vale la pena
 	// dipenderne per una cosa che si fa altrettanto bene cosi'.
-	fails[section] = null;
-	nextTry[section] = null;
-	blacklist[section] = null;
+	fails[key] = null;
+	nextTry[key] = null;
+	blacklist[key] = null;
 }
 
 // Se questa rete salvata riguarda questa radio.
@@ -382,8 +427,11 @@ function recordSuccess(section) {
 // e capire quanto vale quella a cui si e' gia' agganciati. Tenerla scritta due
 // volte e' gia' costato un confronto sbagliato fra bande diverse.
 //
-// Una voce senza banda vale per entrambe le radio: e' cosi' che si comportavano
-// le reti salvate prima che la banda entrasse nell'identita', e restano valide.
+// Una voce senza banda vale per entrambe le radio. Non e' piu' un caso di
+// compatibilita': e' lo stato normale di una rete salvata su tutte e due le
+// bande, quello che l'interfaccia scrive quando le caselle sono spuntate
+// entrambe. Le voci nate prima si comportavano gia' cosi', e infatti questa
+// funzione non e' cambiata.
 function bandMatches(net, radio) {
 	if (net.band == "" || radio.band == "")
 		return true;
@@ -431,7 +479,7 @@ function bestCandidate(radio, saved, g, now, allowHidden) {
 		// La penalita' vale per tutte allo stesso modo: e' il freno che
 		// impedisce di riprovare all'infinito una rete che non funziona, ed e'
 		// anche quello che rende sicuro provare una nascosta senza averla vista.
-		if (isBlocked(net.section, now))
+		if (isBlocked(penaltyKey(net.section, radio), now))
 			continue;
 
 		if (net.hidden) {
@@ -466,10 +514,10 @@ function considerRoam(radio, current, saved, g, now) {
 
 	lastRoamCheck[radio.name] = now;
 
-	// Solo le voci di questa banda. La stessa rete salvata su tutte e due ha
-	// due priorita' distinte, e prendere quella dell'altra banda falserebbe il
-	// confronto: una candidata legittima verrebbe scartata perche' battuta da
-	// un numero che riguarda una radio diversa.
+	// Solo le voci utilizzabili su questa radio. Due configurazioni diverse
+	// possono chiamarsi uguale su bande diverse, e prendere la priorita' di
+	// quella dell'altra radio falserebbe il confronto: una candidata legittima
+	// verrebbe scartata perche' battuta da un numero che non la riguarda.
 	let currentPriority = -1;
 	for (let net in saved)
 		if (net.ssid == current.ssid && bandMatches(net, radio) && net.priority > currentPriority)
@@ -493,7 +541,7 @@ function considerRoam(radio, current, saved, g, now) {
 	note('roaming', radio.name + ": passo da " + current.ssid + " a " + choice.net.ssid +
 		" (priorita' " + choice.net.priority + " contro " + currentPriority + ", " +
 		choice.signal + " dBm)");
-	applyConnection(radio.name, choice.net);
+	applyConnection(radio, choice.net);
 }
 
 // --- Il giro di controllo ----------------------------------------------------
@@ -524,8 +572,8 @@ function evaluate() {
 		// una rete migliore solo se e' stato chiesto esplicitamente.
 		if (state == 'addressed') {
 			let last = lastAction[radio.name];
-			if (last && last.section)
-				recordSuccess(last.section);
+			if (last && last.key)
+				recordSuccess(last.key);
 
 			if (g.roam_mode == 'best')
 				considerRoam(radio, u, saved, g, now);
@@ -542,8 +590,8 @@ function evaluate() {
 		}
 
 		let last = lastAction[radio.name];
-		if (last && last.section && (now - last.at) >= SETTLE_SECONDS)
-			recordFailure(last.section, g);
+		if (last && last.key && (now - last.at) >= SETTLE_SECONDS)
+			recordFailure(last.key, g);
 
 		let choice = bestCandidate(radio, saved, g, now, true);
 		if (!choice) {
@@ -552,7 +600,7 @@ function evaluate() {
 
 		note('connessione', radio.name + " -> " + choice.net.ssid +
 			(choice.signal == null ? " (nascosta)" : " (" + choice.signal + " dBm)"));
-		applyConnection(radio.name, choice.net);
+		applyConnection(radio, choice.net);
 	}
 }
 
@@ -896,18 +944,23 @@ function killswitchRound() {
 
 // --- Interfaccia ubus --------------------------------------------------------
 
+// Le reti messe da parte, per chiave "sezione@banda".
+//
+// La banda fa parte della chiave perche' fa parte del fatto: la stessa rete
+// puo' essere fuori portata a 5 GHz e funzionare a 2.4, e l'interfaccia lo dice
+// cosi' com'e' invece di far sembrare messa da parte tutta la rete.
 function engineState() {
 	let net = {};
 
-	for (let section in keys(fails)) {
+	for (let key in keys(fails)) {
 		// Le voci azzerate restano come chiavi a null: vanno saltate.
-		if (!fails[section] && !nextTry[section] && !blacklist[section])
+		if (!fails[key] && !nextTry[key] && !blacklist[key])
 			continue;
 
-		net[section] = {
-			fails: fails[section] ? fails[section] : 0,
-			next_try: nextTry[section] ? nextTry[section] : 0,
-			blacklisted_until: blacklist[section] ? blacklist[section] : 0
+		net[key] = {
+			fails: fails[key] ? fails[key] : 0,
+			next_try: nextTry[key] ? nextTry[key] : 0,
+			blacklisted_until: blacklist[key] ? blacklist[key] : 0
 		};
 	}
 

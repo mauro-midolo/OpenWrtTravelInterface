@@ -254,8 +254,49 @@ per rete WiFi salvata.
 
 ### Reti salvate e riconnessione automatica
 
-Le reti sono sezioni `network` in `/etc/config/travel`. L'identità usata dalla
-UI comprende SSID e banda; una voce senza banda vale per entrambe.
+Le reti sono sezioni `network` in `/etc/config/travel`. **Una rete salvata è una
+configurazione sola, valida su una banda o su tutte e due**: l'identità usata
+dalla UI è il solo SSID, e le bande sono una proprietà della rete.
+
+La scelta si scrive nel campo `band`, che ha sempre avuto esattamente i tre
+valori che servono: `2.4`, `5` e vuoto per entrambe. Non c'è quindi nessun
+formato nuovo da introdurre, le configurazioni esistenti si leggono come sono, e
+un router con il pacchetto vecchio continua a capire quello che la UI scrive.
+La forma canonica — due booleani — si ottiene in `lib/networks.ts`, al confine,
+e non nei componenti: è lo stesso posto in cui i campi che un router non ancora
+aggiornato non manda ricevono la loro risposta. Un valore di `band` che non è
+nessuno dei tre viene letto come "nessuna banda", perché è così che si comporta
+già travelD, che non lo fa corrispondere a nessuna radio.
+
+Quasi tutto è condiviso fra le due bande — password, cifratura, nome DHCP, nota,
+priorità, esito dell'ultimo tentativo. L'unico parametro che resta separato è il
+**MAC**, in `mac_mode_24`/`mac_value_24` e `mac_mode_5`/`mac_value_5`: appartiene
+alla stazione, e le stazioni sono due, una per radio. Chi non ha quei campi usa
+`mac_mode`/`mac_value`, che restano scritti come specchio della prima banda
+attiva per i router non ancora aggiornati. Abilitando una banda nuova il modo si
+eredita e un indirizzo casuale si rigenera: lo stesso MAC casuale su due radio
+verso lo stesso AP sarebbe un conflitto.
+
+Clonando un MAC per un portale si scrive invece **solo la banda della WAN**, e
+lo specchio prende quell'indirizzo — è il solo campo che un router non ancora
+aggiornato legga, e lasciandolo com'era la prima riconnessione automatica
+rimetterebbe il MAC di prima. Ma su una voce che ha solo lo specchio l'altra
+banda ci ripiega sopra, quindi verrebbe spostata di riflesso: prima di scrivere
+la si fissa nel proprio campo sul valore che sta usando — e una sezione senza
+alcun campo MAC vale `device`, cioè l'indirizzo della radio, non "non so".
+Quel valore si legge con `uci get` sulla sezione e non dall'elenco, perché
+`travel.networks` di un pacchetto vecchio non riporta i campi per banda anche
+quando in configurazione ci sono, e fidarsi dell'elenco significherebbe
+riscriverci sopra. Se quella lettura non riesce, lo specchio **non** viene
+toccato: muoverlo alla cieca sposterebbe l'altra banda di una voce che ci
+ripiega sopra, e perdere una comodità di compatibilità è meglio che cambiare una
+configurazione che nessuno ha chiesto di toccare.
+
+Prima di abilitare una banda si controlla che nessun'altra voce con lo stesso
+SSID la copra già: sulla radio c'è una stazione sola, quindi un doppione non
+verrebbe mai provato. In quel caso la UI lo dice, non salva e non tocca la voce
+esistente.
+
 Sono implementati modifica, eliminazione, abilitazione, note, riordino delle
 priorità e connessione con credenziali salvate. `mark_used` registra
 `last_used` e `last_result` per le azioni che lo invocano dalla UI.
@@ -264,12 +305,22 @@ L'elenco vive in una pagina dedicata, non nella scheda WiFi: cresce con i
 viaggi e in coda alla scheda spingeva in basso radio e scansione. La scheda ne
 mostra solo la voce di accesso con il totale; la pagina è una vista di
 `screens/Wifi.tsx`, quindi riusa reti, radio e uplink già letti e non è una
-sesta scheda della barra. Dentro, le reti restano divise per banda e ordinabili
-separatamente, ogni riga porta banda, cifratura, ultimo utilizzo, esito
-dell'ultimo tentativo se diverso da "ok" e nota, più le targhette *collegata*,
-*nascosta* e *disattivata*. Da sei reti in su compare una ricerca per SSID o
-nota; il numero di priorità mostrato resta quello dell'elenco intero anche
-mentre si filtra.
+sesta scheda della barra. Dentro c'è **una lista sola**, ordinata per priorità:
+ogni riga porta cifratura, ultimo utilizzo, esito dell'ultimo tentativo se
+diverso da "ok" e nota, più le targhette delle bande abilitate e quelle
+*collegata*, *nascosta* e *disattivata*. Da sei reti in su compare una ricerca
+per SSID o nota; il numero di priorità mostrato resta quello dell'elenco intero
+anche mentre si filtra. Aprendo una rete si scelgono le bande con due caselle —
+almeno una — e, quando sono attive entrambe, con quale radio collegarsi.
+
+La scansione resta invece divisa per banda ed è rimasta identica: la sezione
+2,4 GHz mostra ciò che vede quella radio, la 5 GHz ciò che vede l'altra. La
+scelta delle bande avviene solo al salvataggio, e lì la banda da cui la rete è
+stata vista è obbligatoria: è l'unica su cui si sa che quella rete c'è e che la
+password è quella. L'altra si può aggiungere subito, ed è modificabile dopo.
+Collegandosi a una rete già salvata sull'altra banda non si crea una seconda
+voce: si propone di aggiungere la banda a quella che c'è, e succede solo se la
+connessione riesce.
 
 ### Condivisione delle reti salvate
 
@@ -303,7 +354,7 @@ da fotocamere Android/iPhone resta da verificare su dispositivi fisici.
 Una rete che non annuncia il proprio SSID non compare in nessuna scansione, e
 quindi non c'è una riga da toccare per collegarsi: si aggiunge a mano dalla
 scheda della radio, con "Aggiungi rete nascosta", oppure toccando la riga
-"rete nascosta" nei risultati della scansione. Il modulo chiede SSID, banda e
+"rete nascosta" nei risultati della scansione. Il modulo chiede SSID, bande e
 tipo di sicurezza, e la password solo per le cifrature che ne hanno una
 (`psk2`, `sae`, `sae-mixed`; `none` non la chiede). SSID da 1 a 32 byte e
 passphrase da 8 a 63 caratteri sono validati prima del salvataggio.
@@ -313,8 +364,10 @@ funzione: una rete nascosta si configura anche se in quel momento non è
 raggiungibile. `hidden='1'` resta nella sezione insieme agli altri parametri —
 non è uno stato del modulo — ed è ciò che distingue la voce nell'elenco e ciò
 che il motore automatico consulta. Da lì in poi la rete si modifica, si
-riordina, si disattiva e si elimina come qualsiasi altra rete salvata, e le due
-bande restano configurazioni distinte.
+riordina, si disattiva e si elimina come qualsiasi altra rete salvata. Le bande
+si scelgono con le stesse due caselle delle altre reti e qui nessuna è
+obbligatoria: nessuno l'ha vista da nessuna parte, è un nome scritto a mano,
+quindi non c'è una banda che valga come testimone.
 
 Per collegarsi non serve nessuna scansione: la STA viene scritta con l'SSID
 salvato e OpenWrt genera sempre `scan_ssid=1` per `mode=sta`, quindi
@@ -375,10 +428,16 @@ per una rete nascosta anche sull'SSID, che è la causa più probabile di
 `not-found`.
 
 Il motore automatico è disabilitato per default (`autoreconnect=0`) e valuta
-la situazione ogni 10 secondi. Ordina le reti abilitate per priorità
-decrescente, le confronta con gli SSID visibili sulla radio e applica una
-soglia RSSI di default -78 dBm. Penalità e blacklist sono per sezione salvata
-e restano in RAM.
+la situazione ogni 10 secondi. Per ogni radio ordina per priorità decrescente
+le reti abilitate **su quella banda**, le confronta con gli SSID visibili sulla
+radio e applica una soglia RSSI di default -78 dBm. Il MAC scritto è quello
+della banda della radio.
+
+Penalità e blacklist restano in RAM e sono per **rete e banda**, con chiave
+`sezione@banda`: "non si aggancia" è un fatto della radio, e la stessa rete può
+essere fuori portata a 5 GHz e funzionare a 2,4. Con le due bande in due sezioni
+separate i contatori erano già due, e la lista unica non li ha uniti — l'elenco
+delle reti messe da parte mostra quindi rete e banda.
 
 - Backoff da 30 a 900 secondi; dopo 3 fallimenti, per default, la blacklist
   dura 600 secondi.
@@ -674,7 +733,7 @@ configurazioni canoniche dei servizi. `/etc/config/travel` contiene:
 | Tipo/sezione | Campi utilizzati |
 |---|---|
 | `globals 'globals'` | `autoreconnect`, `rssi_min`, `roam_mode`, `roam_hysteresis`, `blacklist_after`, `blacklist_ttl`, `scan_interval`, `portal_check`, override `portal_url`/`portal_marker` e marcatori di inizializzazione/migrazione |
-| `network` | `ssid`, `key`, `encryption`, `band`, `mac_mode`, `mac_value`, `hostname_mode`, `hostname_value`, `note`, `priority`, `disabled`, `last_used`, `last_result` |
+| `network` | `ssid`, `key`, `encryption`, `band` (`2.4`, `5`, vuoto = entrambe), `mac_mode`, `mac_value`, `mac_mode_24`, `mac_value_24`, `mac_mode_5`, `mac_value_5`, `hostname_mode`, `hostname_value`, `note`, `priority`, `disabled`, `last_used`, `last_result` |
 | `portal` | `key`, `label`, `network`, `url`, `last_seen`, `last_login` |
 | `usb 'usb'` | `force_usb2` |
 | `tailscale 'tailscale'` | `exit_node`, `accept_routes`, `accept_dns`, `advertise_lan`, `advertise_exit` |
@@ -999,7 +1058,17 @@ Accetta `-Router`, `-User` e `-WithTtyd`. Non costruisce un pacchetto APK
 
 `setup.sh` inizializza configurazioni mancanti, esegue migrazioni mirate,
 installa le dipendenze previste, riavvia travel e rpcd e prova `travel.status`
-e `traveld.status`. `online.sh` verifica la connettività e limita le attese
+e `traveld.status`. Fra le migrazioni, segnata da `travel.globals.saved_bands_init`
+e quindi eseguita una volta sola, c'è l'unione delle reti salvate che erano due
+voci gemelle, una per banda. Il criterio è severo di proposito: si uniscono solo
+le coppie che non perderebbero nulla nell'unione — stesso SSID, cifratura,
+password, stato nascosto, nome DHCP, stato di attivazione, e note che non si
+contraddicono. Sopravvivono la priorità più alta, la storia più recente e i due
+MAC, uno per banda. Tutto il resto resta separato: due configurazioni diverse
+con lo stesso nome sono un caso legittimo, e fonderle vorrebbe dire scegliere al
+posto dell'utente quale buttare via. La migrazione non è comunque necessaria al
+funzionamento: `band` ha già i tre valori giusti, e le impostazioni della
+riconnessione automatica non vengono toccate. `online.sh` verifica la connettività e limita le attese
 delle installazioni `apk`. Alcuni errori di installazione producono avvisi
 e consentono di proseguire: un deploy terminato non prova da solo che tutte
 le funzioni opzionali siano operative.

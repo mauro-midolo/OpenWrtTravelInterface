@@ -14,7 +14,7 @@ import {
   stageWanHostname,
 } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
-import { findSaved, listSaved, updateNetwork } from '../lib/networks';
+import { findSavedOn, listSaved, updateNetwork } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import { HostnamePicker } from '../components/HostnamePicker';
 import { ApplyStatus } from '../components/ApplyStatus';
@@ -283,7 +283,7 @@ function HostnameSheet({
     let cancelled = false;
     void listSaved()
       .then((list) => {
-        if (!cancelled) setSaved(findSaved(list, wan.ssid, wan.band) ?? null);
+        if (!cancelled) setSaved(findSavedOn(list, wan.ssid, wan.band) ?? null);
       })
       .catch(() => undefined);
     return () => {

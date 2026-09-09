@@ -486,6 +486,16 @@ button:disabled {
   color: var(--error-text);
 }
 
+/* Le bande su cui vale una rete salvata. Sono un dato di configurazione, non
+   uno stato: si leggono a colpo d'occhio scorrendo l'elenco - "2.4", "5" o
+   tutte e due - senza gridare come farebbe un avviso. Il colore dell'accento
+   perche' e' la cosa che si va a cercare in quella riga. */
+.badge--band {
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
 /* Un fatto che non e' ne' un problema ne' una conferma: "nascosta" dice com'e'
    fatta la rete, non come sta andando. Colorata come un avviso si sarebbe letta
    come un guasto. */
@@ -839,36 +849,6 @@ button:disabled {
    posto, cosi' l'occhio scende lungo la colonna dei nomi senza rimettersi a
    fuoco a ogni voce. */
 
-/* Il titolo della banda resta in alto mentre il suo gruppo scorre: con venti
-   reti in elenco, senza di questo si finisce a guardare righe senza piu' sapere
-   di quale radio parlano. I margini negativi lo portano fino ai bordi della
-   scheda, altrimenti le righe passerebbero visibili nei 16px di riempimento ai
-   lati del titolo. */
-.saved-group__title {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: -16px -16px 0;
-  padding: 14px 16px 8px;
-  background: var(--surface);
-  border-radius: var(--radius) var(--radius) 0 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text);
-}
-
-.saved-group__count {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
 /* La posizione per priorita', davanti al nome. Larghezza fissa: incolonnati,
    i numeri si saltano con l'occhio invece di doverli leggere, e i nomi partono
    tutti dallo stesso punto. */
@@ -891,9 +871,9 @@ button:disabled {
   overflow-wrap: normal;
 }
 
-/* Le targhette possono essere tre - collegata, nascosta, disattivata - e su uno
-   schermo stretto non ci stanno in fila: vanno a capo verso destra invece di
-   schiacciare il nome. */
+/* Le targhette possono essere cinque - le due bande, collegata, nascosta,
+   disattivata - e su uno schermo stretto non ci stanno in fila: vanno a capo
+   verso destra invece di schiacciare il nome. */
 .saved__badges {
   flex: 0 1 auto;
   flex-wrap: wrap;

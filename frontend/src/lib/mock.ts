@@ -67,10 +67,22 @@ interface MockSaved {
   section: string;
   ssid: string;
   encryption: string;
+  /** Come su uci: vuoto = tutte e due le bande, altrimenti "2.4" o "5". */
   band: string;
   hidden: boolean;
+  /**
+   * Il MAC condiviso, per le versioni del pacchetto che non conoscono ancora
+   * quelli per banda. Il simulatore lo tiene per riprodurre proprio quel caso:
+   * una voce vecchia che ha solo questo, e che l'interfaccia deve leggere
+   * ugualmente.
+   */
   mac_mode: string;
   mac_value: string;
+  /** Il MAC di ciascuna banda: e' della radio, non della rete. */
+  mac_mode_24?: string;
+  mac_value_24?: string;
+  mac_mode_5?: string;
+  mac_value_5?: string;
   hostname_mode: string;
   hostname_value: string;
   note: string;
@@ -98,6 +110,8 @@ const savedNetworks: Record<string, MockSaved> = {
     hidden: false,
     mac_mode: 'random',
     mac_value: '02:1a:2b:3c:4d:5e',
+    mac_mode_5: 'random',
+    mac_value_5: '02:1a:2b:3c:4d:5e',
     hostname_mode: 'none',
     hostname_value: '',
     note: 'hotel di Berlino',
@@ -107,41 +121,30 @@ const savedNetworks: Record<string, MockSaved> = {
     last_result: 'ok',
     key: 'hotelguest',
   },
-  // Stessa rete di casa sulle due bande: due voci indipendenti, con priorita'
-  // diverse. E' il caso che l'elenco unico non sapeva rappresentare.
-  net_casa5: {
-    section: 'net_casa5',
+  // La rete di casa su tutte e due le bande: UNA voce, `band` vuoto. Prima
+  // erano due sezioni gemelle da tenere allineate a mano; adesso e' la stessa
+  // configurazione, con un MAC per radio - qui casuale e diverso, che e' il
+  // caso in cui i due valori devono restare separati davvero.
+  net_casa: {
+    section: 'net_casa',
     ssid: 'Casa Mia',
     encryption: 'psk2',
-    band: '5',
+    band: '',
     hidden: false,
-    mac_mode: 'device',
-    mac_value: '',
+    mac_mode: 'random',
+    mac_value: '02:5c:11:aa:01:24',
+    mac_mode_24: 'random',
+    mac_value_24: '02:5c:11:aa:01:24',
+    mac_mode_5: 'random',
+    mac_value_5: '02:5c:11:aa:01:50',
     // Rete di casa: qui il nome si manda, e serve a vedere le tre modalita'
     // rappresentate nel simulatore.
     hostname_mode: 'custom',
     hostname_value: 'beryl',
-    note: 'più veloce, portata corta',
+    note: 'a 5 GHz più veloce, a 2.4 arriva in tutta la casa',
     priority: 30,
     disabled: false,
     last_used: Math.floor(Date.now() / 1000) - 3600,
-    last_result: 'ok',
-    key: 'casacasacasa',
-  },
-  net_casa24: {
-    section: 'net_casa24',
-    ssid: 'Casa Mia',
-    encryption: 'psk2',
-    band: '2.4',
-    hidden: false,
-    mac_mode: 'device',
-    mac_value: '',
-    hostname_mode: 'device',
-    hostname_value: '',
-    note: 'arriva in tutta la casa',
-    priority: 25,
-    disabled: false,
-    last_used: Math.floor(Date.now() / 1000) - 7200,
     last_result: 'ok',
     key: 'casacasacasa',
   },
@@ -684,8 +687,9 @@ const scanFixtures = [
   { ssid: 'Hotel-Guest', channel: 1, signal: -67, wpa: [2], auth: ['psk'] },
   { ssid: 'Hotel-Guest', channel: 11, signal: -80, wpa: [2], auth: ['psk'] },
   { ssid: 'Hotel-WiFi-Free', channel: 11, signal: -63, wpa: [], auth: ['none'] },
-  // La rete di casa sulle due bande: e' salvata due volte, ed e' anche il modo
-  // di vedere nell'elenco della scansione le due configurazioni separate.
+  // La rete di casa si annuncia su tutte e due le bande: una voce salvata
+  // sola, ma due righe nella scansione, una per radio. E' il caso da cui si
+  // salva una rete su entrambe le bande in un colpo.
   { ssid: 'Casa Mia', channel: 3, signal: -55, wpa: [2], auth: ['psk'] },
   { ssid: 'Casa Mia', channel: 40, signal: -61, wpa: [2], auth: ['psk'] },
   { ssid: 'Vodafone-12345', channel: 1, signal: -71, wpa: [2], auth: ['psk'] },
@@ -704,9 +708,10 @@ const scanFixtures = [
  * "aggiungi rete nascosta": senza, ogni rete aggiunta risulterebbe inesistente
  * e non si potrebbe mai provare il caso che riesce.
  *
- * La banda fa parte dell'identita' anche qui: la stessa rete cercata sulla
- * banda sbagliata non si trova, che e' proprio cio' che le due configurazioni
- * separate devono far vedere.
+ * La banda conta anche qui: una rete nascosta cercata sulla banda sbagliata non
+ * si trova. E' il motivo per cui le bande di una rete salvata sono una scelta
+ * e non una comodita' - accenderne una su cui la rete non c'e' produce un
+ * "rete non trovata", non un tentativo innocuo.
  */
 const hiddenAps: Array<{ ssid: string; band: '2.4' | '5' }> = [
   { ssid: 'Uffici-Interni', band: '5' },
@@ -722,6 +727,19 @@ const hiddenAps: Array<{ ssid: string; band: '2.4' | '5' }> = [
  */
 function appliedMac(written: string): string {
   return written.trim().toLowerCase();
+}
+
+/**
+ * Il MAC che una rete salvata usa su questa banda.
+ *
+ * I campi per banda vincono, ma se mancano si ripiega su quello condiviso: e'
+ * la stessa regola del router e della UI, e serve perche' una voce salvata
+ * prima che i MAC si separassero ha soltanto quello.
+ */
+function savedMac(entry: MockSaved, band: '2.4' | '5'): string {
+  const mode = (band === '2.4' ? entry.mac_mode_24 : entry.mac_mode_5) ?? entry.mac_mode;
+  const value = (band === '2.4' ? entry.mac_value_24 : entry.mac_value_5) ?? entry.mac_value;
+  return mode === 'device' ? '' : value;
 }
 
 /** Se un punto di accesso con questo nome esiste su questa banda. */
@@ -1803,7 +1821,14 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     pending.push(() => {
       const radio = radios[name];
       if (radio) {
-        radio.sta = { ssid: entry.ssid, key: entry.key, mac: entry.mac_value, since: Date.now() };
+        // Il MAC e' quello della banda di questa radio, come sul router: due
+        // radio possono avere due indirizzi per la stessa rete salvata.
+        radio.sta = {
+          ssid: entry.ssid,
+          key: entry.key,
+          mac: savedMac(entry, radio.band),
+          since: Date.now(),
+        };
       }
       // Come sul router: il nome DHCP e' salvato con la rete ma vive
       // sull'interfaccia, e viene riscritto a ogni connessione.
@@ -1941,7 +1966,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         encryption: entry.encryption,
         band: entry.band,
         hidden: entry.hidden ? '1' : '0',
+        mac_mode: entry.mac_mode,
+        mac_value: entry.mac_value,
       };
+      // I campi per banda solo se ci sono davvero: chi legge la sezione lo fa
+      // proprio per sapere se esistono, e riportarli vuoti quando mancano
+      // renderebbe indistinguibile una voce nata prima che si separassero.
+      if (entry.mac_mode_24 !== undefined) values.mac_mode_24 = entry.mac_mode_24;
+      if (entry.mac_value_24 !== undefined) values.mac_value_24 = entry.mac_value_24;
+      if (entry.mac_mode_5 !== undefined) values.mac_mode_5 = entry.mac_mode_5;
+      if (entry.mac_value_5 !== undefined) values.mac_value_5 = entry.mac_value_5;
       if (entry.key !== '') values.key = entry.key;
       if (!option) return { values };
       if (!(option in values)) throw new UbusError(UBUS_NOT_FOUND, 'uci.get');
@@ -2072,6 +2106,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           hidden: values.hidden === '1',
           mac_mode: values.mac_mode ?? 'device',
           mac_value: values.mac_value ?? '',
+          mac_mode_24: values.mac_mode_24,
+          mac_value_24: values.mac_value_24,
+          mac_mode_5: values.mac_mode_5,
+          mac_value_5: values.mac_value_5,
           hostname_mode: values.hostname_mode ?? 'none',
           hostname_value: values.hostname_value ?? '',
           note: values.note ?? '',
@@ -2272,6 +2310,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         if (values.band !== undefined) entry.band = values.band;
         if (values.mac_mode !== undefined) entry.mac_mode = values.mac_mode;
         if (values.mac_value !== undefined) entry.mac_value = values.mac_value;
+        if (values.mac_mode_24 !== undefined) entry.mac_mode_24 = values.mac_mode_24;
+        if (values.mac_value_24 !== undefined) entry.mac_value_24 = values.mac_value_24;
+        if (values.mac_mode_5 !== undefined) entry.mac_mode_5 = values.mac_mode_5;
+        if (values.mac_value_5 !== undefined) entry.mac_value_5 = values.mac_value_5;
         if (values.note !== undefined) entry.note = values.note;
         if (values.hostname_mode !== undefined) entry.hostname_mode = values.hostname_mode;
         if (values.hostname_value !== undefined) entry.hostname_value = values.hostname_value;

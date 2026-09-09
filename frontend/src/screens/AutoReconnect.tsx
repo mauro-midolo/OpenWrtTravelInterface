@@ -50,8 +50,26 @@ export function AutoCard({
     );
   }
 
-  const nameOf = (section: string) =>
-    saved.find((n) => n.section === section)?.ssid ?? section;
+  /**
+   * Il nome di una rete messa da parte, dalla chiave "sezione@banda".
+   *
+   * travelD conta i fallimenti per rete E per banda, e la chiave lo porta con
+   * se': la stessa rete salvata su tutte e due puo' essere fuori portata a 5
+   * GHz e funzionare benissimo a 2.4. Mostrando la sola rete si direbbe che e'
+   * stata messa da parte tutta, che e' falso e manda a cercare un guasto che
+   * non c'e'.
+   */
+  const nameOf = (key: string) => {
+    const at = key.lastIndexOf('@');
+    if (at < 0) return saved.find((n) => n.section === key)?.ssid ?? key;
+
+    const section = key.slice(0, at);
+    const band = key.slice(at + 1);
+    const ssid = saved.find((n) => n.section === section)?.ssid ?? section;
+    // Una radio che non dichiara la banda finisce nella chiave col proprio
+    // nome: si riporta com'e' invece di scrivere "radio0 GHz".
+    return band === '2.4' || band === '5' ? `${ssid} · ${band} GHz` : `${ssid} · ${band}`;
+  };
 
   const penalised = Object.entries(daemon.networks);
   const now = Math.floor(Date.now() / 1000);

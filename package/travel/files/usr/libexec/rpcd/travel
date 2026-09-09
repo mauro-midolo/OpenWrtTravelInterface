@@ -777,6 +777,11 @@ method_networks() {
 		json_add_string  section     "$section"
 		json_add_string  ssid        "$(uci -q get "travel.$section.ssid")"
 		json_add_string  encryption  "$(uci -q get "travel.$section.encryption")"
+		# Le bande su cui vale questa rete, nei tre valori che uci ha sempre
+		# avuto: "2.4", "5", oppure vuoto per tutte e due. Sono esattamente i
+		# tre stati che l'interfaccia offre con le sue due caselle, quindi le
+		# reti gia' salvate si leggono senza riscrivere niente e un router con
+		# il pacchetto vecchio capisce comunque cosa ha scritto la UI nuova.
 		json_add_string  band        "$(uci -q get "travel.$section.band")"
 		# Rete che non annuncia il proprio SSID. Nessuna schermata la scrive:
 		# la scansione non la vede, quindi non c'e' da dove salvarla. Si riporta
@@ -784,6 +789,16 @@ method_networks() {
 		json_add_boolean hidden      "$([ "$(uci -q get "travel.$section.hidden")" = "1" ] && echo 1 || echo 0)"
 		json_add_string  mac_mode    "$(uci -q get "travel.$section.mac_mode")"
 		json_add_string  mac_value   "$(uci -q get "travel.$section.mac_value")"
+		# Il MAC di ciascuna banda. E' l'unico parametro che resta separato
+		# quando una rete vale su tutte e due: l'indirizzo appartiene alla
+		# stazione, e le stazioni sono due, una per radio. Chi non ha questi
+		# campi e' nato prima che si separassero e vale il valore condiviso qui
+		# sopra - il ripiego lo fa chi legge, cosi' la regola sta in un posto
+		# solo invece che in tre.
+		json_add_string  mac_mode_24  "$(uci -q get "travel.$section.mac_mode_24")"
+		json_add_string  mac_value_24 "$(uci -q get "travel.$section.mac_value_24")"
+		json_add_string  mac_mode_5   "$(uci -q get "travel.$section.mac_mode_5")"
+		json_add_string  mac_value_5  "$(uci -q get "travel.$section.mac_value_5")"
 		json_add_string  note        "$(uci -q get "travel.$section.note")"
 		# Nome da mandare nel DHCP su questa rete: chi non lo ha e' nato prima
 		# che l'impostazione esistesse e vale come "non inviarlo", che e' il
@@ -898,7 +913,7 @@ method_sta_diagnose() {
 # `uci apply` e il ritorno indietro automatico.
 method_stage_connect_saved() {
 	local input sid section radio target ssid key encryption mac_mode mac_value args
-	local hostname_mode hostname_value hostname_uci
+	local hostname_mode hostname_value hostname_uci band suffix
 
 	input=$(cat)
 	[ -n "$input" ] || input='{}'
@@ -918,6 +933,21 @@ method_stage_connect_saved() {
 	mac_mode=$(uci -q get "travel.$section.mac_mode")
 	mac_value=$(uci -q get "travel.$section.mac_value")
 	target="sta_$radio"
+
+	# Il MAC appartiene alla radio, non alla rete: una rete salvata su tutte e
+	# due le bande ne ha uno per banda, e qui si prende quello della radio su
+	# cui si sta per andare. Se il campo non c'e' - voce salvata prima che i due
+	# valori si separassero - resta buono quello condiviso appena letto.
+	band=$(band_label "$(uci -q get "wireless.$radio.band")")
+	case "$band" in
+		2.4) suffix=24 ;;
+		5)   suffix=5 ;;
+		*)   suffix="" ;;
+	esac
+	if [ -n "$suffix" ] && [ -n "$(uci -q get "travel.$section.mac_mode_$suffix")" ]; then
+		mac_mode=$(uci -q get "travel.$section.mac_mode_$suffix")
+		mac_value=$(uci -q get "travel.$section.mac_value_$suffix")
+	fi
 
 	# Il nome DHCP e' una proprieta' della rete salvata ma vive sull'interfaccia
 	# logica: si riscrive ogni volta, altrimenti resterebbe quello della rete

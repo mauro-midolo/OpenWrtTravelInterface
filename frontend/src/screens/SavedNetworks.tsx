@@ -6,35 +6,47 @@
  * finche' stava li' spingeva in basso le radio e la scansione, che sono le cose
  * per cui la scheda si apre. Nella scheda resta una riga sola col totale, come
  * fa Android con le sue reti salvate.
+ *
+ * L'elenco e' uno solo. Prima erano due, uno per banda, e la stessa rete di
+ * casa compariva due volte: due password da correggere, due note da scrivere,
+ * due voci da tenere allineate a mano. Adesso ogni riga e' una rete, e le
+ * bande su cui va usata sono due caselle dentro la rete.
  */
 
 import { useEffect, useState } from 'preact/hooks';
 import { useApply } from '../lib/apply';
 import {
+  BANDS,
+  bandConflicts,
   bandLabel,
-  bandSiblings,
+  bandList,
+  bandValues,
+  bandsLabel,
   connectedVia,
   deleteNetwork,
-  groupByBand,
+  hasAnyBand,
   hostnameOf,
+  macForNewBand,
   markUsed,
   matchesQuery,
   reorder,
   stageConnectSaved,
   updateNetwork,
 } from '../lib/networks';
-import type { SavedNetwork } from '../lib/networks';
+import type { BandSet, MacByBand, SavedNetwork } from '../lib/networks';
 import {
   awaitConnection,
   encryptionLabel,
+  isValidMac,
   isValidSsid,
   logMark,
   wirelessCameUp,
 } from '../lib/wifi';
-import type { ConnectOutcome, Radio, Uplink } from '../lib/wifi';
+import type { Band, ConnectOutcome, Radio, Uplink } from '../lib/wifi';
 import { getSystem, hostnameLabel, isValidHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { HostnamePicker } from '../components/HostnamePicker';
+import { MacPicker } from '../components/MacPicker';
 import { ShareSheet } from './ShareNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
 
@@ -96,15 +108,26 @@ const RESULT_SHORT: Record<string, string> = {
   'not-found': 'rete non trovata',
 };
 
-/** Quante reti per banda, in una frase: "3 a 2.4 GHz · 2 a 5 GHz". */
+/**
+ * Com'e' distribuito l'elenco fra le bande, in una frase.
+ *
+ * Non e' piu' un conteggio per lista - la lista e' una sola - ma resta la cosa
+ * che si vuole sapere senza aprire: quante reti valgono su tutte e due le
+ * radio e quante su una sola.
+ */
 function bandSummary(saved: SavedNetwork[]): string {
-  return groupByBand(saved)
-    .filter((group) => group.networks.length > 0)
-    .map((group) =>
-      group.band === ''
-        ? `${group.networks.length} senza banda`
-        : `${group.networks.length} a ${group.band} GHz`,
-    )
+  const both = saved.filter((n) => n.bands['2.4'] && n.bands['5']).length;
+  const only24 = saved.filter((n) => n.bands['2.4'] && !n.bands['5']).length;
+  const only5 = saved.filter((n) => !n.bands['2.4'] && n.bands['5']).length;
+  const none = saved.filter((n) => !hasAnyBand(n.bands)).length;
+
+  return [
+    both > 0 ? `${both} su entrambe le bande` : '',
+    only24 > 0 ? `${only24} solo a 2.4 GHz` : '',
+    only5 > 0 ? `${only5} solo a 5 GHz` : '',
+    none > 0 ? `${none} senza banda` : '',
+  ]
+    .filter(Boolean)
     .join(' · ');
 }
 
@@ -144,6 +167,22 @@ export function SavedEntryCard({
   );
 }
 
+/** Le targhette delle bande di una rete: si leggono senza aprire la riga. */
+function BandBadges({ bands }: { bands: BandSet }) {
+  if (!hasAnyBand(bands)) {
+    return <span class="badge badge--warn">nessuna banda</span>;
+  }
+  return (
+    <>
+      {bandList(bands).map((band) => (
+        <span class="badge badge--band" key={band}>
+          {band}
+        </span>
+      ))}
+    </>
+  );
+}
+
 /**
  * Una rete salvata in una riga.
  *
@@ -161,16 +200,15 @@ function SavedRow({
   onPick,
 }: {
   net: SavedNetwork;
-  /** Posizione per priorita' dentro la propria banda, a partire da 1. */
+  /** Posizione per priorita' nell'elenco, a partire da 1. */
   rank: number;
   connected: boolean;
   onPick: () => void;
 }) {
-  // La banda e' ripetuta in ogni riga anche se c'e' gia' nel titolo del
-  // gruppo: cercando, i risultati delle due bande finiscono uno sotto l'altro,
-  // e la stessa rete di casa salvata due volte si distingue solo da qui.
+  // Le bande non stanno qui ma nelle targhette a destra: sono la prima cosa da
+  // vedere, e in fondo a una riga troncata sarebbero sparite proprio sulle
+  // reti con la nota lunga.
   const meta = [
-    bandLabel(net.band),
     encryptionLabel(net.encryption),
     whenUsed(net.last_used),
     RESULT_SHORT[net.last_result],
@@ -184,12 +222,12 @@ function SavedRow({
       <button class="net" onClick={onPick}>
         <span class="net__main">
           <span class="net__ssid saved__ssid">
-            <span class="saved__rank">{rank}</span>{' '}
-            {net.ssid}
+            <span class="saved__rank">{rank}</span> {net.ssid}
           </span>
           <span class="net__meta saved__meta">{meta}</span>
         </span>
         <span class="net__side saved__badges">
+          <BandBadges bands={net.bands} />
           {connected && <span class="badge badge--ok">collegata</span>}
           {/* Una rete che non annuncia il nome non comparira' mai in una
               scansione: questo elenco e' l'unico posto da cui si sa che c'e'. */}
@@ -233,16 +271,10 @@ export function SavedNetworksScreen({
   const filtering = needle !== '';
 
   // La posizione si calcola prima di filtrare: "3." deve continuare a dire
-  // terza per priorita' su quella banda, non terza fra i risultati mostrati.
-  const groups = groupByBand(saved).map((group) => ({
-    band: group.band,
-    total: group.networks.length,
-    rows: group.networks
-      .map((net, index) => ({ net, rank: index + 1 }))
-      .filter(({ net }) => matchesQuery(net, needle)),
-  }));
-
-  const found = groups.reduce((sum, group) => sum + group.rows.length, 0);
+  // terza per priorita', non terza fra i risultati mostrati.
+  const rows = saved
+    .map((net, index) => ({ net, rank: index + 1 }))
+    .filter(({ net }) => matchesQuery(net, needle));
 
   return (
     <main class="screen">
@@ -272,9 +304,9 @@ export function SavedNetworksScreen({
       ) : (
         <>
           <p class="muted">
-            Una lista per banda, ordinabili separatamente. Ogni radio sceglie dalla lista
-            della sua banda, quindi la stessa rete può stare in tutte e due con priorità
-            diverse.
+            Una lista sola, in ordine di priorità: le radio scelgono da qui, ciascuna fra
+            le reti abilitate sulla propria banda. Le targhette dicono su quali bande vale
+            ogni rete; si cambiano aprendola.
           </p>
 
           {searchable && (
@@ -289,51 +321,27 @@ export function SavedNetworksScreen({
             </label>
           )}
 
-          {filtering && found === 0 && (
+          {filtering && rows.length === 0 && (
             <section class="card">
               <p class="muted">Nessuna rete salvata corrisponde a «{needle}».</p>
             </section>
           )}
 
-          {/* Un gruppo per banda invece di un elenco unico: le due radio
-              scelgono in modo indipendente, e un elenco solo suggeriva il
-              contrario. */}
-          {groups.map((group) => {
-            // Filtrando, una banda senza risultati sparisce invece di ripetere
-            // "nessuna rete su questa banda": quel messaggio parla della
-            // configurazione, mentre qui la causa e' la ricerca in corso.
-            if (filtering && group.rows.length === 0) return null;
-
-            return (
-              <section class="card saved-group" key={group.band}>
-                <h2 class="saved-group__title">
-                  {bandLabel(group.band)}
-                  {!filtering && group.total > 0 && (
-                    <span class="saved-group__count">{group.total}</span>
-                  )}
-                </h2>
-
-                {group.total === 0 ? (
-                  <p class="muted">
-                    Nessuna rete salvata su questa banda. Collegati a una rete{' '}
-                    {group.band ? `a ${group.band} GHz` : ''} e salvala per averla qui.
-                  </p>
-                ) : (
-                  <ul class="list list--flush">
-                    {group.rows.map(({ net, rank }) => (
-                      <SavedRow
-                        key={net.section}
-                        net={net}
-                        rank={rank}
-                        connected={connectedVia(uplinks, net) !== undefined}
-                        onPick={() => setPicked(net)}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </section>
-            );
-          })}
+          {rows.length > 0 && (
+            <section class="card">
+              <ul class="list list--flush">
+                {rows.map(({ net, rank }) => (
+                  <SavedRow
+                    key={net.section}
+                    net={net}
+                    rank={rank}
+                    connected={connectedVia(uplinks, net) !== undefined}
+                    onPick={() => setPicked(net)}
+                  />
+                ))}
+              </ul>
+            </section>
+          )}
         </>
       )}
 
@@ -379,6 +387,17 @@ export function SavedSheet({
    */
   const [ssid, setSsid] = useState(net.ssid);
   const [note, setNote] = useState(net.note);
+  const [bands, setBands] = useState<BandSet>({ ...net.bands });
+  const [mac, setMac] = useState<MacByBand>({ ...net.mac });
+  /**
+   * Le bande il cui MAC e' gia' stato deciso.
+   *
+   * Accendendo una banda mai usata prima, il suo MAC parte da quello
+   * dell'altra: e' cio' che significa "la stessa rete anche di la'". Ma solo
+   * la prima volta - dopo, quel campo e' una scelta di chi guarda lo schermo, e
+   * spegnere e riaccendere la casella non deve buttarla via.
+   */
+  const [seeded, setSeeded] = useState<BandSet>({ ...net.bands });
   const [hostname, setHostname] = useState<HostnameChoice>(() => hostnameOf(net));
   const [deviceHostname, setDeviceHostname] = useState('');
   const [busy, setBusy] = useState(false);
@@ -403,17 +422,37 @@ export function SavedSheet({
 
   const hostnameOk = hostname.mode !== 'custom' || isValidHostname(hostname.value.trim());
   const ssidOk = !net.hidden || isValidSsid(ssid.trim());
+  const macOk = bandList(bands).every(
+    (band) => mac[band].mode === 'device' || isValidMac(mac[band].value),
+  );
 
-  // Si sposta dentro la propria banda: e' l'insieme fra cui la radio sceglie,
-  // e spostarsi rispetto a una rete che l'altra radio non vedra' mai non
-  // vorrebbe dire niente.
-  const siblings = bandSiblings(saved, net);
-  const index = siblings.findIndex((n) => n.section === net.section);
+  /**
+   * Le bande gia' occupate da un'altra voce con lo stesso nome.
+   *
+   * Si guarda prima di salvare, non dopo: due configurazioni con lo stesso SSID
+   * sulla stessa radio sono un doppione, e la seconda non verrebbe mai provata.
+   * Qui ci si ferma e si dice quale voce c'e' gia', senza toccarla.
+   */
+  const conflicts = bandConflicts(saved, net.hidden ? ssid.trim() : net.ssid, bands, net.section);
 
-  // La banda salvata dice su quale radio va la STA. Senza, si prende la prima
-  // radio disponibile e lo si dice invece di sceglierla in silenzio.
+  const index = saved.findIndex((n) => n.section === net.section);
+
+  /**
+   * Le radio su cui questa rete puo' andare: quelle della sua banda.
+   *
+   * Con tutte e due le bande accese si sceglie, e si parte dai 5 GHz: piu'
+   * veloci, ed e' quello che si vuole quando la rete c'e' su entrambe. Con una
+   * banda sola non c'e' niente da scegliere e i pulsanti non compaiono.
+   */
+  // Dalle bande salvate, non da quelle del modulo di modifica: "Connetti" usa
+  // la configurazione che sta sul router, e una casella spuntata ma non ancora
+  // salvata non la cambia.
+  const candidates = radios.filter((r) => r.band !== null && net.bands[r.band]);
+  const [radioName, setRadioName] = useState('');
   const target =
-    radios.find((r) => r.band === net.band) ?? radios.find((r) => r.band === '5') ?? radios[0];
+    candidates.find((r) => r.name === radioName) ??
+    candidates.find((r) => r.band === '5') ??
+    candidates[0];
 
   const guard = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -425,6 +464,16 @@ export function SavedSheet({
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
+  };
+
+  /** Accende o spegne una banda, seminando il MAC la prima volta che si accende. */
+  const toggleBand = (band: Band, on: boolean) => {
+    setBands({ ...bands, [band]: on });
+    if (!on || seeded[band]) return;
+
+    const other = BANDS.find((b) => b !== band) as Band;
+    setMac({ ...mac, [band]: macForNewBand(mac[other]) });
+    setSeeded({ ...seeded, [band]: true });
   };
 
   /**
@@ -447,7 +496,7 @@ export function SavedSheet({
    */
   const connect = async () => {
     if (!target) {
-      setError('Nessuna radio disponibile.');
+      setError('Nessuna radio disponibile sulle bande di questa rete.');
       return;
     }
     setMode('connecting');
@@ -493,16 +542,45 @@ export function SavedSheet({
           <>
             <p class="muted">
               {net.hidden ? 'Rete nascosta · ' : ''}
-              {encryptionLabel(net.encryption)} · {bandLabel(net.band)} ·{' '}
+              {encryptionLabel(net.encryption)} · {bandsLabel(net.bands)} ·{' '}
               {whenUsed(net.last_used)}
               {net.last_result && RESULT_LABEL[net.last_result]
                 ? ` · ${RESULT_LABEL[net.last_result]}`
                 : ''}
             </p>
 
-            {target && (
+            {!hasAnyBand(net.bands) && (
+              <p class="alert alert--warn">
+                Questa rete non è abilitata su nessuna banda, quindi nessuna radio la usa.
+                Aprila con <strong>Modifica</strong> e scegli 2.4 GHz, 5 GHz o entrambe.
+              </p>
+            )}
+
+            {/* Con la rete su tutte e due le bande la radio e' una scelta, e
+                farla qui evita di doverla indovinare: la voce e' una sola, ma
+                le radio restano due e ognuna si aggancia per conto suo. */}
+            {candidates.length > 1 && (
+              <div class="field">
+                <span id="radio-connessione">Collegati usando</span>
+                <div class="chips" role="group" aria-labelledby="radio-connessione">
+                  {candidates.map((r) => (
+                    <button
+                      key={r.name}
+                      type="button"
+                      class={target?.name === r.name ? 'chip chip--on' : 'chip'}
+                      aria-pressed={target?.name === r.name}
+                      onClick={() => setRadioName(r.name)}
+                    >
+                      {bandLabel(r.band ?? r.name)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {candidates.length === 1 && target && (
               <p class="muted">
-                Si collegherà usando la radio {target.band ?? target.name} GHz.
+                Si collegherà usando la radio {bandLabel(target.band ?? target.name)}.
               </p>
             )}
 
@@ -513,7 +591,11 @@ export function SavedSheet({
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
             <div class="radio__actions">
-              <button class="button button--primary" disabled={busy} onClick={connect}>
+              <button
+                class="button button--primary"
+                disabled={busy || !target}
+                onClick={connect}
+              >
                 Connetti
               </button>
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('edit')}>
@@ -525,14 +607,14 @@ export function SavedSheet({
               <button
                 class="button button--ghost"
                 disabled={busy || index <= 0}
-                onClick={() => void guard(() => reorder(siblings, net.section, -1))}
+                onClick={() => void guard(() => reorder(saved, net.section, -1))}
               >
                 Sposta su
               </button>
               <button
                 class="button button--ghost"
-                disabled={busy || index < 0 || index >= siblings.length - 1}
-                onClick={() => void guard(() => reorder(siblings, net.section, 1))}
+                disabled={busy || index < 0 || index >= saved.length - 1}
+                onClick={() => void guard(() => reorder(saved, net.section, 1))}
               >
                 Sposta giù
               </button>
@@ -588,6 +670,45 @@ export function SavedSheet({
               <p class="alert alert--error">Il nome può essere lungo al massimo 32 byte.</p>
             )}
 
+            {/* Le bande sono una proprietà della rete, non due reti: la
+                password e la cifratura qui sotto valgono per tutte e due. */}
+            <div class="field">
+              <span id="bande-rete">Bande su cui usare questa rete</span>
+              <div role="group" aria-labelledby="bande-rete">
+                {BANDS.map((band) => (
+                  <label class="check" key={band}>
+                    <input
+                      type="checkbox"
+                      checked={bands[band]}
+                      onChange={(e) =>
+                        toggleBand(band, (e.target as HTMLInputElement).checked)
+                      }
+                    />
+                    <span>{bandLabel(band)}</span>
+                  </label>
+                ))}
+              </div>
+              <span class="muted">
+                Almeno una. Su una banda che accendi adesso, la rete parte con la stessa
+                password e le stesse impostazioni: cambia solo il MAC, che è della radio.
+              </span>
+            </div>
+
+            {!hasAnyBand(bands) && (
+              <p class="alert alert--error">
+                Scegli almeno una banda: senza, nessuna radio userebbe questa rete.
+              </p>
+            )}
+
+            {conflicts.map(({ band, net: other }) => (
+              <p class="alert alert--error" key={band}>
+                «{other.ssid}» è già salvata a {bandLabel(band)} in un'altra voce
+                {other.note ? ` (${other.note})` : ''}. Due configurazioni con lo stesso nome
+                sulla stessa radio si escludono a vicenda: togli quella banda là, oppure
+                elimina la voce doppia.
+              </p>
+            ))}
+
             <label class="field">
               <span>Password</span>
               <input
@@ -603,6 +724,19 @@ export function SavedSheet({
                 La password salvata non viene mostrata: non esce mai dal router.
               </span>
             </label>
+
+            {/* Un MAC per banda, e solo per quelle accese: e' l'indirizzo della
+                stazione su quella radio, quindi due radio hanno due indirizzi.
+                Cambiarne uno non tocca l'altro. */}
+            {bandList(bands).map((band) => (
+              <MacPicker
+                key={band}
+                choice={mac[band]}
+                label={`Indirizzo MAC a ${bandLabel(band)}`}
+                deviceNote="Quello della radio, così com'è di fabbrica."
+                onChange={(choice) => setMac({ ...mac, [band]: choice })}
+              />
+            ))}
 
             <HostnamePicker
               choice={hostname}
@@ -629,12 +763,19 @@ export function SavedSheet({
               <button
                 class="button button--primary"
                 disabled={
-                  busy || !hostnameOk || !ssidOk || (password !== '' && password.length < 8)
+                  busy ||
+                  !hostnameOk ||
+                  !ssidOk ||
+                  !hasAnyBand(bands) ||
+                  !macOk ||
+                  conflicts.length > 0 ||
+                  (password !== '' && password.length < 8)
                 }
                 onClick={() =>
                   void guard(() =>
                     updateNetwork(net.section, {
                       note,
+                      ...bandValues(bands, mac),
                       hostname_mode: hostname.mode,
                       hostname_value: hostname.mode === 'custom' ? hostname.value.trim() : '',
                       ...(password ? { key: password } : {}),
@@ -687,7 +828,7 @@ export function SavedSheet({
                 «{net.ssid}» non è stata trovata.
                 {net.hidden
                   ? ' Su una rete nascosta il nome deve essere esatto, maiuscole comprese, e la banda deve essere quella giusta: il router lo cerca sondando, non leggendolo da un elenco.'
-                  : ' Può essere spenta o fuori portata.'}{' '}
+                  : ' Può essere spenta, fuori portata, oppure non esserci su questa banda.'}{' '}
                 La configurazione resta salvata.
               </p>
             )}

@@ -3,8 +3,23 @@ import { useApply } from '../lib/apply';
 import { getUplinks, isValidMac, stageConnection, uplinkState, wirelessCameUp } from '../lib/wifi';
 import { encryptionForSta } from '../lib/wifi';
 import type { ConnectionPlan, MacChoice, ScanResult, Uplink } from '../lib/wifi';
-import { findSaved, fromScan, hostnameOf, markUsed, saveNetwork, updateNetwork } from '../lib/networks';
-import type { SavedNetwork } from '../lib/networks';
+import {
+  BANDS,
+  bandLabel,
+  bandConflicts,
+  bandValues,
+  bandsFromScan,
+  bandsLabel,
+  findSaved,
+  findSavedOn,
+  fromScan,
+  hostnameOf,
+  macForNewBand,
+  markUsed,
+  saveNetwork,
+  updateNetwork,
+} from '../lib/networks';
+import type { BandSet, MacByBand, SavedNetwork } from '../lib/networks';
 import { HOSTNAME_OFF, getSystem, isValidHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
 import { checkPortal, portalReason } from '../lib/portal';
@@ -33,6 +48,8 @@ export function ConnectSheet({
   const [password, setPassword] = useState('');
   const [mac, setMac] = useState<MacChoice>({ mode: 'device', value: '' });
   const [remember, setRemember] = useState(true);
+  /** Se aggiungere questa banda a una rete gia' salvata sull'altra. */
+  const [addBand, setAddBand] = useState(true);
   const [checking, setChecking] = useState(false);
   const [probing, setProbing] = useState(false);
   const [portal, setPortal] = useState<PortalResult | null>(null);
@@ -40,16 +57,62 @@ export function ConnectSheet({
   const [done, setDone] = useState(false);
   const [deviceHostname, setDeviceHostname] = useState('');
 
-  // La banda conta: la stessa rete a 2.4 e a 5 GHz sono due voci distinte, e
-  // salvare solo la prima lascerebbe l'altra radio senza candidate.
-  const already = findSaved(saved, net.ssid, net.band);
+  /**
+   * La rete salvata che copre gia' questa banda, se c'e'.
+   *
+   * Copre: non "si chiama uguale". Sulla stessa radio ci sta una stazione
+   * sola, quindi e' questa la voce che verrebbe usata collegandosi qui, ed e'
+   * questa quella di cui aggiornare l'ultimo utilizzo.
+   */
+  const savedHere = findSavedOn(saved, net.ssid, net.band);
+
+  /**
+   * La stessa rete salvata, ma solo sull'altra banda.
+   *
+   * Succede di continuo: la rete di casa e' stata salvata a 5 GHz e adesso la
+   * si trova cercando a 2.4. Non e' una rete nuova da salvare accanto a
+   * quella - e' la stessa - quindi si propone di aggiungerle questa banda,
+   * riusando password, cifratura e nome DHCP che ha gia'.
+   */
+  const savedElsewhere = savedHere ? undefined : findSaved(saved, net.ssid);
+
+  /**
+   * Le bande su cui salvarla.
+   *
+   * Parte dalla sola banda della scansione, e quella resta accesa: e' l'unica
+   * di cui si sa qualcosa: la rete e' stata vista li', con quella cifratura, e
+   * la password verra' provata li'. L'altra si puo' aggiungere subito se si sa
+   * che la stessa rete c'e' anche di la', e resta comunque cambiabile dopo,
+   * dalle reti salvate.
+   */
+  const [bands, setBands] = useState<BandSet>(() => bandsFromScan(net.band));
+
+  /** L'altra banda: quella facoltativa, in questo modulo. */
+  const otherBand = BANDS.find((b) => b !== net.band);
+
+  /**
+   * L'altra banda e' gia' coperta da un'altra voce con questo nome.
+   *
+   * Succede rifiutando di estendere quella voce e salvando comunque: la rete
+   * nuova puo' prendersi la banda della scansione, che e' libera, ma non
+   * quella dell'altra - su quella radio ci sta una stazione sola, e la seconda
+   * configurazione non verrebbe mai provata.
+   */
+  const otherTaken =
+    otherBand !== undefined && bandConflicts(saved, net.ssid, bandsFromScan(otherBand)).length > 0;
+
+  /** Le bande che il salvataggio userebbe davvero, tolte quelle occupate. */
+  const bandsToSave: BandSet = otherTaken && otherBand ? { ...bands, [otherBand]: false } : bands;
+
+  /** La voce salvata che questa connessione riguarda, su questa o sull'altra banda. */
+  const known = savedHere ?? savedElsewhere;
 
   // Il nome DHCP si chiede a ogni rete nuova, e parte da "non inviarlo": e' una
   // scelta per rete, perche' la rete di casa e quella di un albergo non
   // meritano lo stesso trattamento. Su una rete gia' salvata si riprende
   // quello che aveva, altrimenti collegarsi dal pannello lo azzererebbe.
   const [hostname, setHostname] = useState<HostnameChoice>(
-    already ? hostnameOf(already) : HOSTNAME_OFF,
+    known ? hostnameOf(known) : HOSTNAME_OFF,
   );
 
   // Serve solo a dire cosa verrebbe inviato scegliendo "nome del router": se
@@ -63,6 +126,21 @@ export function ConnectSheet({
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Il MAC di ciascuna banda, partendo da quello scelto per questa connessione.
+   *
+   * La banda della scansione prende esattamente l'indirizzo che sta per essere
+   * usato: e' quello che ha funzionato, ed e' quello che si vuole ritrovare
+   * ricollegandosi. L'altra lo eredita secondo la regola di `macForNewBand` -
+   * stesso modo, indirizzo casuale rigenerato - perche' due radio con lo stesso
+   * MAC casuale sullo stesso punto di accesso sarebbero un conflitto.
+   */
+  const macByBand = (): MacByBand => {
+    const out: MacByBand = { '2.4': mac, '5': mac };
+    if (otherBand) out[otherBand] = macForNewBand(mac);
+    return out;
+  };
 
   const macOk = mac.mode === 'device' || isValidMac(mac.value);
   const passwordOk = net.open || password.length >= 8;
@@ -144,25 +222,42 @@ export function ConnectSheet({
       state === 'addressed' ? (verdict?.state === 'portal' ? 'portal' : 'ok') : 'no-address';
 
     try {
-      if (already) {
+      // La voce da aggiornare invece di salvarne una nuova: quella che copre
+      // gia' questa banda, oppure - se si e' accettato di estenderla - la
+      // stessa rete salvata sull'altra. Rifiutando l'estensione non si aggiorna
+      // niente di quella voce: si torna a salvare, come per una rete nuova.
+      const extend = savedElsewhere && addBand ? savedElsewhere : undefined;
+      const update = savedHere ?? extend;
+
+      if (update) {
         // Il nome DHCP puo' essere stato cambiato adesso: la voce salvata deve
         // ricordarselo, altrimenti la riconnessione automatica rimetterebbe
         // quello vecchio senza che si capisca perche'.
-        await markUsed(already.section, outcome);
-        await updateNetwork(already.section, {
+        await markUsed(update.section, outcome);
+
+        const values: Record<string, string> = {
           hostname_mode: hostname.mode,
           hostname_value: hostname.mode === 'custom' ? hostname.value.trim() : '',
-        });
+        };
+
+        // La rete era salvata solo sull'altra banda e adesso ha funzionato
+        // anche qui: la banda si aggiunge alla voce che c'e' gia', con il MAC
+        // che ha appena funzionato. Non si crea una seconda voce - sarebbe la
+        // stessa rete scritta due volte - e non si tocca nient'altro di suo.
+        if (extend && !extend.bands[net.band]) {
+          Object.assign(
+            values,
+            bandValues(
+              { ...extend.bands, [net.band]: true },
+              { ...extend.mac, [net.band]: mac },
+            ),
+          );
+        }
+
+        await updateNetwork(update.section, values);
       } else if (remember && !net.hidden) {
         await saveNetwork(
-          fromScan(
-            net,
-            password,
-            mac.mode,
-            mac.value,
-            encryptionForSta(net),
-            hostname,
-          ),
+          fromScan(net, password, bandsToSave, macByBand(), encryptionForSta(net), hostname),
           saved,
         );
       }
@@ -241,26 +336,88 @@ export function ConnectSheet({
               onChange={setHostname}
             />
 
-            {already ? (
+            {savedHere && (
               <p class="muted">
-                Questa rete è già salvata
-                {already.band ? ` fra quelle a ${already.band} GHz` : ' per entrambe le bande'}:
-                l'ultimo utilizzo verrà aggiornato.
+                Questa rete è già salvata ({bandsLabel(savedHere.bands)}): l'ultimo utilizzo
+                verrà aggiornato.
               </p>
-            ) : (
+            )}
+
+            {/* La stessa rete, salvata finora solo sull'altra banda. Non se ne
+                crea una seconda: si aggiunge questa banda a quella che c'e'
+                gia', che porta con se' password, cifratura e nome DHCP. */}
+            {savedElsewhere && (
               <label class="check">
                 <input
                   type="checkbox"
-                  checked={remember}
-                  disabled={net.hidden}
-                  onChange={(e) => setRemember((e.target as HTMLInputElement).checked)}
+                  checked={addBand}
+                  onChange={(e) => setAddBand((e.target as HTMLInputElement).checked)}
                 />
                 <span>
-                  Salva questa rete{net.band ? ` fra quelle a ${net.band} GHz` : ''}, così la
-                  ritrovi senza ridigitare la password. Viene salvata solo se la connessione
-                  riesce.
+                  «{savedElsewhere.ssid}» è già salvata ({bandsLabel(savedElsewhere.bands)}):
+                  aggiungi anche <strong>{bandLabel(net.band)}</strong> a quella stessa rete,
+                  invece di salvarne una seconda. Succede solo se la connessione riesce.
                 </span>
               </label>
+            )}
+
+            {/* Rifiutando di estendere la voce che c'è, questa resta una rete
+                da salvare come le altre: la banda della scansione è libera -
+                nessuna voce la copre - quindi salvarla qui non crea nessun
+                doppione. Senza questo ramo, dire "no" all'estensione avrebbe
+                voluto dire non poterla salvare affatto. */}
+            {!savedHere && !(savedElsewhere && addBand) && (
+              <>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    disabled={net.hidden}
+                    onChange={(e) => setRemember((e.target as HTMLInputElement).checked)}
+                  />
+                  <span>
+                    Salva questa rete{savedElsewhere ? ' come voce a parte' : ''}, così la
+                    ritrovi senza ridigitare la password. Viene salvata solo se la
+                    connessione riesce.
+                  </span>
+                </label>
+
+                {/* La banda da cui l'hai trovata resta accesa e non si può
+                    togliere: e' l'unica su cui si sa che questa rete c'e' e che
+                    la password e' quella. L'altra si aggiunge se la conosci, e
+                    resta modificabile dopo, dalle reti salvate. */}
+                {remember && !net.hidden && (
+                  <div class="field">
+                    <span id="bande-salvataggio">Bande su cui salvarla</span>
+                    <div role="group" aria-labelledby="bande-salvataggio">
+                      {BANDS.map((band) => (
+                        <label class="check" key={band}>
+                          <input
+                            type="checkbox"
+                            checked={bandsToSave[band]}
+                            disabled={band === net.band || (band === otherBand && otherTaken)}
+                            onChange={(e) =>
+                              setBands({ ...bands, [band]: (e.target as HTMLInputElement).checked })
+                            }
+                          />
+                          <span>
+                            {bandLabel(band)}
+                            {band === net.band ? ' · la banda da cui l’hai trovata' : ''}
+                            {band === otherBand && otherTaken
+                              ? ' · già usata da un’altra rete salvata con questo nome'
+                              : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <span class="muted">
+                      {otherTaken
+                        ? "Su quella banda una voce con questo nome c'è già: non se ne aggiunge una seconda, che non verrebbe mai provata."
+                        : `Aggiungi ${otherBand ? bandLabel(otherBand) : "l'altra banda"} solo se sai che la stessa rete, con la stessa password, c'è anche lì.`}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
 
             <div class="sheet__actions">

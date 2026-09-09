@@ -1,6 +1,6 @@
 /** Condivisione su richiesta della sola rete salvata selezionata. */
 import { useEffect, useState } from 'preact/hooks';
-import { bandLabel, readShareNetwork } from '../lib/networks';
+import { bandsLabel, readShareNetwork } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import { encryptionLabel } from '../lib/wifi';
 import { qrMatrix, qrPath, qrSide } from '../lib/qr';
@@ -53,7 +53,7 @@ function ShareContent({ net, onClose }: ShareProps) {
         {data && network && (
           <>
             <p class="muted">
-              {encryptionLabel(network.encryption)} · {bandLabel(network.band)}
+              {encryptionLabel(network.encryption)} · {bandsLabel(network.bands)}
               {network.hidden ? ' · rete nascosta' : ''}
             </p>
             <div class="qr-wrap">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useApply } from '../lib/apply';
 import { stageStaMac, wirelessCameUp } from '../lib/wifi';
-import { findSaved, listSaved, updateNetwork } from '../lib/networks';
+import { findSavedOn, listSaved, updateMacOnBand } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import {
   PORTAL_LABEL,
@@ -202,7 +202,7 @@ export function MacCloneSheet({
     if (!wan.ssid) return;
     let cancelled = false;
     void listSaved()
-      .then((list) => !cancelled && setSaved(findSaved(list, wan.ssid, wan.band) ?? null))
+      .then((list) => !cancelled && setSaved(findSavedOn(list, wan.ssid, wan.band) ?? null))
       .catch(() => undefined);
     return () => {
       cancelled = true;
@@ -225,9 +225,11 @@ export function MacCloneSheet({
 
     if (saved) {
       try {
-        await updateNetwork(saved.section, {
-          mac_mode: mac ? 'clone' : 'device',
-          mac_value: mac,
+        // Solo sulla banda di questa WAN: il MAC e' della radio agganciata, e
+        // l'altra banda della stessa rete salvata resta con il suo.
+        await updateMacOnBand(saved.section, wan.band, {
+          mode: mac ? 'clone' : 'device',
+          value: mac,
         });
       } catch {
         // La radio ha gia' il MAC nuovo: non averlo scritto fra le reti salvate
