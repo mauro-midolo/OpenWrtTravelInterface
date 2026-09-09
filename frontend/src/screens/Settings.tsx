@@ -6,8 +6,7 @@ import { getStatus, getUsb, getUsbDevices, resetUsb, setUsbMode } from '../lib/d
 import type { DeviceStatus, UsbDevice, UsbDevices } from '../lib/device';
 import { getSystem, isValidHostname, setSystemHostname } from '../lib/hostname';
 import { BackupCard, ProfilesCard, RebootCard, TimeCard } from './System';
-import { StatusLedRow } from '../components/StatusLedRow';
-import { PhysicalToggleRow } from '../components/PhysicalToggleRow';
+import { LedAndToggleRows } from '../components/LedAndToggleRows';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -406,7 +405,6 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
   // cambi in fretta, e il timer si ferma comunque a scheda non visibile.
   const poll = usePoll<DeviceStatus>(() => getStatus(), 5000);
   const [editingName, setEditingName] = useState(false);
-  const [ledRefresh, setLedRefresh] = useState(0);
 
   if (poll.error instanceof UbusError && poll.error.isAuthError) {
     onLogout();
@@ -460,12 +458,9 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
           </>
         )}
 
-        {/* LED e interruttore vengono da chiamate loro: le righe restano anche
-            quando lo stato del dispositivo non arriva. Dare al secondo una
-            funzione allinea subito il primo, e la riga sopra lo deve rileggere:
-            e' l'unico filo fra le due, e passa di qui invece di legarle. */}
-        <StatusLedRow refresh={ledRefresh} />
-        <PhysicalToggleRow onApplied={() => setLedRefresh((n) => n + 1)} />
+        {/* LED e levetta vengono da chiamate loro: le righe restano anche quando
+            lo stato del dispositivo non arriva. */}
+        <LedAndToggleRows />
 
         {poll.error && !(poll.error instanceof UbusError && poll.error.isAuthError) && (
           <p class="alert alert--warn alert--code">{poll.error.message}</p>

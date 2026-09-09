@@ -14,7 +14,17 @@ const REREAD_MS = 5000;
  * una scheda a parte pesava piu' di quanto conti. L'interruttore prende il
  * posto del valore, come le altre righe.
  */
-export function StatusLedRow({ refresh = 0 }: { refresh?: number }) {
+export function StatusLedRow({ refresh = 0, locked = false }: {
+  refresh?: number;
+  /**
+   * Il LED lo comanda la levetta: da qui si guarda e basta.
+   *
+   * Blocca soltanto la mano dell'utente, non le riletture: la riga deve
+   * continuare a dire dove sta il LED, ed e' anzi l'unico modo che ha di
+   * seguire una levetta che si muove senza passare da qui.
+   */
+  locked?: boolean;
+}) {
   const [state, setState] = useState<StatusLedState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,17 +119,24 @@ export function StatusLedRow({ refresh = 0 }: { refresh?: number }) {
   // Senza LED non c'e' niente da accendere: la riga dice quello che sa, come fa
   // "Temperatura". Finche' la lettura non e' tornata non si dice ancora niente.
   const usable = !!state?.supported;
+  // Niente da premere: o non c'e' un LED, o non e' piu' questa riga a
+  // comandarlo. In tutti e due i casi la riga non deve invitare a cliccarla.
+  const interactive = usable && !locked;
 
   return (
     <>
-      <label class="row" aria-busy={busy}>
+      <label
+        class={interactive ? 'row' : 'row row--readonly'}
+        aria-busy={busy}
+        title={usable && locked ? "Lo comanda l'interruttore fisico" : undefined}
+      >
         <span class="row__label">LED di stato</span>
         {usable ? (
           <input
             class="row__toggle"
             type="checkbox"
             checked={state!.enabled}
-            disabled={busy}
+            disabled={busy || locked}
             onChange={(e) => void run((e.target as HTMLInputElement).checked)}
           />
         ) : (

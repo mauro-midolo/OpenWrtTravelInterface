@@ -192,6 +192,50 @@ describe('LED di stato', () => {
     expect(rpc).toHaveBeenLastCalledWith('travel', 'led_get', {});
   });
 
+  it('is read-only while the physical switch owns the LED', async () => {
+    await act(() => render(<StatusLedRow locked />, container));
+    await act(async () => { await Promise.resolve(); });
+    // Visibile e con il valore vero, ma non piu' comandabile da qui.
+    expect(toggle()!.checked).toBe(true);
+    expect(toggle()!.disabled).toBe(true);
+    expect(container.querySelector('.row--readonly')).not.toBeNull();
+    // Un click vero, non un evento costruito a mano: su un controllo
+    // disabilitato il browser non lo consegna, ed e' proprio quello da provare.
+    await act(() => toggle()!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(toggle()!.checked).toBe(true);
+    expect(rpc.mock.calls.map(([, method]) => method)).toEqual(['led_get']);
+  });
+
+  it('keeps following the LED while read-only: that is how it tracks the switch', async () => {
+    vi.useFakeTimers();
+    try {
+      await act(() => render(<StatusLedRow locked />, container));
+      await act(async () => { await Promise.resolve(); });
+      expect(toggle()!.checked).toBe(true);
+      // La levetta si e' mossa fuori da qui: la rilettura di fondo deve
+      // portare dentro il valore nuovo anche se la casella e' bloccata.
+      rpc.mockResolvedValue({ supported: true, enabled: false });
+      await act(async () => { vi.advanceTimersByTime(5000); await Promise.resolve(); });
+      expect(toggle()!.checked).toBe(false);
+      expect(toggle()!.disabled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goes back to being editable when the switch is given another function', async () => {
+    await act(() => render(<StatusLedRow locked />, container));
+    await act(async () => { await Promise.resolve(); });
+    expect(toggle()!.disabled).toBe(true);
+    await act(() => render(<StatusLedRow locked={false} />, container));
+    expect(toggle()!.disabled).toBe(false);
+    expect(container.querySelector('.row--readonly')).toBeNull();
+    rpc.mockResolvedValue({ supported: true, enabled: false });
+    await flip(false);
+    expect(rpc).toHaveBeenLastCalledWith('travel', 'led_set', { enabled: false });
+  });
+
   it('reports unsupported hardware without allowing writes', async () => {
     rpc.mockResolvedValue({ supported: false, enabled: false });
     await mount();

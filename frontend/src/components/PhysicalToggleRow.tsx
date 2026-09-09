@@ -9,7 +9,16 @@ import type { ToggleAction, ToggleConfig } from '../lib/toggle';
  * del dispositivo, non una funzione con una schermata sua. Qui si sceglie e
  * basta - accendere e spegnere il LED lo fa gia' qualcun altro.
  */
-export function PhysicalToggleRow({ onApplied }: { onApplied?: () => void }) {
+export function PhysicalToggleRow({ onConfig }: {
+  /**
+   * La configurazione appena letta o scritta, per chi mostra un valore che la
+   * levetta puo' muovere: `applied` distingue le due cose. Con `true` il router
+   * ha gia' riallineato l'uscita alla levetta e quel valore va riletto adesso;
+   * con `false` e' solo la lettura di partenza, e non c'e' niente di nuovo da
+   * andare a vedere.
+   */
+  onConfig?: (config: ToggleConfig, applied: boolean) => void;
+}) {
   const [config, setConfig] = useState<ToggleConfig | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,9 +33,7 @@ export function PhysicalToggleRow({ onApplied }: { onApplied?: () => void }) {
     try {
       const result = action === undefined ? await getToggle() : await setToggle(action);
       if (mounted.current) setConfig(result);
-      // Il router ha gia' allineato l'uscita alla levetta prima di rispondere:
-      // chi mostra quel valore lo deve rileggere adesso, non fra un giro.
-      if (action !== undefined) onApplied?.();
+      onConfig?.(result, action !== undefined);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));
     } finally {

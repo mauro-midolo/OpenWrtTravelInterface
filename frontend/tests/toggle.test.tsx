@@ -60,23 +60,40 @@ describe('interruttore fisico', () => {
     expect(rpc.mock.calls.map(([, method]) => method)).toEqual(['toggle_get', 'toggle_set']);
   });
 
-  it('tells the screen to reread what the router has just lined up', async () => {
-    const applied = vi.fn();
-    await act(() => render(<PhysicalToggleRow onApplied={applied} />, container));
+  it('reports the function it read, so the screen knows who owns the LED', async () => {
+    const seen = vi.fn();
+    rpc.mockResolvedValue({ action: 'led', position: 'on', actions: ['none', 'led'] });
+    await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
     await act(async () => { await Promise.resolve(); });
-    // La sola lettura iniziale non ha mosso niente.
-    expect(applied).not.toHaveBeenCalled();
+    // La sola lettura iniziale dice chi comanda, ma non ha mosso niente.
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenLastCalledWith(
+      { action: 'led', position: 'on', actions: ['none', 'led'] },
+      false,
+    );
+  });
+
+  it('tells the screen to reread what the router has just lined up', async () => {
+    const seen = vi.fn();
+    await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
+    await act(async () => { await Promise.resolve(); });
+    rpc.mockResolvedValue({ action: 'led', position: 'on', actions: ['none', 'led'] });
     await choose('led');
-    expect(applied).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveBeenLastCalledWith(
+      { action: 'led', position: 'on', actions: ['none', 'led'] },
+      true,
+    );
   });
 
   it('does not claim anything was lined up when the write failed', async () => {
-    const applied = vi.fn();
-    await act(() => render(<PhysicalToggleRow onApplied={applied} />, container));
+    const seen = vi.fn();
+    await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
     await act(async () => { await Promise.resolve(); });
     rpc.mockRejectedValueOnce(new Error('Impossibile applicare la funzione scelta.'));
     await choose('led');
-    expect(applied).not.toHaveBeenCalled();
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenLastCalledWith(expect.anything(), false);
   });
 
   it('hides actions the installed package does not know about', async () => {

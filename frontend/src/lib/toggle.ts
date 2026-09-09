@@ -29,6 +29,14 @@ const isAction = (value: unknown): value is ToggleAction =>
   typeof value === 'string' && ids.includes(value);
 
 /**
+ * Se il LED lo comanda la levetta, chi lo mostra non lo comanda piu'.
+ *
+ * Sta qui accanto al registro e non nella schermata: se un domani un'altra
+ * azione muovesse il LED, e' questa riga a saperlo, non chi disegna le righe.
+ */
+export const controlsLed = (action: ToggleAction | null): boolean => action === 'led';
+
+/**
  * Forma canonica al confine: un router non ancora aggiornato risponde senza
  * `actions` o senza `position`, e un'azione che questa UI non conosce non va
  * mostrata come una voce vuota. Chi legge riceve sempre i tre campi pieni.

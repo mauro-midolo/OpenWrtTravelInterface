@@ -168,6 +168,10 @@ label.row {
   cursor: pointer;
 }
 
+label.row--readonly {
+  cursor: default;
+}
+
 .row__toggle {
   width: 22px;
   height: 22px;

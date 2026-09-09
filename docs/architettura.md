@@ -788,13 +788,29 @@ niente, invece di tirare a indovinare e spegnere un LED che andava lasciato
 acceso. Se l'evento arriva prima che i servizi siano pronti, la posizione
 registrata in `/var/run` fa comunque effetto all'avvio dell'init.
 
-Lato interfaccia le due righe restano indipendenti: la schermata passa alla
-riga del LED un contatore che la riga dell'interruttore incrementa dopo una
-scrittura andata a buon fine, cosi' il LED si rilegge subito invece di dire il
-falso per un giro di polling. Una rilettura periodica gia' partita e' stata
-chiesta prima dell'allineamento: la sua risposta nasce vecchia, quindi viene
-invalidata invece di essere scritta, e la rilettura nuova si accoda dietro di
-lei invece di essere buttata via.
+Lato interfaccia le due righe restano due componenti - leggono cose diverse e
+ognuna sa cavarsela da sola - ma il filo che le tiene d'accordo e' uno solo e
+sta in `LedAndToggleRows`, non dentro una delle due: legarle direttamente
+vorrebbe dire che la riga del LED sa dell'esistenza della levetta.
+
+Dalla levetta arrivano due notizie. Che il router ha appena riallineato il LED,
+e allora un contatore fa rileggere quella riga subito invece di lasciarla dire
+il falso per un giro di polling; una rilettura periodica gia' partita e' stata
+chiesta prima dell'allineamento, quindi la sua risposta nasce vecchia e viene
+invalidata invece di essere scritta, mentre quella nuova si accoda dietro di lei
+invece di essere buttata via. E quale funzione ha adesso: se e' lei a
+comandare il LED, la casella del LED diventa di sola lettura - visibile, e
+sempre aggiornata dalle riletture di fondo, ma non piu' premibile. Senza,
+l'utente potrebbe spegnere dall'interfaccia un LED che la levetta tiene acceso,
+e a quel punto levetta, LED e schermo direbbero tre cose diverse. E' un blocco
+di sola interfaccia: `led_set` resta esposto e funzionante, perche' e' proprio
+il metodo che la levetta usa per muovere il LED.
+
+Chi comanda il LED lo dice `controlsLed()` in `src/lib/toggle.ts`, accanto al
+registro delle azioni e non nella schermata: se un domani un'altra azione
+muovesse il LED, e' quella riga a saperlo. Finche' la configurazione della
+levetta non e' stata letta il LED resta comandabile - bloccarlo per un dubbio
+lo lascerebbe bloccato anche quando di levetta non ce n'e' nessuna.
 
 L'azione `led` chiama `led_set` di `led.sh`, lo stesso che usa l'interfaccia:
 lock, rollback e persistenza sono quelli, e la levetta e la riga della UI non
