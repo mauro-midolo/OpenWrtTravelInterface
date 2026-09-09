@@ -28,6 +28,9 @@ export type WgAction = `wg:${string}`;
 
 export type ToggleAction = FixedAction | WgAction;
 
+/** Dove sta la levetta: `unknown` finche' il router non la vede muoversi. */
+export type TogglePosition = 'on' | 'off' | 'unknown';
+
 const WG = 'wg:';
 
 export interface ToggleConfig {
@@ -36,7 +39,7 @@ export interface ToggleConfig {
   /** Quelle che il router accetta davvero: e' lui a tenere il registro. */
   actions: ToggleAction[];
   /** Dove sta la levetta, per quanto ne sa il router: `unknown` finche' non si muove. */
-  position: 'on' | 'off' | 'unknown';
+  position: TogglePosition;
   /**
    * Il nome di ogni configurazione WireGuard associabile, per id di azione.
    *
@@ -84,6 +87,25 @@ export function toggleLabel(action: ToggleAction, names: Record<string, string>)
   const known = TOGGLE_ACTIONS.find((entry) => entry.id === action);
   if (known) return known.label;
   return `WireGuard – ${names[action] || action.slice(WG.length)}`;
+}
+
+/**
+ * Come si dice dove sta la levetta adesso.
+ *
+ * ON e OFF invece di "alto" e "basso": il verso della levetta cambia da un
+ * router all'altro, mentre le due posizioni sono sempre quella che fa la cosa
+ * e quella che la disfa - ed e' quella la coppia che serve leggere accanto
+ * alla funzione scelta.
+ *
+ * Finche' il router non la vede muoversi non sa dove sia: la posizione la
+ * riporta il primo movimento dopo l'accensione, e fino ad allora dirlo e'
+ * meglio che inventare un OFF - una levetta gia' in basso all'accensione non
+ * si distingue da una che nessuno ha ancora toccato.
+ */
+export function positionLabel(position: TogglePosition): string {
+  if (position === 'on') return 'ON';
+  if (position === 'off') return 'OFF';
+  return 'posizione ignota';
 }
 
 /**

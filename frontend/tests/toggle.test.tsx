@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { PhysicalToggleRow } from '../src/components/PhysicalToggleRow';
-import { controlsLed, controlsWg, isWgAction, normalizeToggle } from '../src/lib/toggle';
+import {
+  controlsLed, controlsWg, isWgAction, normalizeToggle, positionLabel,
+} from '../src/lib/toggle';
 import { call } from '../src/lib/ubus';
 
 vi.mock('../src/lib/ubus', () => ({ call: vi.fn() }));
@@ -11,6 +13,7 @@ const rpc = vi.mocked(call);
 let container: HTMLDivElement;
 const select = () => container.querySelector<HTMLSelectElement>('select');
 const labels = () => [...(select()?.options ?? [])].map((option) => option.textContent);
+const badge = () => container.querySelector('.row__label .badge');
 const retry = () => [...container.querySelectorAll('button')]
   .find((element) => element.textContent === 'Riprova')!;
 async function mount() {
@@ -49,9 +52,78 @@ describe('interruttore fisico', () => {
     // WireGuard alla levetta alza un tunnel, e un tunnel non sale in dieci
     // secondi.
     expect(rpc).toHaveBeenCalledWith('travel', 'toggle_get', {}, 60_000);
-    expect(container.querySelector('.row__label')?.textContent).toBe('Interruttore fisico');
+    expect(container.querySelector('.row__label')?.textContent)
+      .toContain('Interruttore fisico');
     expect(labels()).toEqual(['Non fare nulla', 'Controllo LED di stato']);
     expect(select()!.value).toBe('none');
+  });
+
+  // La levetta si muove sul fianco del router: la riga dice a che funzione e'
+  // associata, e deve dire anche se in questo momento la sta tenendo attiva.
+  it('shows where the switch is sitting right now', async () => {
+    rpc.mockResolvedValue(reply({ action: 'led', position: 'on' }));
+    await mount();
+    expect(badge()?.textContent).toBe('ON');
+    expect(badge()?.className).toContain('badge--ok');
+  });
+
+  it('says OFF without dressing it up as a problem', async () => {
+    await mount();
+    expect(badge()?.textContent).toBe('OFF');
+    expect(badge()?.className).toContain('badge--muted');
+  });
+
+  // Dopo l'accensione il router non sa dove sia finche' non la vede muoversi, e
+  // un OFF inventato sarebbe indistinguibile da uno vero.
+  it('does not invent a position the router has not detected yet', async () => {
+    rpc.mockResolvedValue(reply({ position: 'unknown' }));
+    await mount();
+    expect(badge()?.textContent).toBe('posizione ignota');
+    expect(badge()?.className).toContain('badge--muted');
+  });
+
+  it('has nothing to show about the position until the router answers', async () => {
+    rpc.mockRejectedValueOnce(new Error('Timeout'));
+    await mount();
+    expect(badge()).toBeNull();
+  });
+
+  // La posizione cambia senza passare da qui: senza riletture la riga direbbe
+  // per sempre quella del momento in cui si e' aperta la schermata.
+  it('follows the switch while the screen stays open', async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      expect(badge()?.textContent).toBe('OFF');
+      rpc.mockResolvedValue(reply({ position: 'on' }));
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+      expect(badge()?.textContent).toBe('ON');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Una rilettura di fondo non e' un comando: non deve disabilitare il menu ne'
+  // far credere a chi mostra il LED che il router abbia riallineato qualcosa.
+  it('keeps background rereads out of the way of the user', async () => {
+    vi.useFakeTimers();
+    const seen = vi.fn();
+    try {
+      await act(() => render(<PhysicalToggleRow onConfig={seen} />, container));
+      await act(async () => { await Promise.resolve(); });
+      seen.mockClear();
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+      expect(select()!.disabled).toBe(false);
+      expect(seen).toHaveBeenLastCalledWith(expect.anything(), false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('saves the chosen action and shows it again on reopening', async () => {
@@ -176,6 +248,47 @@ describe('interruttore fisico', () => {
     expect(select()!.disabled).toBe(false);
   });
 
+  // La riga si rimette in sesto da sola: la rilettura seguente riesce e il
+  // menu compare. L'avviso di prima pero' e' rimasto acceso sopra una riga che
+  // funziona, e diceva il falso finche' non la si toccava.
+  it('takes back the "non disponibile" when the router answers again', async () => {
+    vi.useFakeTimers();
+    try {
+      rpc.mockRejectedValueOnce(new Error('Timeout'));
+      await mount();
+      expect(container.querySelector('[role="alert"]')).not.toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+      expect(select()).not.toBeNull();
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(retry()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Un salvataggio fallito invece resta detto: il menu e' gia' tornato indietro
+  // da solo, e senza l'avviso quel salto non avrebbe piu' una spiegazione.
+  it('keeps saying a write failed, however well the rereads go', async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      rpc.mockRejectedValueOnce(new Error('Impossibile salvare la scelta.'));
+      await choose('led');
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+        await Promise.resolve();
+      });
+      expect(container.querySelector('[role="alert"]')?.textContent)
+        .toContain('Impossibile salvare la scelta.');
+      expect(select()!.value).toBe('none');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('can retry a failed read', async () => {
     rpc.mockRejectedValueOnce(new Error('Timeout'));
     await mount();
@@ -218,6 +331,14 @@ describe('forma canonica della configurazione', () => {
     expect(normalizeToggle(raw as never)).toEqual({
       action: 'led', actions: ['led', 'none'], position: 'off', names: {},
     });
+  });
+
+  it('names the two positions the same way on every router', () => {
+    // Non "alto" e "basso": il verso della levetta cambia da un modello
+    // all'altro, ON e OFF no.
+    expect(positionLabel('on')).toBe('ON');
+    expect(positionLabel('off')).toBe('OFF');
+    expect(positionLabel('unknown')).toBe('posizione ignota');
   });
 
   it('falls back to doing nothing when the saved action is unknown', () => {

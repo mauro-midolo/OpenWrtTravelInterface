@@ -156,6 +156,16 @@ p {
   flex: none;
 }
 
+/* Il nome della riga con accanto uno stato che il router riporta e l'utente non
+   sceglie - la posizione dell'interruttore fisico. Flex solo qui e non su tutti
+   i nomi di riga: le altre portano solo testo, e non c'e' motivo di cambiare
+   come si appoggiano alla linea di base. */
+.row__label--state {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .row__value {
   text-align: right;
   font-variant-numeric: tabular-nums;

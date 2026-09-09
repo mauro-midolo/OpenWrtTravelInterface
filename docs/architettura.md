@@ -974,6 +974,30 @@ ognuna sa cavarsela da sola - ma il filo che le tiene d'accordo e' uno solo e
 sta in `LedAndToggleRows`, non dentro una delle due: legarle direttamente
 vorrebbe dire che la riga del LED sa dell'esistenza della levetta.
 
+La riga della levetta dice due cose: che funzione le e' associata - il menu, che
+si sceglie - e dove sta adesso, accanto al nome e senza niente da premere. La
+posizione e' quella che `toggle_get` riporta da `/var/run`, scritta ON o OFF
+perche' il verso della levetta cambia da un modello all'altro mentre le due
+posizioni no; `positionLabel()` sta accanto al registro in `src/lib/toggle.ts`
+per la stessa ragione di `controlsLed()`. Finche' il kernel non ha mandato
+l'evento la riga dice "posizione ignota" invece di inventare un OFF, che sarebbe
+indistinguibile da quello vero. La riga si rilegge da sola ogni cinque secondi,
+come quella del LED e per lo stesso motivo: la levetta si muove sul fianco del
+router, e senza riletture direbbe per sempre la posizione del momento in cui si
+e' aperta la schermata. Le riletture di fondo valgono meno di quello che sta
+facendo l'utente - non toccano `busy`, si tirano indietro davanti a una
+scrittura e non scrivono una risposta chiesta prima di quella - e una che va
+male non cancella l'ultimo valore certo.
+
+Ne segue pero' che la riga si rimette in sesto da sola, e allora deve anche
+disdire quello che aveva detto: se la lettura di partenza e' fallita e la
+rilettura riesce, l'avviso "non disponibile" e' falso da quel momento, e
+lasciarlo acceso sopra un menu che funziona e' peggio che non averlo mai
+mostrato. L'errore di un salvataggio invece resta: dice che la scelta non e'
+stata scritta - il menu e' gia' tornato indietro da solo - ed e' ancora vero
+per quanto bene vadano le riletture. Per questo l'errore si porta dietro da
+dove viene, invece di essere una stringa sola.
+
 Dalla levetta arrivano due notizie. Che il router ha appena riallineato il LED,
 e allora un contatore fa rileggere quella riga subito invece di lasciarla dire
 il falso per un giro di polling; una rilettura periodica gia' partita e' stata
