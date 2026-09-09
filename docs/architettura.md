@@ -218,6 +218,16 @@ i risultati. Gli SSID vuoti sono mostrati come reti nascoste: non si possono
 selezionare, perché non c'è un nome da mettere in configurazione, ma toccarli
 apre il modulo che lo chiede.
 
+Ogni riga porta le targhette che la riguardano: *collegata*, *aperta* e
+***salvata*** quando quella rete è già configurata. L'ultima è muta come
+*nascosta* nell'elenco delle reti salvate — è un fatto sulla configurazione, non
+sullo stato di adesso, e in verde competerebbe con *collegata*. Dice anche la
+banda quando non è questa (*salvata · 5 GHz*): quella rete è la stessa e il
+popup ne riuserà la password, ma su questa radio non è ancora configurata, e la
+sola parola "salvata" lo nasconderebbe. Le righe senza nome non ne hanno mai
+una: un SSID vuoto non è "la rete salvata senza nome", e confrontarlo
+marcherebbe righe a caso.
+
 La connessione supporta reti aperte, WPA2, WPA3 e modalità di transizione.
 
 Il MAC può essere quello del device, casuale, manuale o clonato da un client

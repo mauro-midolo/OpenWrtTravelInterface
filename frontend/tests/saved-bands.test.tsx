@@ -27,6 +27,7 @@ import {
 import type { SavedNetwork } from '../src/lib/networks';
 import { SavedNetworksScreen, SavedSheet } from '../src/screens/SavedNetworks';
 import { ConnectSheet } from '../src/screens/Connect';
+import { savedLabel } from '../src/screens/Wifi';
 import { call } from '../src/lib/ubus';
 import type { ConnectionPlan, Radio, ScanResult, Uplink } from '../src/lib/wifi';
 
@@ -286,6 +287,37 @@ const radios: Radio[] = [
   { name: 'radio1', band: '5', device: 'phy1-ap0', up: true, setupFailed: false, channel: 36,
     apSection: 'ap1', apSsid: 'ciao', apEnabled: true, staSection: null, staEnabled: false },
 ];
+
+describe('the scan list', () => {
+  const seen = (ssid: string, band: '2.4' | '5', channel: number): ScanResult => ({
+    ssid, bssid: `00:11:22:33:44:${channel}`, channel, band, signal: -60, open: false,
+    security: 'WPA2', wpa: [2], auth: ['psk'], hidden: false, radio: 'radio0', count: 1,
+  });
+
+  it('marks the networks the router already knows, and says when it knows them elsewhere', () => {
+    const saved = [
+      net({ section: 'net_a', ssid: 'Casa Mia' }),
+      net({ section: 'net_b', ssid: 'Ufficio', bands: { '2.4': false, '5': true } }),
+    ];
+
+    // Salvata su entrambe: riconosciuta cercando a 2.4 come a 5.
+    expect(savedLabel(saved, seen('Casa Mia', '2.4', 1))).toBe('salvata');
+    expect(savedLabel(saved, seen('Casa Mia', '5', 36))).toBe('salvata');
+    // Salvata solo a 5 e ritrovata cercando a 2.4: e' la stessa rete, ma su
+    // questa radio non e' ancora configurata, e la targhetta lo dice.
+    expect(savedLabel(saved, seen('Ufficio', '2.4', 1))).toBe('salvata · 5 GHz');
+    expect(savedLabel(saved, seen('Ufficio', '5', 36))).toBe('salvata');
+    // Mai vista prima: nessuna targhetta.
+    expect(savedLabel(saved, seen('Hotel-Guest', '2.4', 6))).toBe('');
+  });
+
+  it('says nothing about a row without a name', () => {
+    // Un SSID vuoto non e' "la rete salvata senza nome": e' un nome non
+    // annunciato, e confrontarlo marcherebbe righe a caso.
+    const hidden = { ...seen('', '2.4', 100), hidden: true };
+    expect(savedLabel([net({ ssid: '' })], hidden)).toBe('');
+  });
+});
 
 describe('the saved list', () => {
   it('is one list, and every row says which bands it is enabled on', async () => {

@@ -21,7 +21,7 @@ import type {
   Uplink,
   UplinkState,
 } from '../lib/wifi';
-import { listSaved } from '../lib/networks';
+import { bandsLabel, findSaved, findSavedOn, hasAnyBand, listSaved } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import { getDaemon } from '../lib/autoreconnect';
 import type { DaemonStatus } from '../lib/autoreconnect';
@@ -128,13 +128,38 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
   );
 }
 
+/**
+ * Come dire, in una targhetta, che questa rete e' gia' configurata.
+ *
+ * Serve a distinguere a colpo d'occhio le reti che il router conosce gia' da
+ * quelle da configurare da zero: toccando le prime il modulo si apre sulla
+ * configurazione salvata e la password non va ridigitata, e saperlo prima di
+ * toccarle cambia cosa ci si aspetta.
+ *
+ * La banda fa parte della risposta quando non e' questa. Una rete salvata a 5
+ * GHz e ritrovata cercando a 2.4 e' la stessa rete - il modulo la riconosce e
+ * ne riusa la password - ma non e' ancora configurata su questa radio, e dire
+ * soltanto "salvata" lo nasconderebbe.
+ */
+export function savedLabel(saved: SavedNetwork[], net: ScanResult): string {
+  if (net.hidden) return '';
+  if (findSavedOn(saved, net.ssid, net.band)) return 'salvata';
+
+  const elsewhere = findSaved(saved, net.ssid);
+  if (!elsewhere) return '';
+  return hasAnyBand(elsewhere.bands) ? `salvata · ${bandsLabel(elsewhere.bands)}` : 'salvata';
+}
+
 function Network({
   net,
+  saved,
   connected,
   onPick,
   onAddHidden,
 }: {
   net: ScanResult;
+  /** Come e' gia' configurata questa rete, se lo e'. Vuoto se non lo e'. */
+  saved: string;
   connected: boolean;
   onPick: () => void;
   /** Per le righe senza nome: l'unico modo di usarle e' scriverlo a mano. */
@@ -158,8 +183,13 @@ function Network({
             {net.count > 1 && ` · ${net.count} punti di accesso`}
           </span>
         </span>
-        <span class="net__side">
+        <span class="net__side net__side--wrap">
           {connected && <span class="badge badge--ok">collegata</span>}
+          {/* Un fatto sulla configurazione, non sullo stato: la stessa
+              targhetta muta che nell'elenco delle reti salvate dice
+              "nascosta". Verde o arancione competerebbe con "collegata" e con
+              "aperta", che parlano di adesso. */}
+          {saved !== '' && <span class="badge badge--muted">{saved}</span>}
           {net.open && <span class="badge badge--warn">aperta</span>}
           <Signal dbm={net.signal} />
         </span>
@@ -224,6 +254,7 @@ function RadioCard({
   radio,
   uplink,
   results,
+  saved,
   scanning,
   blocked,
   onScan,
@@ -235,6 +266,8 @@ function RadioCard({
   radio: Radio;
   uplink: Uplink | null;
   results: ScanResult[] | null;
+  /** Le reti gia' configurate: servono a marcare quelle che il router conosce. */
+  saved: SavedNetwork[];
   scanning: boolean;
   /** Un'altra radio sta scansionando: sono sulla stessa phy, si disturbano. */
   blocked: boolean;
@@ -305,6 +338,7 @@ function RadioCard({
             <Network
               key={`${net.bssid}-${net.channel}`}
               net={net}
+              saved={savedLabel(saved, net)}
               connected={Boolean(uplink?.ssid) && uplink?.ssid === net.ssid}
               onPick={() => onPick(net)}
               onAddHidden={onAddHidden}
@@ -504,6 +538,7 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
           radio={radio}
           uplink={uplinkOf(radio)}
           results={results[radio.name] ?? null}
+          saved={saved}
           scanning={scanningRadio === radio.name}
           blocked={scanningRadio !== null && scanningRadio !== radio.name}
           onScan={() => void scan(radio)}

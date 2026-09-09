@@ -439,6 +439,17 @@ button:disabled {
   flex: none;
 }
 
+/* Le targhette di una riga di scansione possono essere tre - collegata,
+   salvata, aperta - piu' il segnale, e su un telefono in fila non ci stanno:
+   vanno a capo verso destra invece di schiacciare il nome della rete, che e'
+   la colonna lungo cui si scorre. */
+.net__side--wrap {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
 .signal-group {
   display: inline-flex;
   align-items: center;
