@@ -14,7 +14,6 @@ import {
   getEthPorts,
   getLan,
   isHostAddress,
-  isValidIp,
   listClients,
   matchDnsProvider,
   prefix24,
@@ -36,6 +35,7 @@ import type {
   PortRole,
   WanSubnet,
 } from '../lib/lan';
+import { isValidIp } from '../lib/ip';
 import { getUplinks, isValidMac, normalizeMac } from '../lib/wifi';
 import type { MacChoice } from '../lib/wifi';
 import { ApplyStatus } from '../components/ApplyStatus';
@@ -674,6 +674,7 @@ function DnsChoice({
   onOne,
   onTwo,
   autoHint,
+  ipv6,
 }: {
   title: string;
   options: DnsProvider[];
@@ -684,8 +685,13 @@ function DnsChoice({
   onOne: (value: string) => void;
   onTwo: (value: string) => void;
   autoHint: string;
+  /** Se questa lista accetta anche indirizzi IPv6. Cambia tastiera e avviso. */
+  ipv6: boolean;
 }) {
   const chosen = dnsProvider(mode, options);
+  // Un tastierino numerico non ha i due punti ne' le lettere: su un telefono
+  // renderebbe impossibile scrivere un indirizzo v6 nel campo che lo accetta.
+  const keyboard = ipv6 ? 'text' : 'decimal';
 
   return (
     <div class="field">
@@ -710,7 +716,7 @@ function DnsChoice({
             <input
               type="text"
               value={one}
-              inputMode="decimal"
+              inputMode={keyboard}
               autocomplete="off"
               spellcheck={false}
               onInput={(e) => onOne((e.target as HTMLInputElement).value)}
@@ -721,12 +727,17 @@ function DnsChoice({
             <input
               type="text"
               value={two}
-              inputMode="decimal"
+              inputMode={keyboard}
               autocomplete="off"
               spellcheck={false}
               onInput={(e) => onTwo((e.target as HTMLInputElement).value)}
             />
           </label>
+          <span class="muted">
+            {ipv6
+              ? 'Indirizzi IPv4 o IPv6.'
+              : 'Solo indirizzi IPv4: quelli annunciati ai dispositivi viaggiano su un’opzione DHCPv4, e un indirizzo IPv6 non arriverebbe a nessuno.'}
+          </span>
         </>
       )}
     </div>
@@ -778,8 +789,22 @@ function LanSheet({
   const clientServers = resolveDns(clientMode, CLIENT_DNS_OPTIONS, clientOne, clientTwo);
   const routerServers = resolveDns(routerMode, ROUTER_DNS_OPTIONS, routerOne, routerTwo);
 
+  // Le due liste di DNS non si convalidano allo stesso modo, e la differenza
+  // non e' cosmetica.
+  //
+  // Quelli ANNUNCIATI AI DISPOSITIVI finiscono in `dhcp_option 6`, che e' una
+  // opzione solo DHCPv4: un indirizzo v6 li' dentro non annuncerebbe niente, e
+  // dnsmasq puo' rifiutare l'intera lista per una voce che non gli piace,
+  // rompendo anche i DNS v4 mentre si crede di aggiungerne. Finche' non esiste
+  // la scrittura su `dhcp.lan.dns` - la lista che legge odhcpd - qui si accetta
+  // solo IPv4, e il campo dice cosa accetta.
+  //
+  // Quelli USATI DAL ROUTER finiscono in `dhcp.<sezione>.server`, che dnsmasq
+  // accetta in entrambe le famiglie senza sintassi speciale: li' non c'e'
+  // motivo di rifiutare un resolver v6.
   const dnsOk =
-    (clientMode !== 'custom' || (isValidIp(clientOne) && (clientTwo === '' || isValidIp(clientTwo)))) &&
+    (clientMode !== 'custom' ||
+      (isValidIp(clientOne, 4) && (clientTwo === '' || isValidIp(clientTwo, 4)))) &&
     (routerMode !== 'custom' || (isValidIp(routerOne) && (routerTwo === '' || isValidIp(routerTwo))));
 
   const save = async (event: Event) => {
@@ -885,6 +910,7 @@ function LanSheet({
               onOne={setClientOne}
               onTwo={setClientTwo}
               autoHint="I dispositivi useranno il router come DNS."
+              ipv6={false}
             />
 
             <DnsChoice
@@ -897,6 +923,7 @@ function LanSheet({
               onOne={setRouterOne}
               onTwo={setRouterTwo}
               autoHint="Il router userà i DNS che gli dà la rete a cui è collegato."
+              ipv6
             />
 
             {routerMode !== 'auto' && (

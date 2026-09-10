@@ -16,7 +16,7 @@ import {
 } from '../lib/mwan';
 import type { Mwan, MwanInterface, MwanMode, MwanRule } from '../lib/mwan';
 import { blockReason, blocked } from '../lib/vpn';
-import { isValidIp } from '../lib/lan';
+import { isValidIp, parseCidr } from '../lib/ip';
 
 /**
  * Etichetta di una WAN.
@@ -358,12 +358,21 @@ export function MwanSheet({
   );
 }
 
-/** Accetta un indirizzo o una sottorete: "192.168.1.5" oppure "10.0.0.0/8". */
+/**
+ * Accetta un indirizzo o una sottorete: "192.168.1.5" oppure "10.0.0.0/8".
+ *
+ * Passa da parseCidr invece che da una regex sul prefisso, e ci guadagna due
+ * cose: /33 non e' piu' accettato, e il prefisso viene convalidato sulla
+ * famiglia dell'indirizzo invece che su un massimo scritto a mano.
+ *
+ * Resta pero' IPv4 soltanto, ed e' voluto: ruleValues scrive `family='ipv4'` su
+ * ogni regola mwan3, quindi una regola con un dest_ip v6 verrebbe scritta e non
+ * combacerebbe mai - un guasto silenzioso, che e' il tipo peggiore. Il vincolo
+ * cade quando mwan3 diventa dual-stack, non prima.
+ */
 function isValidTarget(value: string): boolean {
-  const [address, prefix] = value.split('/');
-  if (!isValidIp(address)) return false;
-  if (prefix === undefined) return true;
-  return /^\d{1,2}$/.test(prefix) && Number(prefix) <= 32;
+  const target = parseCidr(value);
+  return target !== null && target.addr.family === 4;
 }
 
 /** Accetta "443" oppure "5000-5100". */
@@ -670,7 +679,13 @@ export function HealthSheet({
   const [error, setError] = useState<string | null>(null);
 
   const ips = [one, two].map((s) => s.trim()).filter((s) => s.length > 0);
-  const ipsOk = ips.length >= 1 && ips.every(isValidIp);
+  // La lambda non e' rumore: `ips.every(isValidIp)` passerebbe a isValidIp
+  // l'INDICE come secondo argomento, cioe' convaliderebbe il primo indirizzo
+  // contro la "famiglia 0" e il secondo contro la "famiglia 1", rifiutandoli
+  // entrambi. La famiglia si scrive qui, esplicita: mwan3 controlla queste
+  // sonde con un ping IPv4, quindi un indirizzo v6 farebbe risultare la WAN
+  // sempre caduta.
+  const ipsOk = ips.length >= 1 && ips.every((ip) => isValidIp(ip, 4));
   const numsOk = [interval, timeout, down, up].every((v) => /^\d+$/.test(v) && Number(v) >= 1);
 
   const save = async (event: Event) => {

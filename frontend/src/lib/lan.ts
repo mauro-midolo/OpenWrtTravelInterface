@@ -15,7 +15,7 @@
  */
 
 import { call } from './ubus';
-import { isValidIp as isIpOfFamily, maskToPrefix, parseIp } from './ip';
+import { overlaps, parseIp, subnetOfMask } from './ip';
 import { normalizeMac } from './wifi';
 
 export interface LanDhcp {
@@ -49,66 +49,7 @@ export async function getLan(): Promise<LanConfig> {
   return { ...lan, addresses: (lan.addresses ?? []).map(stripPrefix) };
 }
 
-// --- Aritmetica delle sottoreti ----------------------------------------------
-//
-// Ponte verso lib/ip.ts, in piedi per una fase sola. L'analisi degli indirizzi
-// vive tutta di la'; qui restano i vecchi nomi, con le vecchie firme, perche'
-// findConflicts e le schermate non debbano cambiare mentre il modulo nuovo
-// entra. La fase successiva sposta i chiamanti e questo blocco sparisce.
-//
-// Un cambio di comportamento c'e', ed e' voluto: un ottetto con zeri iniziali
-// ("192.168.010.1") non e' piu' un indirizzo valido, perche' significa due cose
-// diverse a seconda di chi lo legge. Il perche' sta in ip.ts.
-
-export function ipToInt(ip: string): number | null {
-  const addr = parseIp(ip);
-  if (!addr || addr.family !== 4) return null;
-
-  let value = 0;
-  for (const byte of addr.bytes) value = value * 256 + byte;
-  return value;
-}
-
-export function intToIp(value: number): string {
-  return [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.');
-}
-
-/**
- * Vero per un indirizzo IPv4.
- *
- * Resta a un parametro solo, e non e' una svista: MultiWan.tsx la usa come
- * `ips.every(isValidIp)`, e Array.every passa l'INDICE come secondo argomento.
- * Ri-esportare qui la isValidIp allargata di ip.ts convaliderebbe il primo
- * indirizzo contro la "famiglia 0" e il secondo contro la "famiglia 1", cioe'
- * li rifiuterebbe entrambi. Quel chiamante si sposta nella fase successiva, e
- * questo involucro se ne va con lui.
- */
-export function isValidIp(ip: string): boolean {
-  return isIpOfFamily(ip, 4);
-}
-
-/** Vero per le maschere contigue: 255.255.255.0 sì, 255.0.255.0 no. */
-export function isValidNetmask(mask: string): boolean {
-  return maskToPrefix(mask) !== null;
-}
-
-export interface Subnet {
-  network: number;
-  mask: number;
-}
-
-export function subnetOf(ip: string, mask: string): Subnet | null {
-  const address = ipToInt(ip);
-  const maskValue = ipToInt(mask);
-  if (address === null || maskValue === null) return null;
-  return { network: (address & maskValue) >>> 0, mask: maskValue };
-}
-
-/** Due sottoreti si sovrappongono se una contiene la rete dell'altra. */
-export function overlaps(a: Subnet, b: Subnet): boolean {
-  const common = (a.mask & b.mask) >>> 0;
-  return ((a.network & common) >>> 0) === ((b.network & common) >>> 0);
-}
+// --- Conflitti con le reti a monte --------------------------------------------
 
 export interface WanSubnet {
   label: string;
@@ -128,19 +69,29 @@ export interface Conflict {
  * la stessa sottorete della LAN, il router non sa piu' distinguere cio' che e'
  * locale da cio' che sta a monte e il traffico non esce. Succede spesso, perche'
  * quasi tutti usano gli stessi due o tre intervalli.
+ *
+ * IPv6 non entra in questo controllo, e non e' una dimenticanza. La collisione
+ * e' un problema degli indirizzi privati IPv4, che sono pochi e li usano tutti:
+ * un prefisso delegato e' unico per costruzione, e due ULA che collidono sono
+ * un caso che non capita. Soprattutto, il prefisso v6 della LAN non lo sceglie
+ * nessuno - arriva dalla delega - quindi non ci sarebbe niente da proporre.
+ *
+ * Il filtro passa da subnetOfMask, che risponde null a un indirizzo v6: una WAN
+ * dual-stack viene confrontata sulla sola meta' v4, che e' esattamente quello
+ * che serve.
  */
 export function findConflicts(
   lanIp: string,
   lanMask: string,
   wans: WanSubnet[],
 ): Conflict[] {
-  const lan = subnetOf(lanIp, lanMask);
+  const lan = subnetOfMask(lanIp, lanMask);
   if (!lan) return [];
 
   const conflicts: Conflict[] = [];
   for (const wan of wans) {
     if (!wan.ipv4) continue;
-    const other = subnetOf(wan.ipv4, wan.netmask || '255.255.255.0');
+    const other = subnetOfMask(wan.ipv4, wan.netmask || '255.255.255.0');
     if (other && overlaps(lan, other)) {
       conflicts.push({ label: wan.label, ipv4: `${wan.ipv4}/${wan.netmask || '?'}` });
     }
@@ -189,6 +140,10 @@ export const LAN_NETMASK = '255.255.255.0';
  * da LuCI puo' averla scritta cosi'. Il campo dell'interfaccia chiede un
  * indirizzo, quindi la maschera va tolta a monte invece di finire davanti a chi
  * scrive - e vale anche per quello che viene incollato dentro il campo.
+ *
+ * Va bene cosi' anche per IPv6, e non serve "aggiustarlo": in un indirizzo v6
+ * la barra compare solo davanti al prefisso, quindi split('/')[0] taglia nel
+ * punto giusto tanto per "192.168.10.1/24" quanto per "fd66:67c3:698b::1/64".
  */
 export function stripPrefix(address: string): string {
   return address.trim().split('/')[0].trim();
@@ -200,10 +155,16 @@ export function prefix24(address: string): string {
   return parts.length === 4 ? parts.slice(0, 3).join('.') : '';
 }
 
-/** Ultimo ottetto, oppure null se l'indirizzo non e' valido. */
+/**
+ * Ultimo ottetto, oppure null se l'indirizzo non e' un IPv4.
+ *
+ * Solo IPv4 di proposito: "l'ultimo ottetto" e' il numero che si scrive nel
+ * campo dell'indirizzo e negli estremi del pool DHCP, e la LAN v4 resta una
+ * /24 fissa. In IPv6 non c'e' niente di equivalente da mostrare.
+ */
 export function lastOctet(address: string): number | null {
-  const value = ipToInt(stripPrefix(address));
-  return value === null ? null : value & 255;
+  const addr = parseIp(stripPrefix(address));
+  return addr && addr.family === 4 ? addr.bytes[3] : null;
 }
 
 /** Indirizzo utilizzabile da un host in una /24: non la rete, non il broadcast. */

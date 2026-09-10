@@ -230,7 +230,7 @@ copre anche `169.254/16`, così l'etichetta non ha un buco in IPv4.
 
 ---
 
-## Fase 2 — Migrare i chiamanti
+## Fase 2 — Migrare i chiamanti ✅ *(fatta il 2026-09-10)*
 
 Sposta i chiamanti su `ip.ts`, cancella `ipToInt`/`intToIp`/il vecchio `Subnet`, toglie le
 ri-esportazioni. `findConflicts` (`lan.ts:122-139`) e `suggestAddress` passano a `subnetOfMask`/`IpNet`.
@@ -262,6 +262,53 @@ perché nessuno lo "aggiusti".
 completamente scoperti. Include lo scenario collidente del mock, la netmask mancante,
 `suggestAddress` che ritorna `null` con tutti e sette i candidati occupati, e una WAN v6 che non
 produce conflitti.
+
+### Esito
+
+`tsc --noEmit` pulito, **309 test su 16 file** (22 nuovi in `lan-conflicts.test.ts`), build a
+229 kB. `lan.ts` non esporta più `ipToInt`, `intToIp`, `isValidIp`, `isValidNetmask`, `Subnet`,
+`subnetOf` né `overlaps`, e nessun residuo li cerca. `intToIp` e `isValidNetmask` si sono rivelate
+**esportazioni morte**, senza un chiamante nemmeno dentro `lan.ts`: cancellate invece che migrate.
+`lastOctet` passa da `parseIp` e resta IPv4-only, con il perché scritto sopra.
+
+Il test nuovo ha richiesto `// @vitest-environment jsdom`: le funzioni sono pure, ma `lan.ts` importa
+`lib/ubus.ts`, che legge `sessionStorage` al caricamento del modulo.
+
+### Tre punti in cui il piano si contraddiceva, e come sono stati risolti
+
+Il filo comune: **allargare la validazione dove il valore va a finire in una scrittura ancora
+mono-famiglia crea un guasto silenzioso**, cioè un campo che accetta un indirizzo e poi non funziona.
+In tutti e tre i casi ha vinto la fase che descrive la scrittura, non la riga di riepilogo qui.
+
+**1. I DNS annunciati ai dispositivi restano IPv4.** Il piano diceva di allargare `isValidIp` a
+`Lan.tsx:782-783`, ma quel controllo copre *due* liste che finiscono in posti diversi, e la Fase 5 lo
+dice già: `clientOne/clientTwo` vanno in `dhcp_option 6`, **un'opzione solo DHCPv4** in cui un
+indirizzo v6 non annuncia niente e può far rifiutare a dnsmasq l'intera lista — rompendo anche i DNS
+v4. Allargarla qui avrebbe introdotto esattamente la trappola che la Fase 5 descrive, prima che
+esista `dhcp.lan.dns` che la risolve. Quindi: **client IPv4-only** (fino alla Fase 5),
+**resolver del router allargati** (`dhcp.<sezione>.server`, che dnsmasq accetta in entrambe le
+famiglie).
+
+Di conseguenza `DnsChoice` ha una prop `ipv6` nuova, e non è cosmetica: i campi avevano
+`inputMode="decimal"`, cioè un tastierino numerico **senza i due punti e senza lettere**. Sul campo
+che ora accetta v6 sarebbe stato impossibile scrivere un indirizzo da telefono. Ogni lista dichiara
+anche in chiaro cosa accetta.
+
+**2. Le sonde mwan3 restano IPv4, e il messaggio tiene "IPv4".** Il piano voleva che il messaggio a
+`MultiWan.tsx:738` perdesse la parola, ma quelle sonde sono i `track_ip` di interfacce mwan3 scritte
+con `family='ipv4'`: mwan3 le controlla con un ping IPv4, e un indirizzo v6 lì dentro farebbe
+risultare la WAN **sempre caduta**. La riga contraddice la decisione della Fase 9 ("fino alla Fase 8
+compresa, mwan3 resta IPv4"), che è quella giusta. Validazione esplicita `isValidIp(ip, 4)`, messaggio
+invariato.
+
+**3. `isValidTarget` passa a `parseCidr` ma resta IPv4.** Il guadagno vero della riscrittura è quello
+previsto — `/33` non passa più e il prefisso è validato sulla famiglia invece che su un massimo
+scritto a mano — ma `ruleValues` (`mwan.ts:262`) scrive `family='ipv4'` su **ogni** regola: una regola
+con `dest_ip` v6 verrebbe salvata e non combacerebbe mai. Il vincolo cade in Fase 9, insieme al resto.
+
+**Da riportare in Fase 5 e Fase 9:** entrambe devono togliere il vincolo *e* il testo che lo annuncia
+— il messaggio del campo DNS client, la prop `ipv6={false}`, il `4` in `isValidIp(ip, 4)` e quello in
+`isValidTarget`. Sono quattro punti, tutti commentati sul posto con il nome della fase che li libera.
 
 ---
 
@@ -372,7 +419,13 @@ indipendenti**, riusando `clear()` (`:335-341`) per cancellare invece di scriver
 configurato dalla UI precedente mostrerebbe "Personalizzato" invece di "Cloudflare".
 
 I resolver del router (`dhcp.<dnsmasq_section>.server`) accettano v6 senza sintassi speciale: basta
-la `isValidIp` allargata. Le voci dei fornitori scrivono però **sempre entrambe le famiglie**, mai
+la `isValidIp` allargata — **già fatto in Fase 2**.
+
+**Due vincoli della Fase 2 vanno tolti qui**, e vanno tolti insieme, perché il primo senza il secondo
+lascia la schermata a dire il falso: in `Lan.tsx`, la validazione `isValidIp(clientOne, 4)` diventa
+libera e la `<DnsChoice ipv6={false}>` della lista *client* diventa `ipv6`. Il testo del campo
+("Solo indirizzi IPv4: ...") sparisce con loro. Nessuno dei due va toccato **prima** che
+`dhcp.lan.dns` sia scritta davvero, altrimenti si riapre la trappola qui sopra. Le voci dei fornitori scrivono però **sempre entrambe le famiglie**, mai
 solo v6, perché un upstream v6 è raggiungibile solo con una WAN v6.
 
 Le scritture RA passano da `useApply` con un `verify` che rilegge `travel.lan` e controlla che la
@@ -524,6 +577,13 @@ restano entrambi in fondo. `setPriorityOrder`/`setWeight`/`setEnabled` toccano d
 **nella stessa transazione o in nessuna**: priorità disallineate mandano v4 e v6 su WAN diverse, cioè
 metà del web carica — molto più difficile da diagnosticare di un guasto pulito. `ruleValues` (`:259`)
 deduce `family` da `parseCidr`, e rifiuta lato client una regola che mescola le famiglie.
+
+**Due vincoli della Fase 2 si sciolgono qui**, ed è questa fase a doverli togliere: `isValidTarget`
+(`MultiWan.tsx:361`) smette di richiedere `family === 4` — la validazione su `parseCidr` c'è già — e
+le sonde di tracking (`:673`, `isValidIp(ip, 4)`) si allargano **solo** dove esiste un gemello
+`<wan>6` con un pool di tracking v6 suo; il messaggio "Serve almeno un indirizzo IPv4 valido" perde
+la parola nello stesso momento, non prima. Se questa fase non si fa, i due vincoli restano — e sono
+commentati sul posto proprio per questo.
 
 **Nuovo test:** `mwan-rules.test.ts`.
 
