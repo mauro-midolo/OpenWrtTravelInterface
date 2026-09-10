@@ -845,7 +845,7 @@ Restano da sciogliere solo i due della Fase 9, che dipendono da mwan3.
 
 ---
 
-## Fase 6 — Dispositivi collegati
+## Fase 6 — Dispositivi collegati ✅ *(fatta il 2026-09-10)*
 
 **Non analizzare il lease file di odhcpd.** La seconda colonna è un DUID, e un DUID non è un MAC:
 un client v6 preso da lì non si può unire in modo affidabile al suo stesso io v4, che è tutto il
@@ -870,6 +870,50 @@ Lato rpcd, `client_object()` (`:1419-1434`) guadagna `json_add_array ips6`; l'un
 accumulatore `mac→indirizzi` costruito dalle due letture `ip neigh` prima di emettere.
 
 **Nuovo test:** `clients-sort.test.ts`.
+
+### Esito
+
+`tsc --noEmit` pulito, **405 test su 23 file** (12 nuovi), build a 235 kB, `sh -n` sull'rpcd.
+`method_clients` è stato provato **sul router vero**, con tre dispositivi in LAN:
+
+```json
+{ "mac": "26:50:b7:ed:38:81", "ip": "192.168.10.205", "name": "Pixel-6-Pro",
+  "ips6": [ "fd66:...:f90e:be6c", "fd66:...:4e69:5684", "fd66:...:6821:9805" ] }
+```
+
+**Il telefono ha tre indirizzi v6 globali contemporaneamente** — estensioni di privacy — e li ha
+*davvero*, non in un caso costruito. È la prova sul campo della scelta di contarli invece di
+elencarli: una riga con tre indirizzi lunghi più il v4 più il MAC non si legge. I `fe80::` non
+compaiono, e la riga `FAILED` presente nella tabella dei vicini viene scartata.
+
+### Dettagli decisi qui
+
+- **`ip -4 neigh` esplicito.** La forma senza famiglia elenca anche i vicini v6, e a non farli
+  entrare era soltanto la classe `[0-9.]` del sed. Dirlo al comando rende visibile che le letture
+  sono due, e che quella è la v4. La v6 ha il suo sed, che distingue l'indirizzo dal MAC
+  pretendendo un `:` **e** l'ancoraggio a inizio riga: allargare la classe di un sed solo avrebbe
+  fatto combaciare il MAC come indirizzo, perché di quegli stessi caratteri è fatto.
+- **Un passaggio in più sui soli vicini v6.** Un dispositivo v6-only non ha né lease DHCPv4 né voce
+  ARP: senza, sparirebbe dall'elenco pur essendo in rete. Qui il link-local conta — come indirizzo da
+  mostrare non vale niente, come prova di presenza vale tutto — ed è per questo che `fe80::` viene
+  scartato al momento di emettere e non al momento di leggere. Sorgente nuova: `neigh6`.
+- **`withClientDefaults` ordina anche `ips6`.** `ip neigh` li elenca nell'ordine in cui il kernel se
+  li ritrova, che cambia fra una lettura e l'altra: senza ordinarli, il «primo indirizzo v6» mostrato
+  per un dispositivo v6-only ballerebbe a ogni aggiornamento della schermata.
+- **`clientAddress()` nuova**, perché «l'indirizzo del dispositivo» serviva in tre punti — titolo,
+  dettaglio, ordinamento — e le tre definizioni sarebbero divergute.
+- **Il conteggio non conta due volte.** Senza IPv4 il primo v6 fa da indirizzo principale, quindi gli
+  «altri» sono `length - 1`: un dispositivo con tre indirizzi mostra `+2 IPv6`, non `+3`.
+
+### Il commento sul lease file, esteso
+
+Il rifiuto di analizzare `/tmp/odhcpd.leases` resta, e ora porta con sé la prova raccolta in Fase 0:
+un DUID **non** è un MAC. Quelli di tipo `0001` (DUID-LLT) il MAC ce l'hanno in coda, quindi
+l'estrazione *sembra* funzionare sul primo dispositivo che si guarda; ma il tipo `0004` (DUID-UUID) —
+quello che questo stesso router usa per sé, in `network.globals.dhcp_default_duid` — di MAC non ne
+contiene nessuno. Chi scrivesse quell'unione la vedrebbe funzionare in laboratorio e fallire in
+albergo. È scritto per esteso nel codice, perché è esattamente il genere di scorciatoia che il
+prossimo lettore troverebbe ragionevole.
 
 ---
 

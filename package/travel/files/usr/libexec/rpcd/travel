@@ -1634,9 +1634,40 @@ client_link() {
 	fi
 }
 
+# Vicini IPv6 della LAN, come righe "mac indirizzo", lette una volta sola.
+#
+# Due comandi e due sed, non uno solo allargato: il sed IPv4 ancora l'indirizzo
+# a inizio riga con la classe [0-9.], e allargarla a [0-9a-f:] per farci entrare
+# anche IPv6 gliela farebbe combaciare pure con il MAC, che di quei caratteri e'
+# fatto. Qui la forma v6 si distingue pretendendo almeno un ':' nell'indirizzo.
+#
+# FAILED e INCOMPLETE si scartano: sono vicini che il kernel ha provato a
+# risolvere senza riuscirci, cioe' l'opposto di una presenza.
+NEIGH6=""
+load_neigh6() {
+	NEIGH6=$(ip -6 neigh show dev "$1" 2>/dev/null \
+		| grep -v -E '(FAILED|INCOMPLETE)' \
+		| sed -n 's/^\([0-9a-f:]*:[0-9a-f:]*\) .*lladdr \([0-9a-f:]\{17\}\).*/\2 \1/p')
+}
+
+# Gli indirizzi IPv6 di un MAC, i link-local esclusi.
+#
+# I `fe80::` non si mostrano: ce l'hanno tutti, non dicono niente su come il
+# dispositivo sta in rete, e quattro indirizzi per riga rendono l'elenco
+# illeggibile invece che piu' informativo. Servono pero' a stabilire la
+# PRESENZA di un dispositivo che IPv6 globale non ce l'ha, ed e' per questo che
+# restano dentro NEIGH6 e vengono scartati qui e non durante la lettura.
+ipv6_of_mac() {
+	printf '%s\n' "$NEIGH6" | awk -v m="$1" '$1 == m && $2 !~ /^fe80:/ { print $2 }'
+}
+
 # Una riga dell'elenco, con l'attribuzione gia' risolta.
+#
+# Una riga per MAC, non per indirizzo: un dispositivo e' un dispositivo, e
+# triplicarlo perche' ha tre indirizzi rende piu' difficile - non piu' facile -
+# l'unica domanda a cui questo elenco serve a rispondere, cioe' chi c'e'.
 client_object() {
-	local mac="$1" ip="$2" name="$3" source="$4"
+	local mac="$1" ip="$2" name="$3" source="$4" addr
 
 	client_link "$mac"
 	[ -n "$name" ] || name=$(static_host_name "$mac")
@@ -1649,6 +1680,11 @@ client_object() {
 	json_add_string via    "$LINK_VIA"
 	json_add_string iface  "$LINK_IFACE"
 	json_add_string band   "$LINK_BAND"
+	json_add_array ips6
+	for addr in $(ipv6_of_mac "$mac"); do
+		json_add_string "" "$addr"
+	done
+	json_close_array
 	json_close_object
 }
 
@@ -1669,6 +1705,9 @@ method_clients() {
 
 	STATIONS_WIFI=$(wifi_stations)
 	STATIONS_FDB=$(bridge_stations "$lan_device")
+	# Una lettura sola per tutto l'elenco: `client_object` la interroga per ogni
+	# riga, e rifarla ogni volta costerebbe un processo per dispositivo.
+	load_neigh6 "$lan_device"
 
 	STATIONS_ONLY_PORT=""
 	if [ -z "$STATIONS_FDB" ]; then
@@ -1695,6 +1734,19 @@ method_clients() {
 			# quelli IPv6 ci mettono un IAID, e piu' avanti un DUID che
 			# di colonne ne ha anche piu' di sei. Si accetta la forma
 			# esatta, non "qualcosa con dentro dei due punti".
+			#
+			# Le righe DHCPv6 non sono soltanto da saltare: come chiave
+			# di unione sono INUTILIZZABILI, ed e' il motivo per cui il
+			# lease file di odhcpd non viene analizzato affatto. Un DUID
+			# non e' un MAC. Quelli di tipo 0001 (DUID-LLT) il MAC ce
+			# l'hanno in coda, quindi l'estrazione sembra funzionare sul
+			# primo dispositivo che si guarda; ma il tipo 0004
+			# (DUID-UUID) - quello che questo stesso router usa per se',
+			# vedi network.globals.dhcp_default_duid - di MAC non ne
+			# contiene nessuno. Chi scrivesse quell'unione la vedrebbe
+			# funzionare in laboratorio e fallire in albergo. Gli
+			# indirizzi v6 arrivano da `ip -6 neigh`, che da' la stessa
+			# chiave su cui questo elenco e' gia' costruito.
 			case "$mac" in
 				[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
 				*) continue ;;
@@ -1708,13 +1760,31 @@ method_clients() {
 
 	# Poi i vicini che il kernel conosce senza avere un lease: indirizzi statici,
 	# e dispositivi arrivati prima dell'ultimo riavvio di dnsmasq.
-	for entry in $(ip neigh show dev "$lan_device" 2>/dev/null | sed -n 's/^\([0-9.]\{1,\}\) .*lladdr \([0-9a-f:]\{17\}\).*/\1|\2/p'); do
+	#
+	# `ip -4` esplicito: la forma senza famiglia elenca anche i vicini v6, e a
+	# non farli entrare era solo la classe [0-9.] del sed. Dirlo al comando
+	# invece di lasciarlo dedurre al sed rende chiaro che le due letture sono
+	# due, e che questa e' quella v4.
+	for entry in $(ip -4 neigh show dev "$lan_device" 2>/dev/null | sed -n 's/^\([0-9.]\{1,\}\) .*lladdr \([0-9a-f:]\{17\}\).*/\1|\2/p'); do
 		ip="${entry%%|*}"
 		mac="${entry##*|}"
 		case "$seen" in *" $mac "*) continue ;; esac
 		seen="$seen$mac "
 
 		client_object "$mac" "$ip" "" arp
+	done
+
+	# Poi chi si conosce SOLO da IPv6. Un dispositivo v6-only non ha un lease
+	# DHCPv4 ne' una voce ARP: senza questo passaggio sparirebbe dall'elenco pur
+	# essendo in rete e raggiungibile. Qui conta anche il link-local, che e' il
+	# solo indirizzo che alcuni dispositivi si prendono: come indirizzo da
+	# mostrare non vale niente, come prova di presenza vale tutto.
+	for mac in $(printf '%s\n' "$NEIGH6" | awk '{ print $1 }' | sort -u); do
+		[ -n "$mac" ] || continue
+		case "$seen" in *" $mac "*) continue ;; esac
+		seen="$seen$mac "
+
+		client_object "$mac" "" "" neigh6
 	done
 
 	# Infine chi e' associato a un access point e non ha ancora un indirizzo.

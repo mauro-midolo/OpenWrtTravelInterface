@@ -15,7 +15,7 @@
  */
 
 import { call } from './ubus';
-import { isValidIp, overlaps, parseIp, subnetOfMask } from './ip';
+import { isValidIp, overlaps, parseIp, sortKey, subnetOfMask } from './ip';
 import { normalizeMac } from './wifi';
 
 export interface LanDhcp {
@@ -976,7 +976,20 @@ export interface LanClient {
   ip: string;
   /** Nome dichiarato nel DHCP o scritto a mano; vuoto se nessuno dei due. */
   name: string;
-  /** dhcp | arp | wifi — da quale elenco e' comparso. */
+  /**
+   * Indirizzi IPv6 globali, i link-local esclusi.
+   *
+   * Obbligatorio: leggerlo non deve mai richiedere una guardia. Ce lo mette
+   * `withClientDefaults` all'ingresso, perche' un router con il pacchetto
+   * vecchio questo campo non lo manda affatto.
+   *
+   * Possono essere tre o quattro sullo stesso dispositivo: con le estensioni di
+   * privacy un telefono ne cambia uno ogni giorno e tiene i precedenti finche'
+   * scadono. Per questo l'elenco mostra un dispositivo per riga e non un
+   * indirizzo per riga.
+   */
+  ips6: string[];
+  /** dhcp | arp | wifi | neigh6 — da quale elenco e' comparso. */
   source: string;
   /** wifi | ethernet | '' quando non si e' potuto stabilire. */
   via: string;
@@ -993,15 +1006,53 @@ export interface LanClient {
  * clonazione del MAC ci sceglie dentro. E' un metodo solo anche sul router, per
  * la stessa ragione per cui e' una funzione sola qui.
  */
+/** Il client come arriva dall'rpcd, dove `ips6` puo' mancare. */
+type RawClient = Omit<LanClient, 'ips6'> & Partial<Pick<LanClient, 'ips6'>>;
+
+/**
+ * Riempie `ips6` e gli da' un ordine.
+ *
+ * Ordinare gli indirizzi di ogni dispositivo non e' cosmetica: `ip neigh` li
+ * elenca nell'ordine in cui il kernel se li ritrova, che cambia fra una lettura
+ * e l'altra. Senza, il "primo indirizzo v6" mostrato per un dispositivo
+ * v6-only ballerebbe a ogni aggiornamento della schermata.
+ */
+export function withClientDefaults(raw: RawClient): LanClient {
+  const ips6 = [...(raw.ips6 ?? [])].sort(compareAddresses);
+  return { ...raw, ips6 };
+}
+
+/** Confronto fra due indirizzi in forma testuale, per famiglia e valore. */
+function compareAddresses(a: string, b: string): number {
+  const left = keyOf(a);
+  const right = keyOf(b);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Chiave d'ordinamento di un indirizzo, con i non-indirizzi in fondo.
+ *
+ * `sortKey` mette tutti gli IPv4 prima di tutti gli IPv6 e confronta il valore
+ * e non il testo: `localeCompare` con `numeric` azzeccava
+ * "192.168.10.9 < 192.168.10.10" solo perche' li' i numeri sono separati da
+ * punti, e su "fd00::9 < fd00::10" sbagliava.
+ */
+function keyOf(address: string): string {
+  const parsed = parseIp(address);
+  // '9' viene dopo il '4' e il '6' con cui sortKey prefissa le due famiglie:
+  // chi non ha un indirizzo leggibile finisce in fondo senza casi speciali.
+  return parsed ? sortKey(parsed) : '9';
+}
+
 export async function listClients(): Promise<LanClient[]> {
-  const response = await call<{ clients?: LanClient[] }>('travel', 'clients');
-  return (response.clients ?? []).sort((a, b) =>
-    a.ip && b.ip
-      ? a.ip.localeCompare(b.ip, undefined, { numeric: true })
-      : // Chi non ha ancora un indirizzo va in fondo: e' una condizione di
-        // passaggio, non il caso normale da leggere per primo.
-        Number(Boolean(b.ip)) - Number(Boolean(a.ip)),
-  );
+  const response = await call<{ clients?: RawClient[] }>('travel', 'clients');
+  return (response.clients ?? []).map(withClientDefaults).sort((a, b) => {
+    // Si ordina sull'indirizzo principale: il v4 se c'e', altrimenti il primo
+    // v6. Chi non ne ha nessuno va in fondo - e' una condizione di passaggio,
+    // non il caso normale da leggere per primo - e i v6-only stanno fra i due,
+    // perche' 'sortKey' mette la famiglia in testa alla chiave.
+    return compareAddresses(clientAddress(a), clientAddress(b));
+  });
 }
 
 /**
@@ -1011,8 +1062,20 @@ export async function listClients(): Promise<LanClient[]> {
  * leggere c'e' sempre, e una riga che comincia con uno spazio vuoto sembra un
  * guasto dell'interfaccia invece di un dispositivo senza nome.
  */
+/**
+ * L'indirizzo principale di un dispositivo: il v4 se c'e', altrimenti il primo
+ * v6, altrimenti niente.
+ *
+ * Su un dispositivo v6-only il primo v6 e' l'unico indirizzo che ha, e non
+ * mostrarlo significherebbe scrivere "senza indirizzo" accanto a qualcosa che
+ * in rete c'e' e risponde.
+ */
+export function clientAddress(client: LanClient): string {
+  return client.ip || client.ips6[0] || '';
+}
+
 export function clientTitle(client: LanClient): string {
-  return client.name || client.ip || client.mac;
+  return client.name || clientAddress(client) || client.mac;
 }
 
 /**
@@ -1024,9 +1087,22 @@ export function clientTitle(client: LanClient): string {
  */
 export function clientDetail(client: LanClient): string {
   const parts: string[] = [];
-  if (client.name) parts.push(client.ip || 'senza indirizzo');
-  else if (!client.ip) parts.push('senza indirizzo');
-  if (client.name || client.ip) parts.push(client.mac);
+  const address = clientAddress(client);
+
+  if (client.name) parts.push(address || 'senza indirizzo');
+  else if (!address) parts.push('senza indirizzo');
+
+  // Gli altri indirizzi v6 si contano, non si elencano. Con le estensioni di
+  // privacy un telefono ne ha tre o quattro contemporaneamente, e stamparli
+  // tutti allunga la riga fino a renderla illeggibile senza aggiungere niente:
+  // sapere che ce ne sono altri e' l'informazione, quali siano no.
+  //
+  // Uno e' gia' scritto se ha fatto da indirizzo principale, cioe' se non c'e'
+  // un v4: quello non si conta due volte.
+  const rest = client.ips6.length - (address && !client.ip ? 1 : 0);
+  if (rest > 0) parts.push(`+${rest} IPv6`);
+
+  if (client.name || address) parts.push(client.mac);
   return parts.join(' · ');
 }
 

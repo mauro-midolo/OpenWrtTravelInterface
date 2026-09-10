@@ -587,12 +587,43 @@ const portalSsids = ['Hotel-Guest', 'Hotel-WiFi-Free'];
  * che farebbe davvero, cioe' lasciare quei dispositivi senza provenienza.
  */
 const lanClients = [
-  { mac: 'b8:27:eb:0a:1f:22', ip: '192.168.10.142', name: 'pixel-di-mauro', source: 'dhcp', on: 'radio1' },
-  { mac: '3c:22:fb:71:9c:04', ip: '192.168.10.108', name: 'macbook', source: 'dhcp', on: 'eth1' },
-  { mac: 'dc:a6:32:5e:11:80', ip: '192.168.10.201', name: '', source: 'arp', on: 'radio0' },
+  // Un telefono con le estensioni di privacy: tre indirizzi v6 sullo stesso
+  // dispositivo, che e' il motivo per cui l'elenco li conta invece di
+  // elencarli. Come sul router vero.
+  {
+    mac: 'b8:27:eb:0a:1f:22',
+    ip: '192.168.10.142',
+    name: 'pixel-di-mauro',
+    source: 'dhcp',
+    on: 'radio1',
+    ips6: [
+      'fd66:67c3:698b:0:c8:188e:f90e:be6c',
+      'fd66:67c3:698b:0:58ae:fb70:6821:9805',
+      'fd66:67c3:698b:0:c5e4:5c6c:4e69:5684',
+    ],
+  },
+  {
+    mac: '3c:22:fb:71:9c:04',
+    ip: '192.168.10.108',
+    name: 'macbook',
+    source: 'dhcp',
+    on: 'eth1',
+    ips6: ['fd66:67c3:698b:0:8810:e311:c4ce:a9ab'],
+  },
+  { mac: 'dc:a6:32:5e:11:80', ip: '192.168.10.201', name: '', source: 'arp', on: 'radio0', ips6: [] },
+  // Solo IPv6: nessun lease DHCPv4, nessuna voce ARP. Senza la lettura dei
+  // vicini v6 questo dispositivo sparirebbe dall'elenco pur essendo in rete.
+  {
+    mac: '2e:9f:04:b1:77:31',
+    ip: '',
+    name: 'stampante',
+    source: 'neigh6',
+    on: 'eth1',
+    ips6: ['fd66:67c3:698b:0:2c9f:4ff:feb1:7731'],
+  },
   // Associato e senza indirizzo: i primi secondi di ogni collegamento, e lo
   // stato in cui si resta quando il DHCP non risponde.
-  { mac: '9a:11:4f:20:c3:7d', ip: '', name: '', source: 'wifi', on: 'radio0' },
+  { mac: '9a:11:4f:20:c3:7d', ip: '', name: '', source: 'wifi', on: 'radio0', ips6: [] },
 ];
 
 /** I MAC che il portale finto considera gia' autenticati. */
