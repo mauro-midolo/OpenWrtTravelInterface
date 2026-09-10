@@ -3,7 +3,7 @@
 // uplinkState e' pura, ma wifi.ts importa lib/ubus.ts, che legge sessionStorage
 // appena il modulo viene caricato.
 import { describe, expect, it } from 'vitest';
-import { uplinkState, withUplinkDefaults } from '../src/lib/wifi';
+import { ipv6Reach, uplinkState, withUplinkDefaults } from '../src/lib/wifi';
 import type { Uplink } from '../src/lib/wifi';
 
 /** Uplink agganciato e su, da cui i casi si ricavano per differenza. */
@@ -76,6 +76,33 @@ describe('uplinkState', () => {
   it('disattivata viene prima di tutto', () => {
     expect(uplinkState(uplink({ enabled: false, ssid: '', ipv4: '' }))).toBe('disabled');
     expect(uplinkState(uplink({ enabled: false, ipv6: ['2001:db8::1/64'] }))).toBe('disabled');
+  });
+});
+
+describe('fin dove arriva IPv6', () => {
+  it('senza indirizzi non c’e’ IPv6', () => {
+    expect(ipv6Reach(uplink())).toBe('none');
+  });
+
+  it('con indirizzo e gateway si esce', () => {
+    expect(ipv6Reach(uplink({ ipv6: ['2a00:1450::7/64'], gateway6: 'fe80::1' }))).toBe('internet');
+  });
+
+  it('con indirizzo e SENZA gateway IPv6 resta in casa', () => {
+    // Il caso vero, visto su una FRITZ!Box senza IPv6 dal provider: annuncia un
+    // prefisso ULA ma nessuna rotta predefinita - router lifetime a zero - e
+    // fa bene. L'indirizzo e' valido, il gateway non esiste, e verso Internet
+    // si esce in IPv4. Un trattino li' farebbe sospettare un guasto che non c'e'.
+    expect(
+      ipv6Reach(uplink({ ipv6: ['fdbd:e14b:8a72:0:9683:c4ff:fed6:c74d/64'], gateway6: '' })),
+    ).toBe('local');
+  });
+
+  it('vale il gateway, non la forma dell’indirizzo', () => {
+    // Un ULA con un gateway esce davvero (c'e' chi instrada gli ULA), e una GUA
+    // senza gateway non esce: a decidere e' la rotta predefinita.
+    expect(ipv6Reach(uplink({ ipv6: ['fd00::1/64'], gateway6: 'fe80::1' }))).toBe('internet');
+    expect(ipv6Reach(uplink({ ipv6: ['2a00:1450::7/64'], gateway6: '' }))).toBe('local');
   });
 });
 

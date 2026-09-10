@@ -178,6 +178,30 @@ export function withUplinkDefaults(raw: RawUplink): Uplink {
  */
 export type UplinkState = 'disabled' | 'unassociated' | 'no-address' | 'addressed';
 
+/** Fin dove arriva IPv6 su un uplink. */
+export type Ipv6Reach = 'none' | 'local' | 'internet';
+
+/**
+ * IPv6 c'e', e porta da qualche parte?
+ *
+ * Avere un indirizzo non basta: e' la stessa distinzione fra "collegato" e
+ * "funzionante" che regge tutta l'interfaccia, applicata alla seconda famiglia.
+ *
+ * Il caso da riconoscere e' comune e sembra un guasto senza esserlo: un router
+ * a monte che annuncia un prefisso ULA ma NESSUNA rotta predefinita - cioe' un
+ * Router Advertisement con router lifetime a zero. E' quello che fa una
+ * FRITZ!Box quando il provider non le da' un prefisso globale, ed e' corretto:
+ * i dispositivi di casa si parlano in IPv6, e verso Internet si esce in IPv4.
+ * L'indirizzo c'e' ed e' valido, ma il gateway non esiste e non deve esistere.
+ *
+ * Il segnale e' il gateway, non la forma dell'indirizzo: senza rotta
+ * predefinita non si esce, per quanti indirizzi ci siano.
+ */
+export function ipv6Reach(u: { ipv6: string[]; gateway6: string }): Ipv6Reach {
+  if (u.ipv6.length === 0) return 'none';
+  return u.gateway6 ? 'internet' : 'local';
+}
+
 export function uplinkState(u: Uplink): UplinkState {
   if (u.enabled === false) return 'disabled';
   if (!u.ssid) return 'unassociated';

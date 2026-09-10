@@ -687,6 +687,26 @@ Per spegnere IPv6 su una WAN si mette `disabled 1` sulla sua `<net>6`: quella
 sopravvive a un nuovo `setup.sh`, mentre cancellare la sezione la farebbe solo
 ricreare.
 
+#### «Indirizzo IPv6 sì, gateway IPv6 no»
+
+È il caso che sembra un guasto senza esserlo, e va saputo riconoscere. Un router
+a monte può annunciare un prefisso **ULA** (`fd00::/8`) e **nessuna rotta
+predefinita**, cioè un Router Advertisement con *router lifetime* a zero. Il
+nostro router prende un indirizzo valido, `ipv6-address` si popola, e il gateway
+resta vuoto: non è un errore di lettura, è il router a monte che dichiara di non
+essere un gateway IPv6.
+
+Succede quando quel router IPv6 dal provider non ce l'ha: distribuisce un ULA
+perché i dispositivi di casa si parlino fra loro, e verso Internet si esce in
+IPv4. Osservato su una FRITZ!Box, dove la tabella di instradamento conteneva
+solo prefissi `fd…`, nessuna `default`, e `ping6` verso Internet rispondeva
+*Network unreachable*.
+
+`ipv6Reach()` distingue quindi tre casi — nessun IPv6, IPv6 solo locale, IPv6 che
+esce — e a deciderlo è **il gateway, non la forma dell'indirizzo**: un ULA
+instradato esce, una GUA senza rotta predefinita no. Le schede lo scrivono al
+posto di un trattino, che invita alla conclusione sbagliata.
+
 Una migrazione una tantum, sotto il marcatore `travel.globals.ipv6_init`,
 **cancella** i vecchi `ipv6 '0'` dalle WAN esistenti. Cancella e non scrive `1`:
 si torna al default della distribuzione invece di imporre un valore, ed è la

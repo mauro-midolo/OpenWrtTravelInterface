@@ -121,7 +121,15 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
           {uplink.ipv6.length > 0 && (
             <>
               <Row label="Indirizzo IPv6" value={uplink.ipv6.join('  ')} />
-              <Row label="Gateway IPv6" value={uplink.gateway6 || '—'} />
+              {/* Un trattino accanto a un indirizzo valido fa sospettare un
+                  guasto che non c'e': senza rotta predefinita IPv6 non si esce,
+                  e la riga lo dice invece di lasciarlo dedurre. */}
+              <Row
+                label="Gateway IPv6"
+                value={
+                  uplink.gateway6 || 'nessuno · IPv6 resta nella rete locale, si esce in IPv4'
+                }
+              />
               {uplink.dns6.length > 0 && (
                 <Row label="DNS IPv6" value={uplink.dns6.join('  ')} />
               )}

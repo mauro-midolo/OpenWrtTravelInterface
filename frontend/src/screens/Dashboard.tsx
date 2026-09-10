@@ -215,7 +215,12 @@ function WanCard({
           {wan.ipv6.length > 0 && (
             <>
               <Row label="Indirizzo IPv6" value={wan.ipv6.join('  ')} />
-              <Row label="Gateway IPv6" value={wan.gateway6 || '—'} />
+              {/* Vedi Wifi.tsx: senza rotta predefinita IPv6 non si esce, e un
+                  trattino farebbe sospettare un guasto che non c'e'. */}
+              <Row
+                label="Gateway IPv6"
+                value={wan.gateway6 || 'nessuno · IPv6 resta nella rete locale, si esce in IPv4'}
+              />
               {wan.dns6.length > 0 && <Row label="DNS IPv6" value={wan.dns6.join('  ')} />}
               {wan.prefix6 && <Row label="Prefisso delegato" value={wan.prefix6} />}
             </>
