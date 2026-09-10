@@ -150,7 +150,7 @@ non scritta: il match deve trattare l'assenza come `1`, o mostrerà "Personalizz
 Nessuna `dhcp_option` e nessuna `dhcp.*.dns` presente oggi.
 
 ---
-## Fase 1 — `lib/ip.ts`, senza cambi di comportamento
+## Fase 1 — `lib/ip.ts`, senza cambi di comportamento ✅ *(fatta il 2026-09-10)*
 
 **Nuovo modulo `frontend/src/lib/ip.ts`.** Non un'estensione di `lan.ts`: quel file parla della rete
 che il router *offre*, e l'aritmetica a 32 bit dentro non è un fatto della LAN — `MultiWan.tsx:363`
@@ -190,12 +190,43 @@ In questa fase `lan.ts` **ri-esporta i vecchi nomi**, così niente si rompe. Ver
 `intToIp`, `subnetOf`, `overlaps`, `isValidNetmask` **non hanno chiamanti fuori da `lan.ts`** — la
 migrazione è contenuta.
 
+*Come è stato fatto davvero:* `ipToInt`, `isValidIp` e `isValidNetmask` sono ora involucri sopra
+`ip.ts` (una sola implementazione dell'analisi, che era il punto), mentre `intToIp`, `Subnet`,
+`subnetOf` e `overlaps` restano l'aritmetica intera di prima — non hanno una controparte a pari
+firma in `ip.ts`, e riscriverli qui sarebbe già la Fase 2. `lan.ts` non contiene più parsing.
+
 **Nuovo test `frontend/tests/ip.test.ts`** (tabellare). Casi che un'implementazione a occhio sbaglia:
 `2001:db8:0:1:0:0:0:1` → `2001:db8:0:1::1`; `1:0:0:2:0:0:0:3` → `1:0:0:2::3` (più a sinistra);
 `0:0:1:0:0:0:0:0` → `0:0:1::`; `10.0.0.0/33` ✗, `::/129` ✗, `10.0.0.0/128` ✗; `overlaps` fra famiglie
 sempre falso; `sortKey` con `fd00::9 < fd00::10` e ogni v4 prima di ogni v6.
 
 **Verifica:** `npm test`, `npm run typecheck`, `npm run build`; il simulatore si comporta identico.
+
+### Esito
+
+`npx tsc --noEmit` pulito, **287 test su 15 file** (120 nuovi in `ip.test.ts`), `npm run build` a
+228 kB, sotto il limite di 300. Nessun test preesistente toccato.
+
+**Un errore del piano, trovato da un test rosso.** Il piano scrive — qui, nella Fase 8 e nei Rischi —
+che la giunzione ingenua produce `2001:db8::1:51820`, "un indirizzo IPv6 valido e diverso". **Non è
+valido:** `51820` sono cinque cifre e un gruppo esadecimale ne ammette quattro. Con quella porta la
+stringa è malformata e il guasto si vede subito. Il caso silenzioso è una porta di **al massimo
+quattro cifre** — `443`, `8080` — che è anche un gruppo esadecimale legale: `2001:db8::1:443` è
+valido, è un altro host, e niente protesta. La correzione conta perché cambia quale esempio va messo
+nel commento: quello che sembra innocuo, non quello che sembra pericoloso. Commento e test lo dicono
+entrambi, e la Fase 8 e i Rischi sono stati corretti di conseguenza.
+
+**Una trappola per la Fase 2, scoperta qui.** `MultiWan.tsx:673` fa `ips.every(isValidIp)`, e
+`Array.every` passa **l'indice** come secondo argomento: ri-esportare da `lan.ts` la `isValidIp`
+allargata convaliderebbe il primo indirizzo contro la "famiglia 0" e il secondo contro la
+"famiglia 1", rifiutandoli entrambi. Silenzioso, perché il tipo `IpFamily` non protegge una chiamata
+che passa un `number`. Per questo `lan.ts` espone ancora una `isValidIp` a **un parametro solo**, e
+la Fase 2 deve sistemare quel chiamante prima di togliere l'involucro.
+
+**Due scelte non scritte nel piano**, entrambe commentate nel codice: `formatIp` rende un indirizzo
+IPv4-mapped in esadecimale (`::ffff:c0a8:101`) invece della forma puntata suggerita da RFC 5952 §5 —
+qui non compare mai e una seconda strada nella formattazione costa più di quanto vale; e `isLinkLocal`
+copre anche `169.254/16`, così l'etichetta non ha un buco in IPv4.
 
 ---
 
@@ -207,6 +238,13 @@ ri-esportazioni. `findConflicts` (`lan.ts:122-139`) e `suggestAddress` passano a
 `isValidIp` allargata ai due chiamanti: `Lan.tsx:782-783` (DNS personalizzati) e `MultiWan.tsx:363`
 (`isValidTarget`, riscritta su `parseCidr` — che corregge anche `/^\d{1,2}$/`, incapace di esprimere
 `/128` e felice di accettare `10.0.0.0/33`). Il messaggio a `MultiWan.tsx:738` perde "IPv4".
+
+**C'è un terzo chiamante, e va sistemato per primo**: `MultiWan.tsx:673` fa `ips.every(isValidIp)`, e
+`Array.every` passa **l'indice** come secondo argomento. Con la firma allargata il primo indirizzo
+verrebbe convalidato contro la "famiglia 0" e il secondo contro la "famiglia 1", cioè rifiutati
+entrambi — e il tipo `IpFamily` non lo intercetta, perché la chiamata arriva da `every` e non dal
+codice. Diventa `ips.every((ip) => isValidIp(ip))`. Finché non è fatto, l'involucro a un parametro in
+`lan.ts` (Fase 1) è quello che tiene in piedi la schermata.
 
 **`findConflicts` resta IPv4-only, e va scritto nel commento** (`lan.ts:114-121`), altrimenti il
 prossimo lettore lo generalizza per niente:
@@ -431,8 +469,12 @@ netifd non si lamenta, l'handshake non arriva mai e nessuno sa dire perché.
 `wg_split_endpoint()` con quattro forme (`host:porta`, `[v6]:porta`, `[v6]`, `v6 nudo` riconosciuto da
 due o più `:` — nessun nome di host e nessun IPv4 può contenerne due). **Le parentesi si tengono
 dentro `endpoint_host`**, e sembra sbagliato ma non lo è: netifd ricompone l'endpoint come
-`"$endpoint_host:$endpoint_port"`, e senza parentesi ne uscirebbe `2001:db8::1:51820`, che è un
+`"$endpoint_host:$endpoint_port"`, e senza parentesi ne uscirebbe `2001:db8::1:443`, che è un
 indirizzo IPv6 valido e **diverso**. Il commento deve dirlo, o qualcuno lo "aggiusta".
+
+*(Esempio corretto in Fase 1: con `51820` la giunzione dà una stringa **invalida** — cinque cifre non
+sono un gruppo esadecimale — e il guasto si vede. Il caso silenzioso è una porta di al massimo
+quattro cifre, che è anche un gruppo legale. Nel commento va quella.)*
 
 - `valid_wg_host()` accanto a `valid_wg_key` (`:3107`), chiamata da `wg_validate` (`:3168`), dove
   l'host dell'endpoint oggi **non è controllato affatto**.
@@ -539,4 +581,5 @@ UI-nuova/pacchetto-vecchio, che è lo stato normale fra il deploy della SPA e qu
   confine, e nessun componente legge `lan.addresses6[0]` senza guardia.
 - **GUA annunciata a Tailscale**: rotta stantia a ogni cambio di albergo. Solo ULA.
 - **Le parentesi in `endpoint_host` sembrano un bug** e qualcuno le toglierà, reintroducendo
-  `2001:db8::1:51820`. Il commento deve dire che è netifd a fare la giunzione ingenua.
+  `2001:db8::1:443`. Il commento deve dire che è netifd a fare la giunzione ingenua — e usare una
+  porta di quattro cifre nell'esempio, perché è il caso che passa inosservato (vedi Fase 1).

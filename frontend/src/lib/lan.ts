@@ -15,6 +15,7 @@
  */
 
 import { call } from './ubus';
+import { isValidIp as isIpOfFamily, maskToPrefix, parseIp } from './ip';
 import { normalizeMac } from './wifi';
 
 export interface LanDhcp {
@@ -49,18 +50,22 @@ export async function getLan(): Promise<LanConfig> {
 }
 
 // --- Aritmetica delle sottoreti ----------------------------------------------
+//
+// Ponte verso lib/ip.ts, in piedi per una fase sola. L'analisi degli indirizzi
+// vive tutta di la'; qui restano i vecchi nomi, con le vecchie firme, perche'
+// findConflicts e le schermate non debbano cambiare mentre il modulo nuovo
+// entra. La fase successiva sposta i chiamanti e questo blocco sparisce.
+//
+// Un cambio di comportamento c'e', ed e' voluto: un ottetto con zeri iniziali
+// ("192.168.010.1") non e' piu' un indirizzo valido, perche' significa due cose
+// diverse a seconda di chi lo legge. Il perche' sta in ip.ts.
 
 export function ipToInt(ip: string): number | null {
-  const parts = ip.trim().split('.');
-  if (parts.length !== 4) return null;
+  const addr = parseIp(ip);
+  if (!addr || addr.family !== 4) return null;
 
   let value = 0;
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const byte = Number(part);
-    if (byte > 255) return null;
-    value = value * 256 + byte;
-  }
+  for (const byte of addr.bytes) value = value * 256 + byte;
   return value;
 }
 
@@ -68,18 +73,23 @@ export function intToIp(value: number): string {
   return [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.');
 }
 
+/**
+ * Vero per un indirizzo IPv4.
+ *
+ * Resta a un parametro solo, e non e' una svista: MultiWan.tsx la usa come
+ * `ips.every(isValidIp)`, e Array.every passa l'INDICE come secondo argomento.
+ * Ri-esportare qui la isValidIp allargata di ip.ts convaliderebbe il primo
+ * indirizzo contro la "famiglia 0" e il secondo contro la "famiglia 1", cioe'
+ * li rifiuterebbe entrambi. Quel chiamante si sposta nella fase successiva, e
+ * questo involucro se ne va con lui.
+ */
 export function isValidIp(ip: string): boolean {
-  return ipToInt(ip) !== null;
+  return isIpOfFamily(ip, 4);
 }
 
 /** Vero per le maschere contigue: 255.255.255.0 sì, 255.0.255.0 no. */
 export function isValidNetmask(mask: string): boolean {
-  const value = ipToInt(mask);
-  if (value === null) return false;
-  // Una maschera valida e' una sequenza di 1 seguita da una di 0: il
-  // complemento piu' uno deve essere una potenza di due.
-  const inverted = ~value >>> 0;
-  return (inverted & (inverted + 1)) === 0;
+  return maskToPrefix(mask) !== null;
 }
 
 export interface Subnet {
