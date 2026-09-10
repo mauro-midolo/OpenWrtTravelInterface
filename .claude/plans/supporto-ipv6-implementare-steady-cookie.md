@@ -490,7 +490,7 @@ I tre `uci set ... ipv6=0` di `setup.sh` e quello di `stageEthPort` sono spariti
 `ipv6=1`: l'opzione non si scrive affatto, perché nessuno la legge. Il blocco
 `travel.globals.ipv6_init` sta accanto al gemello `dhcp_hostname_init`, che è il pattern che imita.
 
-`tsc --noEmit` pulito, **348 test su 19 file** (19 nuovi), build a 231 kB, `sh -n` su `setup.sh`.
+`tsc --noEmit` pulito, **352 test su 20 file** (23 nuovi), build a 231 kB, `sh -n` su `setup.sh`.
 
 Il test **estrae i due blocchi dal `setup.sh` vero** invece di ricopiarli: se qualcuno li riscrive, il
 test legge la riscrittura, e se il ciclo delle gemelle diventasse ambiguo l'estrazione fallisce invece
@@ -588,10 +588,25 @@ secondo — `ubus call network.interface.wan status` con un `ipv6-address` non v
 ed è quello che ha portato alla scoperta qui sopra. Il terzo, la riesecuzione che non tocca niente,
 resta coperto da `ipv6-migration.test.ts`.
 
-**Il router non è stato toccato dopo la riscrittura**, per scelta: le sezioni `<net>6` esistono nel
-codice e nei test ma non ancora sul dispositivo. Alla prossima esecuzione di `setup.sh` verranno
-create — quattro sezioni nuove più l'ingresso in zona firewall — e quello comporterà un altro
-`network reload`, cioè un'altra interruzione breve. Vale la pena programmarlo, non subirlo.
+**Aggiornamento: la fase è stata verificata sul router.** Il `setup.sh` corretto — con il ciclo dopo
+`mwan3-setup.sh` e il `|| true` sulla metrica — è stato installato ed eseguito, e ha fatto
+esattamente quel che doveva:
+
+```
+  wan=[10]          wan6=[10]          device6=[eth0]
+  wwan_radio0=[30]  wwan_radio06=[30]  device6=[@wwan_radio0]
+  wwan_radio1=[20]  wwan_radio16=[20]  device6=[@wwan_radio1]
+  wan_usb=[40]      wan_usb6=[40]      device6=[@wan_usb]
+
+zona wan: wan wan6 wwan_radio0 wwan_radio1 wan_usb wwan_radio06 wwan_radio16 wan_usb6
+```
+
+Le quattro metriche sono **allineate a coppie**, il che dimostra sul campo sia l'ordine dentro
+`setup.sh` sia il riallineamento: il `wan6` dell'immagine è passato da `0` a `10`, come previsto, e la
+sua `device='eth0'` originale non è stata toccata. Tutte e quattro le gemelle sono in zona firewall.
+
+Resta da verificare **solo** che una WAN v6 prenda davvero un indirizzo, e per quello serve un
+upstream che offra IPv6.
 
 **Attenzione a cosa può dire la prova.** La rete a monte di questo router (`192.168.0.1`) potrebbe
 non offrire IPv6 affatto: in quel caso le `<net>6` si alzeranno senza prendere niente, e non si
@@ -603,6 +618,34 @@ stessa.
 non è ancora verificabile: nessuna WAN v6 è mai salita. Si potrà rispondere solo dopo che le sezioni
 `<net>6` esisteranno davvero — e serve un upstream che IPv6 lo offra, cosa che la rete a monte
 (`192.168.0.1`) potrebbe non fare.
+
+### Bug trovato in `traveld.uc` — fuori piano, ma grave
+
+Controllando il router è emerso che il daemon interrompeva **ogni** giro di controllo:
+
+```
+"last_error": "giro di controllo interrotto: access to undeclared variable applyHostname"
+```
+
+**ucode non fa hoisting delle dichiarazioni di funzione.** Verificato sul router con un caso minimo,
+che produce lo stesso messaggio parola per parola. In `applyConnection` c'erano due chiamate a
+funzioni scritte più in basso — `applyHostname` (usata a `:309`, dichiarata a `:339`) e `penaltyKey`
+(`:326` / `:388`) — ed è **preesistente**: c'era già prima della Fase 0.
+
+Il punto in cui capitava è quel che lo rende serio: `applyConnection` scriveva la sezione STA,
+faceva `commit`, e moriva sulla riga dopo — **prima di `wifi up`**. La radio non veniva mai alzata,
+`radioBusyUntil` e `lastAction` non venivano mai aggiornati, e la funzione non tornava mai `true`. La
+riconnessione automatica era rotta per intero.
+
+Le due dichiarazioni sono state spostate sopra `applyConnection`. **Andavano corrette insieme**:
+`penaltyKey` sta più in basso di `applyHostname` nel corpo della funzione, quindi sistemare solo la
+prima avrebbe spostato il guasto di diciassette righe facendolo sembrare risolto.
+
+**Nuovo test `traveld-order.test.ts`**, che è il vero rimedio: `ucode -c` compila senza lamentarsi
+perché l'errore è a runtime, quindi un controllo statico è l'unico modo di accorgersene prima del
+router. Cerca ogni funzione usata prima della riga in cui è dichiarata, sa distinguere i commenti e i
+metodi omonimi di un oggetto, e verifica su un campione sintetico di saper trovare il difetto che
+cerca. Provato contro la versione precedente del file: segnala entrambi i casi, con le righe esatte.
 
 ### Bug trovato in `tools/deploy.ps1`
 
