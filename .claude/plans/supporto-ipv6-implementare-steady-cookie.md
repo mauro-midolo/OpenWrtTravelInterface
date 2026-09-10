@@ -1175,7 +1175,7 @@ riportato a ciò che decide davvero.
 
 ---
 
-## Fase 9 — mwan3 IPv6 *(opzionale, ultima)*
+## Fase 9 — mwan3 IPv6 ✅ *(fatta il 2026-09-10, benché opzionale)*
 
 `mwan3.<interfaccia>` è **mono-famiglia** e il nome della sezione deve coincidere con quello
 dell'interfaccia netifd: un gemello v6 richiede una `config interface '<wan>6'` reale
@@ -1187,10 +1187,11 @@ per loro andrebbero create sezioni `<wan>6` esplicite che oggi il piano non prev
 fa, o si accetta che il failover v6 copra la **sola** WAN ethernet (e allora va scritto perché), o la
 fase cresce di quel pezzo.
 
-**Fino alla Fase 8 compresa, mwan3 resta IPv4** — `family=ipv4` a `mwan3-setup.sh:146` e
-`dest_ip=0.0.0.0/0` a `:252` restano, **con un commento che dice che restano di proposito**. Il modo
-di fallire è compreso e accettabile: quando la WAN primaria cade, odhcpd ritira il prefisso delegato,
-i client perdono la GUA e Happy Eyeballs ripiega su v4. Degrado, non rottura.
+> ~~**Fino alla Fase 8 compresa, mwan3 resta IPv4**~~ — *superato: la fase è stata fatta.* Il piano
+> prevedeva che `family=ipv4` e `dest_ip=0.0.0.0/0` restassero, accettando un degrado noto: caduta la
+> WAN primaria, odhcpd ritira il prefisso delegato, i client perdono la GUA e Happy Eyeballs ripiega
+> su v4. Era un ripiego ragionevole, e non serve più: le sezioni `<net>6` che la Fase 4 ha creato
+> rendono possibile il failover v6 vero, su tutte le WAN.
 
 Se si fa la fase: gemelli `<wan>6` in `mwan3-setup.sh` con un pool di tracking v6 ruotato dallo stesso
 `pick_track_ips` (`:114-127`); politiche `travel_failover6`/`travel_balance6`; **`travel_default6`
@@ -1208,6 +1209,65 @@ la parola nello stesso momento, non prima. Se questa fase non si fa, i due vinco
 commentati sul posto proprio per questo.
 
 **Nuovo test:** `mwan-rules.test.ts`.
+
+### Esito
+
+`tsc --noEmit` pulito, **472 test su 27 file** (15 nuovi), build a 237 kB, `sh -n` su
+`mwan3-setup.sh`. Sul router tutte e quattro le gemelle esistono già — le ha create la Fase 4 — quindi
+la fase è realizzabile per **ogni** WAN e non solo per `wan`, che era il limite scritto qui sopra.
+
+### `travel_failover6` non esiste, e non poteva esistere
+
+```
+travel_failover    15 caratteri   ← il massimo che mwan3 accetta
+travel_fail6       12
+travel_bal6        11
+o_wwan_radio06     14
+```
+
+mwan3 impone **15 caratteri** ai nomi delle politiche — è il limite dei nomi di catena di iptables —
+e `travel_failover` li usa già tutti. `travel_failover6` ne farebbe 16 e verrebbe **rifiutata in
+silenzio**: la politica non viene applicata e le regole che la usano non fanno niente, esattamente
+come è già successo in questo progetto con `only_wwan_radio0`. Da qui `travel_fail6` e `travel_bal6`,
+e un test che verifica la lunghezza invece di fidarsi.
+
+Per lo stesso motivo il limite sulle politiche per WAN scende da 13 a **12** caratteri: il nome della
+gemella cresce di uno, e `o_wwan_radio06` è già a 14.
+
+### «Nella stessa transazione o in nessuna»
+
+La garanzia c'è, e viene dall'architettura invece che da un meccanismo nuovo: le scritture sono
+`uci set` in staging, e **niente prende effetto finché `applyMwan()` non viene chiamata**. Chi chiama
+la invoca dopo *tutte* le scritture, dentro lo stesso `try`: se una fallisce, l'apply non viene
+raggiunto e non prende effetto niente. Le quattro scritture di una WAN stanno comunque adiacenti nello
+stesso giro di ciclo, così una interruzione lascia al più una WAN disallineata in staging.
+
+`setIfPresent()` salta le gemelle che non esistono: su un router non ancora aggiornato le sezioni
+`<net>6` non ci sono, e trattarne l'assenza come un errore bloccherebbe una modifica IPv4 valida.
+Due test coprono quel router.
+
+### Il vincolo sui tracking IP NON si scioglie, e il piano diceva di sì
+
+Qui sopra è scritto che le sonde si allargano e che il messaggio «Serve almeno un indirizzo IPv4
+valido» perde la parola. **È sbagliato.** Quel campo scrive in `mwan3.<net>`, che è la sezione
+`family=ipv4`: un indirizzo v6 lì dentro verrebbe pingato con `ping` e la WAN risulterebbe caduta per
+sempre. Le sonde v6 stanno nella gemella `<net>6`, e le sceglie `mwan3-setup.sh` da un pool suo —
+devono restare diverse fra le WAN, e non c'è niente da chiedere a chi guarda.
+
+Quello che invece va condiviso sono i **tempi**: `setHealth` scrive intervallo, timeout, conteggi e
+affidabilità su entrambe le sezioni. Sono la stessa decisione — ogni quanto controllare, dopo quanti
+fallimenti dichiararla caduta — e tenerli diversi farebbe cadere le due famiglie in momenti diversi
+sulla stessa WAN.
+
+Si scioglie invece l'altro vincolo: **`isValidTarget` accetta ora entrambe le famiglie**, perché
+`ruleValues` deduce la famiglia dai criteri invece di scrivere sempre `ipv4`.
+
+### `ruleFamily`, e cosa rifiuta
+
+Una regola con `src_ip` v4 e `dest_ip` v6 non è scrivibile: `mwan3.<rule>.family` è un valore solo,
+e scritta comunque uno dei due criteri non combacerebbe mai — una regola che non si applica, in
+silenzio. `ruleFamily` risponde `null`, e `ruleValues` solleva **prima di scrivere qualunque cosa**:
+un test verifica che dopo il rifiuto non ci sia nessuna scrittura in staging.
 
 ---
 

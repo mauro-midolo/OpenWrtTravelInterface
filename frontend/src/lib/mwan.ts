@@ -7,6 +7,8 @@
  */
 
 import { call } from './ubus';
+import { parseCidr } from './ip';
+import type { IpFamily } from './ip';
 import type { VpnPolicy } from './vpn';
 
 export type MwanMode = 'failover' | 'balance' | 'off';
@@ -154,16 +156,24 @@ export async function setDefaultRule(
   sticky: boolean,
   timeout: number,
 ): Promise<void> {
+  const values = {
+    sticky: sticky ? '1' : '0',
+    // mwan3 ignora `timeout` quando sticky e' spento, ma lasciarlo scritto
+    // fa ritrovare il valore precedente se lo sticky viene riacceso.
+    timeout: String(timeout),
+  };
+
   await call('uci', 'set', {
     config: 'mwan3',
     section: 'travel_default',
-    values: {
-      use_policy: mode === 'balance' ? 'travel_balance' : 'travel_failover',
-      sticky: sticky ? '1' : '0',
-      // mwan3 ignora `timeout` quando sticky e' spento, ma lasciarlo scritto
-      // fa ritrovare il valore precedente se lo sticky viene riacceso.
-      timeout: String(timeout),
-    },
+    values: { ...values, use_policy: globalPolicy(mode, 4) },
+  });
+  // La predefinita IPv6 segue la stessa modalita': lasciarla su una politica
+  // diversa manderebbe le due famiglie su WAN diverse, ed e' proprio la cosa
+  // che chi cambia modalita' non si aspetta.
+  await setIfPresent('mwan3', 'travel_default6', {
+    ...values,
+    use_policy: globalPolicy(mode, 6),
   });
 }
 
@@ -179,17 +189,39 @@ export async function setDefaultRule(
 export async function setPriorityOrder(order: string[]): Promise<void> {
   for (let i = 0; i < order.length; i++) {
     const metric = String((i + 1) * 10);
-    await call('uci', 'set', {
-      config: 'mwan3',
-      section: `${order[i]}_f`,
-      values: { metric },
-    });
-    await call('uci', 'set', {
-      config: 'network',
-      section: order[i],
-      values: { metric },
-    });
+    // Le quattro scritture di una WAN stanno adiacenti, e non in quattro cicli
+    // separati. Niente prende effetto finche' `applyMwan()` non viene chiamata,
+    // e chi chiama la invoca dopo TUTTE le scritture, dentro lo stesso `try`:
+    // se una fallisce l'apply non arriva e non prende effetto niente. E' quel
+    // confine a dare il "nella stessa transazione o in nessuna", e priorita'
+    // disallineate fra le due famiglie manderebbero v4 e v6 su WAN diverse -
+    // meta' del web che carica, molto piu' difficile da diagnosticare di un
+    // guasto pulito.
+    await call('uci', 'set', { config: 'mwan3', section: `${order[i]}_f`, values: { metric } });
+    await call('uci', 'set', { config: 'network', section: order[i], values: { metric } });
+    await setIfPresent('mwan3', `${order[i]}6_f`, { metric });
+    await setIfPresent('network', `${order[i]}6`, { metric });
   }
+}
+
+/**
+ * Scrive una sezione solo se esiste.
+ *
+ * Le gemelle IPv6 possono mancare: un router non ancora aggiornato, o una WAN
+ * per cui `setup.sh` non ha potuto creare la `<net>6`. Trattare l'assenza come
+ * un errore bloccherebbe una modifica IPv4 perfettamente valida.
+ */
+async function setIfPresent(
+  config: string,
+  section: string,
+  values: Record<string, string>,
+): Promise<void> {
+  try {
+    await call('uci', 'get', { config, section });
+  } catch {
+    return;
+  }
+  await call('uci', 'set', { config, section, values });
 }
 
 export async function setWeight(network: string, weight: number): Promise<void> {
@@ -198,15 +230,17 @@ export async function setWeight(network: string, weight: number): Promise<void> 
     section: `${network}_b`,
     values: { weight: String(weight) },
   });
+  await setIfPresent('mwan3', `${network}6_b`, { weight: String(weight) });
 }
 
 /** Esclude o riammette una WAN nel multi-WAN, senza spegnere l'interfaccia. */
 export async function setEnabled(network: string, enabled: boolean): Promise<void> {
-  await call('uci', 'set', {
-    config: 'mwan3',
-    section: network,
-    values: { enabled: enabled ? '1' : '0' },
-  });
+  const value = enabled ? '1' : '0';
+  await call('uci', 'set', { config: 'mwan3', section: network, values: { enabled: value } });
+  // Escludere una WAN in una famiglia sola non e' una mezza esclusione: e' una
+  // WAN che continua a portare meta' del traffico dopo che l'utente ha detto di
+  // toglierla.
+  await setIfPresent('mwan3', `${network}6`, { enabled: value });
 }
 
 // --- Regole di instradamento (requisito B) -----------------------------------
@@ -237,8 +271,23 @@ export interface RuleInput {
  * la usano smettono di funzionare senza che l'interfaccia se ne accorga. Con
  * `o_`/`p_` restano 13 caratteri per il nome della WAN.
  */
-export function policyFor(network: string, strict: boolean): string {
-  return `${strict ? 'o' : 'p'}_${network}`;
+export function policyFor(network: string, strict: boolean, family: IpFamily = 4): string {
+  // La politica IPv6 e' quella della gemella `<net>6`, non una variante della
+  // stessa: `mwan3.<sezione>` e' mono-famiglia, e il nome della sezione deve
+  // essere quello di un'interfaccia netifd vera.
+  return `${strict ? 'o' : 'p'}_${network}${family === 6 ? '6' : ''}`;
+}
+
+/**
+ * Le due politiche globali, per famiglia.
+ *
+ * `travel_failover6` non esiste e non puo' esistere: fa 16 caratteri e mwan3
+ * ne impone 15 ai nomi delle politiche, rifiutandole in silenzio. I nomi v6
+ * sono quindi accorciati, e questa funzione e' l'unico posto che lo sa.
+ */
+export function globalPolicy(mode: MwanMode, family: IpFamily = 4): string {
+  if (family === 6) return mode === 'balance' ? 'travel_bal6' : 'travel_fail6';
+  return mode === 'balance' ? 'travel_balance' : 'travel_failover';
 }
 
 /**
@@ -256,10 +305,35 @@ export function parsePolicy(policy: string): { network: string; strict: boolean 
   return null;
 }
 
+/**
+ * La famiglia di una regola, dedotta dai criteri che la definiscono.
+ *
+ * `null` quando i due criteri appartengono a famiglie diverse: una regola con
+ * `src_ip` v4 e `dest_ip` v6 non e' scrivibile, perche' `mwan3.<rule>.family` e'
+ * un valore solo. Scriverla comunque significherebbe che uno dei due criteri
+ * non combacia mai - cioe' una regola che non si applica, in silenzio.
+ */
+export function ruleFamily(input: { src_ip?: string; dest_ip?: string }): IpFamily | null {
+  const families = [input.src_ip, input.dest_ip]
+    .filter((value): value is string => !!value)
+    .map((value) => parseCidr(value)?.addr.family)
+    .filter((family): family is IpFamily => family !== undefined);
+
+  if (families.length === 0) return 4;
+  return families.every((family) => family === families[0]) ? families[0] : null;
+}
+
 function ruleValues(input: RuleInput): Record<string, string> {
+  const family = ruleFamily(input);
+  if (family === null) {
+    throw new Error(
+      'La regola mescola IPv4 e IPv6: mwan3 ne accetta una famiglia sola per regola.',
+    );
+  }
+
   const values: Record<string, string> = {
-    use_policy: policyFor(input.network, input.strict),
-    family: 'ipv4',
+    use_policy: policyFor(input.network, input.strict, family),
+    family: family === 6 ? 'ipv6' : 'ipv4',
     proto: input.proto,
     sticky: input.sticky ? '1' : '0',
   };
@@ -294,11 +368,21 @@ async function moveDefaultRuleLast(defaults: {
   sticky: boolean;
   timeout: number;
 }): Promise<void> {
-  try {
-    await call('uci', 'delete', { config: 'mwan3', section: 'travel_default' });
-  } catch {
-    // Non c'era: la si crea comunque qui sotto.
+  // Le due predefinite si spostano INSIEME in fondo. Ricrearne una sola la
+  // lascerebbe dietro all'altra, e la regola che resta davanti prende tutto il
+  // traffico della sua famiglia: una regola nuova IPv6 non verrebbe mai
+  // raggiunta, in silenzio, mentre la stessa regola in IPv4 funziona.
+  const existed6 = await sectionExists('mwan3', 'travel_default6');
+
+  for (const section of ['travel_default', 'travel_default6']) {
+    if (section === 'travel_default6' && !existed6) continue;
+    try {
+      await call('uci', 'delete', { config: 'mwan3', section });
+    } catch {
+      // Non c'era: la si crea comunque qui sotto.
+    }
   }
+
   await call('uci', 'add', {
     config: 'mwan3',
     type: 'rule',
@@ -306,11 +390,39 @@ async function moveDefaultRuleLast(defaults: {
     values: {
       dest_ip: '0.0.0.0/0',
       family: 'ipv4',
-      use_policy: defaults.mode === 'balance' ? 'travel_balance' : 'travel_failover',
+      use_policy: globalPolicy(defaults.mode, 4),
       sticky: defaults.sticky ? '1' : '0',
       timeout: String(defaults.timeout),
     },
   });
+
+  // Solo se c'era: su un router non ancora aggiornato la predefinita v6 non
+  // esiste, e inventarla qui vorrebbe dire creare una regola che punta a una
+  // politica che `mwan3-setup.sh` non ha ancora scritto.
+  if (existed6) {
+    await call('uci', 'add', {
+      config: 'mwan3',
+      type: 'rule',
+      name: 'travel_default6',
+      values: {
+        dest_ip: '::/0',
+        family: 'ipv6',
+        use_policy: globalPolicy(defaults.mode, 6),
+        sticky: defaults.sticky ? '1' : '0',
+        timeout: String(defaults.timeout),
+      },
+    });
+  }
+}
+
+/** Vero se la sezione uci esiste. `uci get` su una che non c'e' e' un errore. */
+async function sectionExists(config: string, section: string): Promise<boolean> {
+  try {
+    await call('uci', 'get', { config, section });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function addRule(
@@ -370,17 +482,30 @@ export async function setHealth(network: string, settings: HealthSettings): Prom
     Math.max(1, settings.track_ip.length),
   );
 
+  const timings = {
+    interval: String(settings.interval),
+    timeout: String(settings.timeout),
+    count: String(settings.count),
+    up: String(settings.up),
+    down: String(settings.down),
+    reliability: String(reliability),
+  };
+
   await call('uci', 'set', {
     config: 'mwan3',
     section: network,
-    values: {
-      track_ip: settings.track_ip,
-      interval: String(settings.interval),
-      timeout: String(settings.timeout),
-      count: String(settings.count),
-      up: String(settings.up),
-      down: String(settings.down),
-      reliability: String(reliability),
-    },
+    values: { ...timings, track_ip: settings.track_ip },
   });
+
+  // Alla gemella IPv6 vanno i TEMPI ma non gli indirizzi.
+  //
+  // I tempi sono la stessa decisione - ogni quanto controllare, dopo quanti
+  // fallimenti dichiararla caduta - e tenerli diversi farebbe cadere le due
+  // famiglie in momenti diversi sulla stessa WAN.
+  //
+  // Gli indirizzi no: la sezione v6 ha `family=ipv6` e li pinga con `ping6`,
+  // quindi un indirizzo v4 li' dentro la terrebbe caduta per sempre. Il suo
+  // pool lo scrive `mwan3-setup.sh`, ed e' anche il motivo per cui il campo
+  // dell'interfaccia continua a chiedere indirizzi IPv4.
+  await setIfPresent('mwan3', `${network}6`, timings);
 }

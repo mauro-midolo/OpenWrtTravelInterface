@@ -359,20 +359,19 @@ export function MwanSheet({
 }
 
 /**
- * Accetta un indirizzo o una sottorete: "192.168.1.5" oppure "10.0.0.0/8".
+ * Accetta un indirizzo o una sottorete, in entrambe le famiglie:
+ * "192.168.1.5", "10.0.0.0/8", "2001:db8::1", "fd00::/64".
  *
- * Passa da parseCidr invece che da una regex sul prefisso, e ci guadagna due
- * cose: /33 non e' piu' accettato, e il prefisso viene convalidato sulla
- * famiglia dell'indirizzo invece che su un massimo scritto a mano.
+ * Passa da parseCidr e non da una regex sul prefisso: /33 non e' accettato, e
+ * il prefisso viene convalidato sulla famiglia dell'indirizzo invece che su un
+ * massimo scritto a mano - una regex non saprebbe esprimere /128.
  *
- * Resta pero' IPv4 soltanto, ed e' voluto: ruleValues scrive `family='ipv4'` su
- * ogni regola mwan3, quindi una regola con un dest_ip v6 verrebbe scritta e non
- * combacerebbe mai - un guasto silenzioso, che e' il tipo peggiore. Il vincolo
- * cade quando mwan3 diventa dual-stack, non prima.
+ * Il vincolo a IPv4 e' caduto ora che mwan3 ha le sezioni gemelle: `ruleValues`
+ * deduce la famiglia dai criteri invece di scrivere sempre `ipv4`. Quello che
+ * resta rifiutato e' una regola che le MESCOLA, e lo rifiuta `ruleFamily`.
  */
 function isValidTarget(value: string): boolean {
-  const target = parseCidr(value);
-  return target !== null && target.addr.family === 4;
+  return parseCidr(value) !== null;
 }
 
 /** Accetta "443" oppure "5000-5100". */
@@ -682,9 +681,14 @@ export function HealthSheet({
   // La lambda non e' rumore: `ips.every(isValidIp)` passerebbe a isValidIp
   // l'INDICE come secondo argomento, cioe' convaliderebbe il primo indirizzo
   // contro la "famiglia 0" e il secondo contro la "famiglia 1", rifiutandoli
-  // entrambi. La famiglia si scrive qui, esplicita: mwan3 controlla queste
-  // sonde con un ping IPv4, quindi un indirizzo v6 farebbe risultare la WAN
-  // sempre caduta.
+  // entrambi.
+  //
+  // E la famiglia resta IPv4 anche ora che mwan3 e' dual-stack, perche' questi
+  // indirizzi finiscono in `mwan3.<net>`, che e' la sezione `family=ipv4`: un
+  // indirizzo v6 li' dentro verrebbe pingato con `ping` e la WAN risulterebbe
+  // caduta per sempre. Le sonde v6 stanno nella gemella `<net>6` e le sceglie
+  // `mwan3-setup.sh` da un pool suo, perche' devono restare diverse fra le WAN
+  // e non c'e' niente da chiedere a chi guarda.
   const ipsOk = ips.length >= 1 && ips.every((ip) => isValidIp(ip, 4));
   const numsOk = [interval, timeout, down, up].every((v) => /^\d+$/.test(v) && Number(v) >= 1);
 
