@@ -395,6 +395,28 @@ ipv6_addresses() {
 	done
 }
 
+# Indirizzi del router dentro i prefissi assegnati a un'interfaccia.
+#
+# E' `ipv6-prefix-assignment` e non `ipv6-address` a contenere il prefisso che
+# la LAN usa davvero: il primo e' cio' che le e' stato assegnato - dalla delega
+# DHCPv6-PD del provider o dall'ULA del router - e `local-address` e'
+# l'indirizzo che il router ci tiene dentro.
+#
+# Guardare solo `ipv6-address` non basta e non e' un caso limite: su un router
+# senza upstream v6 quello e' VUOTO mentre questo no, quindi la LAN
+# sembrerebbe senza IPv6 mentre i client ne hanno uno e comunicano.
+ipv6_prefix_addresses() {
+	local entry addr mask
+
+	printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix-assignment"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@["local-address"].address' 2>/dev/null)
+		[ -n "$addr" ] || continue
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@["local-address"].mask' 2>/dev/null)
+		printf '%s/%s\n' "$addr" "${mask:-64}"
+	done
+}
+
 # Prefisso delegato dal provider, come "prefisso/lunghezza", vuoto se non c'e'.
 #
 # E' quello da cui la LAN ricava il proprio /64: vederlo sulla riga della WAN
@@ -1242,6 +1264,36 @@ method_lan() {
 
 	json_add_string  netmask    "$(uci -q get network.lan.netmask || echo 255.255.255.0)"
 
+	# Indirizzi IPv6 COL PREFISSO ATTACCATO, al contrario di quelli v4 che
+	# escono nudi: quelli alimentano un campo di input e la maschera li' non ci
+	# deve stare, questi una riga di sola lettura in cui il prefisso e' la meta'
+	# informativa. Unione deduplicata delle due letture, che su un router senza
+	# upstream v6 danno risultati diversi.
+	json_add_array addresses6
+	for entry in $({ ipv6_addresses "$netstat"; ipv6_prefix_addresses "$netstat"; } | awk '!seen[$0]++'); do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	# Il prefisso ULA del router: non lo genera questo pacchetto - lo fa OpenWrt
+	# alla prima accensione - e puo' mancare, quindi chi lo legge non deve darlo
+	# per scontato.
+	json_add_string  ula        "$(uci -q get network.globals.ula_prefix)"
+
+	# RA e DHCPv6 escono GREZZI, uno per uno, e non come una "modalita'".
+	# Ridurli qui a tre nomi vorrebbe dire decidere sul router cosa mostrare, e
+	# perdere il caso in cui la configurazione non e' nessuna delle tre: quello
+	# va visto e non sovrascritto, ed e' `matchRaMode` in lan.ts a riconoscerlo.
+	json_add_string  ra         "$(uci -q get dhcp.lan.ra)"
+	json_add_string  dhcpv6     "$(uci -q get dhcp.lan.dhcpv6)"
+	json_add_string  ra_slaac   "$(uci -q get dhcp.lan.ra_slaac)"
+	json_add_string  ra_default "$(uci -q get dhcp.lan.ra_default)"
+	json_add_array ra_flags
+	for entry in $(uci -q get dhcp.lan.ra_flags); do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
 	json_add_object dhcp
 	json_add_string  start      "$(uci -q get dhcp.lan.start || echo 100)"
 	json_add_string  limit      "$(uci -q get dhcp.lan.limit || echo 150)"
@@ -1255,6 +1307,17 @@ method_lan() {
 	json_add_array dns_client
 	for entry in $(printf '%s' "$dns_client" | tr ',' ' '); do
 		[ -n "$entry" ] && json_add_string "" "$entry"
+	done
+	json_close_array
+
+	# I DNS v6 annunciati ai client NON stanno in `dhcp_option`: quella e'
+	# un'opzione DHCPv4 e un indirizzo v6 li' dentro non arriverebbe a nessuno.
+	# Vivono in `dhcp.lan.dns`, una lista che legge odhcpd e che finisce sia nel
+	# campo RDNSS dell'RA sia nella risposta DHCPv6. Sono due elenchi separati
+	# perche' sono due meccanismi separati.
+	json_add_array dns_client6
+	for entry in $(uci -q get dhcp.lan.dns); do
+		json_add_string "" "$entry"
 	done
 	json_close_array
 

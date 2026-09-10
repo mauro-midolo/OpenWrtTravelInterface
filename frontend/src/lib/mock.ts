@@ -276,8 +276,21 @@ const lanState = {
   start: '100',
   limit: '150',
   dnsClient: [] as string[],
+  dnsClient6: [] as string[],
   dnsUpstream: [] as string[],
   dhcpOptions: [] as string[],
+  // La LAN ha il solo ULA, come un router senza upstream v6: e' lo stato in
+  // cui si trova davvero un router da viaggio in un albergo v4-only.
+  addresses6: ['fd66:67c3:698b::1/60'],
+  ula: 'fd66:67c3:698b::/48',
+  // La riga "Automatico" della tabella, con ra_slaac ASSENTE: e' esattamente
+  // come nasce un router OpenWrt, ed e' il caso che matchRaMode deve
+  // riconoscere invece di chiamare "Personalizzato".
+  ra: 'server',
+  dhcpv6: 'server',
+  raFlags: ['managed-config', 'other-config'],
+  raSlaac: '',
+  raDefault: '',
 };
 
 /**
@@ -1722,10 +1735,18 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     addresses: [...lanState.addresses],
     netmask: lanState.netmask,
     dhcp: { start: lanState.start, limit: lanState.limit, leasetime: '12h', ignore: false },
+    addresses6: [...lanState.addresses6],
+    ula: lanState.ula,
     dns_client: [...lanState.dnsClient],
+    dns_client6: [...lanState.dnsClient6],
     dns_upstream: [...lanState.dnsUpstream],
     dnsmasq_section: 'cfg01411c',
     dhcp_options: [...lanState.dhcpOptions],
+    ra: lanState.ra,
+    dhcpv6: lanState.dhcpv6,
+    ra_flags: [...lanState.raFlags],
+    ra_slaac: lanState.raSlaac,
+    ra_default: lanState.raDefault,
   }),
 
   // Multi-WAN: la 5 GHz online e preferita, la 2.4 online di riserva, la porta
@@ -2051,8 +2072,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     if (args.config === 'dhcp' && args.option) {
       const option = String(args.option);
       pending.push(() => {
-        if (option === 'dhcp_option') lanState.dhcpOptions = [];
+        if (option === 'dhcp_option') {
+          lanState.dhcpOptions = [];
+          lanState.dnsClient = [];
+        }
         if (option === 'server') lanState.dnsUpstream = [];
+        if (option === 'dns') lanState.dnsClient6 = [];
+        // "Spento" cancella i flag invece di scriverli vuoti, ed e' la stessa
+        // distinzione di tutte le altre liste qui sopra.
+        if (option === 'ra_flags') lanState.raFlags = [];
+        if (option === 'ra_slaac') lanState.raSlaac = '';
       });
       return {};
     }
@@ -2298,6 +2327,14 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           lanState.dnsClient = six ? six.slice(2).split(',') : [];
         }
         if (Array.isArray(raw.server)) lanState.dnsUpstream = raw.server.map(String);
+        // `dhcp.lan.dns` e' la lista dei DNS v6, quella che legge odhcpd: e'
+        // un'opzione diversa da `dhcp_option`, e qui restano diverse.
+        if (Array.isArray(raw.dns)) lanState.dnsClient6 = raw.dns.map(String);
+        if (typeof raw.ra === 'string') lanState.ra = raw.ra;
+        if (typeof raw.dhcpv6 === 'string') lanState.dhcpv6 = raw.dhcpv6;
+        if (typeof raw.ra_default === 'string') lanState.raDefault = raw.ra_default;
+        if (Array.isArray(raw.ra_flags)) lanState.raFlags = raw.ra_flags.map(String);
+        if (typeof raw.ra_slaac === 'string') lanState.raSlaac = raw.ra_slaac;
       });
       return {};
     }

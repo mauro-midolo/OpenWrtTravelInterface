@@ -15,7 +15,7 @@
  */
 
 import { call } from './ubus';
-import { overlaps, parseIp, subnetOfMask } from './ip';
+import { isValidIp, overlaps, parseIp, subnetOfMask } from './ip';
 import { normalizeMac } from './wifi';
 
 export interface LanDhcp {
@@ -32,21 +32,161 @@ export interface LanConfig {
   addresses: string[];
   netmask: string;
   dhcp: LanDhcp;
+  /**
+   * Indirizzi IPv6 del router sulla LAN, COL PREFISSO attaccato.
+   *
+   * Al contrario di `addresses`, che escono nudi perche' alimentano un campo di
+   * input: questi vanno in una riga di sola lettura, e li' il prefisso e' la
+   * meta' informativa.
+   */
+  addresses6: string[];
+  /** Prefisso ULA del router, vuoto se OpenWrt non l'ha generato. */
+  ula: string;
   /** DNS annunciati ai client via DHCP. Vuoto = il router stesso. */
   dns_client: string[];
+  /** DNS v6 annunciati ai client, da `dhcp.lan.dns` (li legge odhcpd). */
+  dns_client6: string[];
   /** Resolver che usa il router. Vuoto = quelli che arrivano dalla WAN. */
   dns_upstream: string[];
   /** Nome reale della sezione dnsmasq: `@dnsmasq[0]` non e' accettato da ubus. */
   dnsmasq_section: string;
   /** Tutte le dhcp_option, per riscrivere solo la 6 senza perdere le altre. */
   dhcp_options: string[];
+  /** Valori grezzi di RA e DHCPv6: la modalita' la deduce `matchRaMode`. */
+  ra: string;
+  dhcpv6: string;
+  ra_flags: string[];
+  ra_slaac: string;
+  ra_default: string;
 }
 
+/** La LAN come arriva dall'rpcd, dove i campi nuovi possono mancare. */
+type RawLan = Omit<
+  LanConfig,
+  'addresses6' | 'ula' | 'dns_client6' | 'ra' | 'dhcpv6' | 'ra_flags' | 'ra_slaac' | 'ra_default'
+> &
+  Partial<
+    Pick<
+      LanConfig,
+      'addresses6' | 'ula' | 'dns_client6' | 'ra' | 'dhcpv6' | 'ra_flags' | 'ra_slaac' | 'ra_default'
+    >
+  >;
+
 export async function getLan(): Promise<LanConfig> {
-  const lan = await call<LanConfig>('travel', 'lan');
-  // Normalizzato al confine: da qui in giu' un indirizzo e' un indirizzo, mai
-  // un indirizzo con la maschera attaccata.
-  return { ...lan, addresses: (lan.addresses ?? []).map(stripPrefix) };
+  const lan = await call<RawLan>('travel', 'lan');
+  // Normalizzato al confine: da qui in giu' un indirizzo v4 e' un indirizzo,
+  // mai un indirizzo con la maschera attaccata. Quelli v6 invece il prefisso lo
+  // tengono, ed e' voluto.
+  return {
+    ...lan,
+    addresses: (lan.addresses ?? []).map(stripPrefix),
+    addresses6: lan.addresses6 ?? [],
+    ula: lan.ula ?? '',
+    dns_client6: lan.dns_client6 ?? [],
+    ra: lan.ra ?? '',
+    dhcpv6: lan.dhcpv6 ?? '',
+    ra_flags: lan.ra_flags ?? [],
+    ra_slaac: lan.ra_slaac ?? '',
+    ra_default: lan.ra_default ?? '',
+  };
+}
+
+// --- RA e DHCPv6 --------------------------------------------------------------
+
+/**
+ * Come il router annuncia IPv6 ai dispositivi: tre scelte, non sette manopole.
+ *
+ * `custom` non e' una scelta offerta: e' cio' che si risponde quando la
+ * configurazione sul router non e' nessuna delle tre. In quel caso la
+ * schermata mostra i valori grezzi e si RIFIUTA di sovrascriverli - stessa
+ * regola di `matchDnsProvider`: non si mostra mai uno stato in cui il router
+ * non e'.
+ */
+export type RaMode = 'auto' | 'slaac' | 'off' | 'custom';
+
+export interface RaOption {
+  id: RaMode;
+  label: string;
+  hint: string;
+}
+
+export const RA_OPTIONS: RaOption[] = [
+  {
+    id: 'auto',
+    label: 'Automatico (consigliato)',
+    hint: 'SLAAC e DHCPv6 insieme. E’ il default di OpenWrt, ed e’ l’unica combinazione in cui Android — che fa solo SLAAC — e Windows — che preferisce DHCPv6 — funzionano entrambi.',
+  },
+  {
+    id: 'slaac',
+    label: 'Solo SLAAC',
+    hint: 'I dispositivi si scelgono l’indirizzo da soli. Il router non ne assegna e non ne tiene un elenco.',
+  },
+  {
+    id: 'off',
+    label: 'Spento',
+    hint: 'Nessun annuncio IPv6 ai dispositivi. E’ la risposta a “IPv6 mi ha rotto la connessione in albergo”.',
+  },
+];
+
+/** I valori uci di ogni modalita'. `null` significa cancellare l'opzione. */
+interface RaValues {
+  ra: string;
+  dhcpv6: string;
+  ra_flags: string[] | null;
+  ra_slaac: string | null;
+}
+
+/**
+ * Una funzione sola a decidere cosa scrive ogni modalita'.
+ *
+ * Averle sparse fra la scrittura e la rilettura e' il modo in cui le due si
+ * disallineano: si scriverebbe una combinazione che poi `matchRaMode` non
+ * riconosce piu', e la schermata direbbe "Personalizzato" subito dopo aver
+ * salvato.
+ */
+export function raValues(mode: Exclude<RaMode, 'custom'>): RaValues {
+  if (mode === 'auto') {
+    return {
+      ra: 'server',
+      dhcpv6: 'server',
+      ra_flags: ['managed-config', 'other-config'],
+      ra_slaac: '1',
+    };
+  }
+  if (mode === 'slaac') {
+    return { ra: 'server', dhcpv6: 'disabled', ra_flags: ['other-config'], ra_slaac: '1' };
+  }
+  return { ra: 'disabled', dhcpv6: 'disabled', ra_flags: null, ra_slaac: null };
+}
+
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * Quale modalita' descrive la configurazione attuale, o `custom`.
+ *
+ * `ra_slaac` assente vale `1`, che e' il default di odhcpd: un router appena
+ * installato quell'opzione non ce l'ha scritta, e pretenderla renderebbe
+ * "Personalizzato" la configurazione piu' comune che esista.
+ */
+export function matchRaMode(lan: LanConfig): RaMode {
+  const slaac = lan.ra_slaac === '' ? '1' : lan.ra_slaac;
+
+  for (const id of ['auto', 'slaac', 'off'] as const) {
+    const want = raValues(id);
+    if (lan.ra !== want.ra || lan.dhcpv6 !== want.dhcpv6) continue;
+    if (want.ra_flags === null) {
+      // Spento: dei flag non importa niente, perche' senza RA non si annuncia
+      // niente comunque, e pretenderli vuoti renderebbe "Personalizzato" un
+      // router spento che si porta dietro i flag di prima.
+      return id;
+    }
+    if (!sameList(lan.ra_flags, want.ra_flags)) continue;
+    if (want.ra_slaac !== null && slaac !== want.ra_slaac) continue;
+    return id;
+  }
+  return 'custom';
 }
 
 // --- Conflitti con le reti a monte --------------------------------------------
@@ -179,13 +319,42 @@ export interface DnsProvider {
   id: string;
   label: string;
   servers: string[];
+  /**
+   * Gli indirizzi v6 dello stesso fornitore.
+   *
+   * Vuoto per `auto` e `custom`, che fornitori non sono. Le voci dei fornitori
+   * scrivono SEMPRE tutte e due le famiglie e mai la sola v6: un resolver v6 e'
+   * raggiungibile solo con una WAN v6, e offrirlo da solo darebbe una
+   * configurazione che smette di risolvere appena si cambia albergo.
+   */
+  servers6?: string[];
 }
 
 const PROVIDERS: DnsProvider[] = [
-  { id: 'google', label: 'Google DNS', servers: ['8.8.8.8', '8.8.4.4'] },
-  { id: 'cloudflare', label: 'Cloudflare', servers: ['1.1.1.1', '1.0.0.1'] },
-  { id: 'quad9', label: 'Quad9', servers: ['9.9.9.9', '149.112.112.112'] },
-  { id: 'adguard', label: 'AdGuard DNS', servers: ['94.140.14.14', '94.140.15.15'] },
+  {
+    id: 'google',
+    label: 'Google DNS',
+    servers: ['8.8.8.8', '8.8.4.4'],
+    servers6: ['2001:4860:4860::8888', '2001:4860:4860::8844'],
+  },
+  {
+    id: 'cloudflare',
+    label: 'Cloudflare',
+    servers: ['1.1.1.1', '1.0.0.1'],
+    servers6: ['2606:4700:4700::1111', '2606:4700:4700::1001'],
+  },
+  {
+    id: 'quad9',
+    label: 'Quad9',
+    servers: ['9.9.9.9', '149.112.112.112'],
+    servers6: ['2620:fe::fe', '2620:fe::9'],
+  },
+  {
+    id: 'adguard',
+    label: 'AdGuard DNS',
+    servers: ['94.140.14.14', '94.140.15.15'],
+    servers6: ['2a10:50c0::ad1:ff', '2a10:50c0::ad2:ff'],
+  },
 ];
 
 /** Opzioni per i DNS annunciati ai dispositivi: l'automatico e' il router. */
@@ -208,19 +377,89 @@ export const ROUTER_DNS_OPTIONS: DnsProvider[] = [
  * La tendina mostra sempre lo stato reale: far comparire un fornitore che non e'
  * quello in uso farebbe credere di avere una configurazione che non si ha.
  */
+/**
+ * Confronta SOLO la lista v4, e tratta quella v6 come derivata.
+ *
+ * Non e' pigrizia: un router configurato da una versione precedente
+ * dell'interfaccia ha i v4 di Cloudflare e nessun v6, e pretendere anche quelli
+ * gli farebbe mostrare "Personalizzato" al posto del fornitore che ha davvero.
+ * Quale sia la meta' v6 lo dice la voce del fornitore, non il router.
+ */
 export function matchDnsProvider(servers: string[], options: DnsProvider[]): string {
   if (servers.length === 0) return 'auto';
 
+  // Solo la meta' v4: i resolver del router stanno in una lista sola con
+  // entrambe le famiglie, e confrontarla intera non combacerebbe con nessun
+  // fornitore, che di indirizzi v4 ne dichiara due.
+  const v4 = servers.filter((s) => parseIp(s)?.family === 4);
+
   for (const option of options) {
     if (option.servers.length === 0) continue;
-    if (
-      option.servers.length === servers.length &&
-      option.servers.every((s, i) => s === servers[i])
-    ) {
+    if (option.servers.length === v4.length && option.servers.every((s, i) => s === v4[i])) {
       return option.id;
     }
   }
   return 'custom';
+}
+
+/**
+ * I DNS annunciati ai dispositivi, tutti insieme.
+ *
+ * Le due famiglie vivono in due opzioni uci diverse - `dhcp_option 6` e
+ * `dhcp.lan.dns` - ma nell'interfaccia sono UNA scelta sola, e lo stato della
+ * schermata va costruito su tutte e due.
+ *
+ * Leggerne una sola non e' un'imprecisione, e' una perdita di dati: la meta'
+ * non letta resta fuori dallo stato della schermata, e siccome il salvataggio
+ * riscrive comunque entrambe le opzioni, un salvataggio qualunque - anche solo
+ * per spostare il pool DHCP - cancellerebbe i DNS IPv6 gia' configurati senza
+ * che nessuno l'abbia chiesto.
+ */
+export function clientDns(lan: LanConfig): string[] {
+  return [...lan.dns_client, ...lan.dns_client6];
+}
+
+/**
+ * Se la scelta dei DNS si puo' modificare da questa schermata.
+ *
+ * I campi liberi sono DUE. Una lista scelta a mano piu' lunga di due voci non
+ * ci sta dentro, e mostrarne solo le prime due non sarebbe una semplificazione
+ * innocua: al salvataggio si riscriverebbe la lista troncata e il resto
+ * sparirebbe senza che niente lo dica. Con le due famiglie separate il caso e'
+ * diventato normale - due resolver v4 piu' uno v6 fanno gia' tre voci - mentre
+ * prima serviva configurare a mano tre DNS v4.
+ *
+ * Un fornitore riconosciuto e' sempre modificabile, per lunga che sia la lista:
+ * li' le voci non sono un dato da conservare, sono la definizione della scelta.
+ *
+ * Stessa regola di `matchRaMode`: una configurazione che non si sa
+ * rappresentare si mostra com'e' e non si tocca.
+ */
+export function dnsEditable(current: string[], options: DnsProvider[]): boolean {
+  return matchDnsProvider(current, options) !== 'custom' || current.length <= 2;
+}
+
+/**
+ * Se i due campi liberi dei DNS contengono qualcosa che si puo' salvare.
+ *
+ * Il controllo vale **solo** quando quei campi si possono davvero modificare.
+ * Un elenco che la schermata mostra e non tocca non ha nessun diritto di
+ * bloccare il salvataggio del resto della rete locale: i suoi valori non
+ * vengono scritti, e chi guarda non ha nemmeno un campo dove correggerli - il
+ * pulsante resterebbe spento senza spiegare perche'.
+ *
+ * Il caso non e' teorico: `dhcp.<sezione>.server` accetta forme che indirizzi
+ * non sono, come `/example.com/192.168.1.1` per risolvere un dominio con un
+ * resolver dedicato. Sono configurazioni legittime, e `isValidIp` le rifiuta.
+ */
+export function dnsFieldsOk(
+  editable: boolean,
+  mode: string,
+  one: string,
+  two: string,
+): boolean {
+  if (!editable || mode !== 'custom') return true;
+  return isValidIp(one) && (two === '' || isValidIp(two));
 }
 
 export function dnsProvider(id: string, options: DnsProvider[]): DnsProvider | undefined {
@@ -233,8 +472,23 @@ export interface LanSettings {
   poolFrom: number;
   /** Ultimo ottetto dell'ultimo indirizzo assegnato. */
   poolTo: number;
-  dnsClient: string[];
-  dnsUpstream: string[];
+  /**
+   * DNS v4 annunciati ai dispositivi. `null` significa **non toccare**.
+   *
+   * Il `null` non e' un vezzo: la schermata mostra due campi, e una
+   * configurazione che non ci sta dentro non si sovrascrive. Vedi `dnsEditable`.
+   */
+  dnsClient: string[] | null;
+  /**
+   * DNS v6 annunciati ai dispositivi, e lo stesso `null`.
+   *
+   * Lista separata da `dnsClient` perche' finisce in un posto separato, e la
+   * separazione e' l'intero punto: vedi la scrittura in `stageLan`.
+   */
+  dnsClient6: string[] | null;
+  dnsUpstream: string[] | null;
+  /** Modalita' di annuncio IPv6. `custom` non si scrive mai. */
+  raMode: RaMode;
 }
 
 export interface PoolProblem {
@@ -328,25 +582,91 @@ export async function stageLan(
     },
   });
 
+  // I DNS annunciati ai dispositivi si scrivono in DUE posti indipendenti, e
+  // non e' una ridondanza: sono due protocolli diversi.
+  //
+  // `dhcp_option 6,<csv>` e' DHCPv4 e SOLO DHCPv4. Un indirizzo IPv6 li' dentro
+  // non annuncia niente a nessuno, e non si limita a essere inutile: dnsmasq
+  // puo' rifiutare l'INTERA lista per una voce che non gli piace, quindi si
+  // romperebbero anche i DNS v4 mentre si crede di aggiungerne. Per questo qui
+  // entra solo `dnsClient`, che la schermata convalida come v4.
+  //
+  // I DNS v6 vivono in `dhcp.lan.dns`, una lista che legge odhcpd - non dnsmasq
+  // - e che finisce sia nel campo RDNSS dell'RA sia nella risposta DHCPv6.
+  //
   // Si sostituisce solo l'opzione 6, davvero: le altre dhcp_option vengono
   // rimesse com'erano invece di sparire.
-  const others = (current.dhcp_options ?? []).filter((o) => !o.startsWith('6,'));
-  const options =
-    settings.dnsClient.length > 0 ? [...others, `6,${settings.dnsClient.join(',')}`] : others;
+  // `null` significa "non toccare": la schermata non e' riuscita a
+  // rappresentare quella lista, quindi non ha nessun diritto di riscriverla.
+  if (settings.dnsClient !== null) {
+    const others = (current.dhcp_options ?? []).filter((o) => !o.startsWith('6,'));
+    const options =
+      settings.dnsClient.length > 0 ? [...others, `6,${settings.dnsClient.join(',')}`] : others;
 
-  if (options.length > 0) {
-    await write('DNS annunciati ai dispositivi', {
+    if (options.length > 0) {
+      await write('DNS annunciati ai dispositivi', {
+        config: 'dhcp',
+        section: 'lan',
+        values: { dhcp_option: options },
+      });
+    } else {
+      await clear('dhcp', 'lan', 'dhcp_option');
+    }
+  }
+
+  if (settings.dnsClient6 !== null) {
+    if (settings.dnsClient6.length > 0) {
+      await write('DNS IPv6 annunciati ai dispositivi', {
+        config: 'dhcp',
+        section: 'lan',
+        values: { dns: settings.dnsClient6 },
+      });
+    } else {
+      // Cancellata, non scritta vuota: e' la stessa regola delle altre liste, e
+      // uci una lista vuota non la accetta comunque.
+      await clear('dhcp', 'lan', 'dns');
+    }
+  }
+
+  // RA e DHCPv6. `custom` non si scrive MAI: significa che il router e' in una
+  // configurazione che non e' nessuna delle tre, e sovrascriverla vorrebbe dire
+  // buttare via una scelta fatta altrove senza che nessuno l'abbia chiesto.
+  if (settings.raMode !== 'custom') {
+    const ra = raValues(settings.raMode);
+    await write('annunci IPv6 ai dispositivi', {
       config: 'dhcp',
       section: 'lan',
-      values: { dhcp_option: options },
+      // `ra_default` resta fisso a 0 e non ha un interruttore. A 1 il router si
+      // annuncerebbe come gateway v6 predefinito ANCHE senza un upstream v6:
+      // i client proverebbero a uscire da una strada che non porta da nessuna
+      // parte, e IPv6 sparirebbe in ogni rete v4-only.
+      values: { ra: ra.ra, dhcpv6: ra.dhcpv6, ra_default: '0' },
     });
-  } else {
-    await clear('dhcp', 'lan', 'dhcp_option');
+
+    if (ra.ra_flags === null) {
+      await clear('dhcp', 'lan', 'ra_flags');
+    } else {
+      await write('annunci IPv6 ai dispositivi', {
+        config: 'dhcp',
+        section: 'lan',
+        values: { ra_flags: ra.ra_flags },
+      });
+    }
+
+    if (ra.ra_slaac === null) {
+      await clear('dhcp', 'lan', 'ra_slaac');
+    } else {
+      await write('annunci IPv6 ai dispositivi', {
+        config: 'dhcp',
+        section: 'lan',
+        values: { ra_slaac: ra.ra_slaac },
+      });
+    }
   }
 
   // La sezione dnsmasq ha un nome anonimo reale: "@dnsmasq[0]" e' comodo da
   // riga di comando ma non e' quello che accetta `uci set` via ubus.
-  if (current.dnsmasq_section) {
+  if (current.dnsmasq_section && settings.dnsUpstream !== null) {
     if (settings.dnsUpstream.length > 0) {
       await write('DNS usati dal router', {
         config: 'dhcp',

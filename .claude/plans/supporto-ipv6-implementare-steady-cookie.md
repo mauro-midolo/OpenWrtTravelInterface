@@ -658,7 +658,7 @@ PowerShell è rotto** finché non viene sistemato. Aggirato trasferendo il tar c
 
 ---
 
-## Fase 5 — LAN IPv6
+## Fase 5 — LAN IPv6 ✅ *(fatta il 2026-09-10)*
 
 *Sbloccata: la risposta 1 della Fase 0 ha confermato che il kill switch è già dual-family.*
 
@@ -702,7 +702,7 @@ configurato dalla UI precedente mostrerebbe "Personalizzato" invece di "Cloudfla
 I resolver del router (`dhcp.<dnsmasq_section>.server`) accettano v6 senza sintassi speciale: basta
 la `isValidIp` allargata — **già fatto in Fase 2**.
 
-**Due vincoli della Fase 2 vanno tolti qui**, e vanno tolti insieme, perché il primo senza il secondo
+**~~Due vincoli della Fase 2 vanno tolti qui~~ — fatto**, e vanno tolti insieme, perché il primo senza il secondo
 lascia la schermata a dire il falso: in `Lan.tsx`, la validazione `isValidIp(clientOne, 4)` diventa
 libera e la `<DnsChoice ipv6={false}>` della lista *client* diventa `ipv6`. Il testo del campo
 ("Solo indirizzi IPv4: ...") sparisce con loro. Nessuno dei due va toccato **prima** che
@@ -719,6 +719,129 @@ di permesso opaco.
 **Nuovi test:** `lan-ra.test.ts` (le tre modalità e il round-trip di `matchRaMode`, `'custom'` per
 una combinazione non riconosciuta) e `lan-dns.test.ts` (**nessun letterale v6 compare mai in
 `dhcp_option`**, e `dhcp.lan.dns` vuota viene cancellata).
+
+### Esito
+
+`tsc --noEmit` pulito, **393 test su 22 file** (41 nuovi), build a 234 kB, `sh -n` sull'rpcd.
+`method_lan` è stato provato **sul router vero**, e restituisce:
+
+```json
+"addresses6": ["fd66:67c3:698b::1/60"],  "ula": "fd66:67c3:698b::/48",
+"ra": "server",  "dhcpv6": "server",  "ra_slaac": "",  "ra_default": "",
+"ra_flags": ["managed-config", "other-config"],  "dns_client6": []
+```
+
+**La lettura conferma perché `ipv6-prefix-assignment` era la scelta giusta**: su questo router
+`ipv6-address` è **vuoto** — non c'è upstream v6 — mentre l'assegnazione c'è, e da lì esce l'unico
+indirizzo v6 che la LAN ha davvero. Leggere solo `ipv6-address`, che è la cosa che verrebbe naturale,
+avrebbe mostrato una LAN senza IPv6 mentre i client ne hanno uno e comunicano.
+
+E conferma anche la nota della Fase 0: `ra_slaac` e `ra_default` sono **assenti**, non vuote. Per
+questo `matchRaMode` tratta l'assenza come `1` — altrimenti avrebbe risposto `'custom'` sulla
+configurazione più comune che esista, cioè un router OpenWrt appena installato.
+
+**ACL verificato, non assunto:** `acl.d/travel.json:19` ha già `dhcp` in scrittura. Niente da
+toccare, come previsto.
+
+### Scelte prese qui, non nel piano
+
+- **`raValues()` è la sola funzione che sa cosa scrive ogni modalità**, e `matchRaMode` la rilegge
+  invece di avere una tabella propria. Due copie della tabella sono il modo in cui scrittura e
+  rilettura si disallineano: si salverebbe una combinazione che poi non viene più riconosciuta, e la
+  schermata direbbe «Personalizzato» subito dopo aver salvato. Un test verifica il giro completo per
+  tutte e tre.
+- **«Spento» non guarda i flag.** Senza RA non si annuncia niente comunque, e pretenderli vuoti
+  avrebbe mostrato «Personalizzato» su un router spento che si porta dietro i flag di prima.
+- **`resolveDns` ora divide per famiglia** invece di restituire una lista sola: i v4 vanno in
+  `dhcp_option`, i v6 in `dhcp.lan.dns`. Nei campi liberi la divisione si fa su cosa è stato
+  scritto, così due caselle bastano per una coppia mista.
+- **`matchDnsProvider` filtra la lista ai soli v4 prima di confrontare.** I resolver del router
+  stanno in una lista unica con entrambe le famiglie: confrontarla intera non avrebbe combaciato con
+  nessun fornitore, che di v4 ne dichiara due. È il round-trip di «scegli Cloudflare, salva,
+  riapri».
+- **Il `verify` di `useApply` controlla anche la modalità RA.** È una scrittura su `dhcp` e non su
+  `network`, quindi può fallire per conto suo mentre l'indirizzo prende: senza il controllo la
+  conferma direbbe di sì a metà del lavoro.
+- **`clientDns(lan)` unisce le due metà prima di costruire lo stato della schermata.** È la
+  correzione di un difetto che la prima stesura aveva: vedi qui sotto.
+
+### Il difetto della prima stesura: aprire la schermata cancellava i DNS IPv6
+
+Dividere le due famiglie in due opzioni uci ha creato un modo nuovo di perdere dati, e la prima
+stesura ci è caduta. Lo stato della schermata si costruiva sulla **sola** `dns_client`, cioè la metà
+v4:
+
+```
+dhcp_option 6  →  (vuota)          matchDnsProvider(dns_client) → 'auto'
+dhcp.lan.dns   →  2606:4700:...    ...cioè "nessun DNS scelto"
+```
+
+Un router con i DNS v6 configurati — da LuCI, o da un salvataggio precedente — risultava in modalità
+«Automatico». E siccome il salvataggio riscrive **entrambe** le opzioni, bastava salvare qualunque
+altra cosa — spostare il pool DHCP, cambiare l'indirizzo — per cancellarli, senza che niente lo
+dicesse.
+
+La causa è che le due famiglie sono due opzioni uci ma **una scelta sola** nell'interfaccia: la metà
+non letta resta fuori dallo stato, e il salvataggio la sovrascrive con il vuoto. `clientDns()` le
+unisce, e sia la modalità sia i due campi liberi si costruiscono da lì — così una coppia mista fa il
+giro completo e risalvare senza toccare niente riscrive esattamente quello che c'era.
+
+Cinque test nuovi in `lan-dns.test.ts`, fra cui quello che **scrive il difetto per esteso**: afferma
+che la lettura della sola v4 risponde `'auto'` e che quella unita risponde `'custom'`, perché è
+l'unica differenza fra conservare quei DNS e cancellarli.
+
+*Nota per le fasi che verranno:* ogni volta che un dato v6 finisce in un'opzione uci separata dalla
+sua controparte v4, la schermata che le scrive deve leggerle **entrambe**, o la scrittura cancella
+quella che non ha letto.
+
+### Il residuo: due campi non contengono quattro indirizzi
+
+Unire le due metà risolveva il caso «v6 senza v4», ma non tutto: i campi liberi sono **due**, mentre
+la lista unita può arrivare a quattro. Con `dns_client` di due indirizzi scelti a mano più un
+`dns_client6`, la lista ha tre voci — i campi ne mostrano due, la terza cade fuori, e il salvataggio
+riscrive la lista troncata.
+
+Il troncamento **esisteva già in IPv4** — tre resolver scelti a mano si comportavano così da sempre —
+ma serviva configurarli a mano; dividere le famiglie lo ha reso il caso normale.
+
+La cura non è aggiungere campi, è `dnsEditable()`: una lista che non corrisponde a nessun fornitore e
+non entra in due campi **non si modifica da questa schermata**. Si mostra intera, e il salvataggio
+passa `null` — che in `LanSettings` significa *non toccare*. È la stessa regola già adottata poche
+righe sopra per la modalità RA che non si riconosce, e vale ora per entrambi gli elenchi, compreso
+quello dei resolver del router: chiude anche il troncamento IPv4 preesistente.
+
+Un fornitore riconosciuto resta sempre modificabile, per lunga che sia la lista: lì le quattro voci
+non sono un dato da conservare, sono la definizione della scelta.
+
+Sei test nuovi, fra cui quello che verifica che con una lista da tre voci **nessuna delle due opzioni
+venga scritta né cancellata**.
+
+### E la coda di quella cura: un elenco intoccabile che spegneva il pulsante Salva
+
+Rendere un elenco non modificabile ha creato un terzo difetto, in un punto che sembrava estraneo: la
+convalida `dnsOk` continuava a girare sui campi **non più mostrati**. Un elenco che la schermata
+espone e non tocca spegneva quindi il pulsante Salva dell'**intera** rete locale — indirizzo e pool
+DHCP compresi — e non c'era nessun campo dove sistemare il valore che non passava.
+
+Il caso è reale, non un valore inventato: `dhcp.<sezione>.server` accetta forme che indirizzi non
+sono, per esempio `/example.com/192.168.1.1` per mandare un dominio a un resolver dedicato. È
+configurazione legittima, `isValidIp` la rifiuta, e con tre voci l'elenco diventa non modificabile.
+
+`dnsFieldsOk(editable, mode, one, two)` risponde `true` quando i campi non si possono modificare:
+**quello che non si scrive non può bloccare il salvataggio**. Quattro test, fra cui quello che verifica
+che la convalida continui invece a valere quando i campi ci sono davvero.
+
+*Terzo giro sullo stesso punto, e vale la pena dirlo:* ogni volta che si toglie qualcosa
+dall'interfaccia — un campo, un elenco, una scelta — va tolto **anche** da tutto ciò che lo
+presupponeva ancora presente: la scrittura, la convalida, lo stato. Qui la scrittura era stata
+sistemata e la convalida no.
+
+### I due vincoli della Fase 2, sciolti
+
+Il campo dei **DNS annunciati ai dispositivi** accetta ora entrambe le famiglie (`isValidIp` senza
+`4`, `<DnsChoice ipv6>`), perché ora esiste il posto dove metterli. Il testo del campo è cambiato di
+conseguenza: non più «Solo indirizzi IPv4…» ma «anche uno per tipo: vanno al posto giusto da soli».
+Restano da sciogliere solo i due della Fase 9, che dipendono da mwan3.
 
 ---
 
