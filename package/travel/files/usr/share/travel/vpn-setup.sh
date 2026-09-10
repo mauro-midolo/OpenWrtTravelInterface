@@ -158,6 +158,20 @@ ensure_ts_rule() {
 		say "Serve 'ip' completo (pacchetto ip-full): senza, le risposte ai nodi del tailnet"
 		say "escono dalla WAN e l'exit node non funziona."
 	fi
+
+	# La stessa regola in IPv6, e serve davvero: tailscaled da' al router un
+	# indirizzo del tailnet anche in v6 (`fd7a:115c:a1e0::/48`), quindi un peer
+	# puo' contattarlo di la'. Le regole v6 di mwan3 stanno a preferenze piu'
+	# basse di quella che tailscaled si scrive da solo, quindi senza questa le
+	# risposte marcate da mwan3 uscirebbero dalla WAN - lo stesso guasto
+	# documentato per IPv4 qui sopra, e altrettanto invisibile.
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$TS_RULE_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+	ip -6 rule add pref "$TS_RULE_PREF" not fwmark "$TS_BYPASS_MARK" lookup "$TS_TABLE" 2>/dev/null ||
+		say "ATTENZIONE: non sono riuscito a scrivere la regola IPv6 verso il tunnel"
 }
 
 # L'inoltro sull'interfaccia del tunnel, scritto esplicitamente se esiste.
@@ -199,6 +213,20 @@ ensure_ts_route() {
 		say "rotta verso il tailnet (100.64.0.0/10) in tabella $TS_TABLE a posto"
 	else
 		say "ATTENZIONE: non sono riuscito a scrivere la rotta verso il tailnet in tabella $TS_TABLE"
+	fi
+
+	# E la gemella IPv6, sul range v6 del tailnet.
+	#
+	# Verificato sul dispositivo, e mancava esattamente come mancava quella v4:
+	# `tailscale0` aveva il suo `fd7a:115c:a1e0::.../128`, ma di rotta verso il
+	# /48 non ce n'era nessuna - ne' in tabella 52 ne' in main, e
+	# `ip -6 route get fd7a:115c:a1e0::1` rispondeva "Network unreachable".
+	# Senza, il router non raggiunge nessun peer in IPv6 e la regola firewall
+	# `travel_vpn_wg6` non ha niente da lasciar passare.
+	if ip -6 route replace fd7a:115c:a1e0::/48 dev tailscale0 table "$TS_TABLE" 2>/dev/null; then
+		say "rotta IPv6 verso il tailnet (fd7a:115c:a1e0::/48) in tabella $TS_TABLE a posto"
+	else
+		say "ATTENZIONE: non sono riuscito a scrivere la rotta IPv6 verso il tailnet"
 	fi
 }
 

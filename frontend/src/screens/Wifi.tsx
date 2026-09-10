@@ -108,7 +108,12 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
       {state === 'addressed' || state === 'no-address' ? (
         <>
           <Row label="Rete" value={uplink.ssid ?? '—'} />
-          <Row label="Indirizzo" value={uplink.ipv4 || 'nessuno'} />
+          {/* "nessuno" accanto a un IPv6 che funziona direbbe una cosa falsa:
+              su un uplink v6-only la riga si qualifica e mostra un trattino. */}
+          <Row
+            label={uplink.ipv6.length > 0 ? 'Indirizzo IPv4' : 'Indirizzo'}
+            value={uplink.ipv4 || (uplink.ipv6.length > 0 ? '—' : 'nessuno')}
+          />
           <Row label="Gateway" value={uplink.gateway || '—'} />
           <Row label="DNS" value={uplink.dns?.length ? uplink.dns.join('  ') : '—'} />
           {/* Le righe IPv6 compaiono solo dove IPv6 c'e': su una rete v4-only

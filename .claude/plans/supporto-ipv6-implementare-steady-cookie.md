@@ -1295,6 +1295,69 @@ un test verifica che dopo il rifiuto non ci sia nessuna scrittura in staging.
 
 ---
 
+## Audit prima della chiusura — *(fatto il 2026-09-10)*
+
+Passata sistematica sul codice cercando quello che le nove fasi non avevano toccato: comandi `ip`
+senza famiglia esplicita, letterali IPv4, regex `[0-9.]`, decisioni prese sul solo `ipv4`. Ne sono
+usciti **tre buchi veri**, due corretti e uno lasciato aperto con cognizione.
+
+### 1. Tailscale non aveva instradamento IPv6 — corretto
+
+Il buco più serio, e **l'ho lasciato io nella Fase 7**: lì è stata aggiunta la regola *firewall*
+`travel_vpn_wg6` sul range v6 del tailnet, ma non la *rotta*. Verificato sul router:
+
+```
+ip -6 addr show tailscale0   → fd7a:115c:a1e0::ca2f:d005/128   ← il router E' sul tailnet in v6
+ip -6 route show table 52    → (vuota)
+ip -6 route get fd7a:115c:a1e0::1   → Network unreachable
+```
+
+Il router non raggiungeva **nessun** peer in IPv6, e le risposte a chi lo contattava di là non
+avevano dove tornare: le regole v6 di mwan3 stanno a preferenze più basse di quella che tailscaled si
+scrive da solo, quindi il traffico marcato sarebbe uscito dalla WAN. È **lo stesso guasto documentato
+per IPv4** in `ensure_ts_route`, e la regola firewall della Fase 7 non aveva niente da lasciar
+passare.
+
+`ensure_ts_route` e `ensure_ts_rule` hanno ora la gemella v6. Provato sul dispositivo: scritta la
+rotta, `ip -6 route get fd7a:115c:a1e0::1` risponde `dev tailscale0 table 52`, marcatura mwan3
+compresa. Router riportato allo stato di prima.
+
+### 2. La sonda di connettività era cieca su IPv6 — corretto
+
+`travel_online()` provava solo `1.1.1.1 8.8.8.8 9.9.9.9`. Su un uplink **v6-only** — quello che la
+Fase 3 ha insegnato a riconoscere come funzionante — avrebbe sempre risposto «niente Internet», e chi
+la chiama (`setup.sh`, `vpn-setup.sh`, `mwan3-setup.sh`) avrebbe rinunciato a installare i pacchetti
+su un router che Internet ce l'ha. Ora prova entrambe le famiglie, con gli IPv4 per primi perché sono
+la maggioranza dei casi.
+
+### 3. Il captive portal resta IPv4-only — **scelta, non dimenticanza**
+
+`portal_resolve` (`rpcd:2333`) accetta solo risposte IPv4 dal DNS, e `portal_route_up` scrive la
+tabella di servizio 97 con `ip route` senza gemella v6. Un portale raggiunto in IPv6 non verrebbe né
+rilevato né aggirato.
+
+**Si lascia così, e va scritto nella documentazione.** I captive portal sono un meccanismo IPv4 quasi
+per definizione: intercettano il traffico con un DNS bugiardo e un redirect HTTP, e le reti che li
+usano — alberghi, aeroporti, treni — distribuiscono IPv4. Costruire il gemello v6 alla cieca
+significherebbe scrivere e mantenere un sotto-sistema intero senza un caso reale su cui provarlo, che
+è il modo in cui si aggiunge codice che sembra funzionare. Se un giorno comparirà un portale v6, il
+sintomo sarà chiaro — il portale non viene rilevato — e a quel punto ci sarà qualcosa su cui
+verificare la cura.
+
+### Quello che è IPv4-only di proposito, e resta
+
+Verificato che sia ancora coerente: `findConflicts`, `suggestAddress`, `prefix24`, `lastOctet`,
+`LAN_NETMASK`, `CANDIDATES` (decisione 2 del piano); il `filter(u => u.ipv4)` di `Lan.tsx`; i
+tracking IP di mwan3 (Fase 9); il default `AllowedIPs = 0.0.0.0/0` di WireGuard (Fase 8).
+
+### Una incoerenza minore, corretta
+
+Su un uplink v6-only le schede WiFi e Dashboard scrivevano «Indirizzo: nessuno» sopra le righe che
+mostravano un IPv6 funzionante. La riga ora si qualifica — «Indirizzo IPv4» — e mostra un trattino:
+è la stessa correzione già fatta in `Connect.tsx` nella Fase 3, in due punti che erano sfuggiti.
+
+---
+
 ## Fase 10 — Documentazione
 
 `docs/architettura.md` va riallineato: `:528-539` (multi-WAN IPv4, "non esiste una gestione completa

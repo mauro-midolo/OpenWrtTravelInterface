@@ -204,7 +204,11 @@ function WanCard({
 
       {wan.state === 'addressed' || wan.state === 'no-address' ? (
         <>
-          <Row label="Indirizzo" value={wan.ipv4 || 'nessuno'} />
+          {/* Vedi Wifi.tsx: su un uplink v6-only "nessuno" sarebbe falso. */}
+          <Row
+            label={wan.ipv6.length > 0 ? 'Indirizzo IPv4' : 'Indirizzo'}
+            value={wan.ipv4 || (wan.ipv6.length > 0 ? '—' : 'nessuno')}
+          />
           <Row label="Gateway" value={wan.gateway || '—'} />
           <Row label="DNS" value={wan.dns?.length ? wan.dns.join('  ') : '—'} />
           {/* Solo dove IPv6 c'e': vedi la stessa scelta in Wifi.tsx. */}
