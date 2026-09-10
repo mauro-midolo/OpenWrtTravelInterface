@@ -281,24 +281,30 @@ for net in $wans; do
 		NEED_MWAN=1
 	fi
 
-	# Le gemelle IPv6 delle politiche per WAN. Il nome cresce di un carattere,
-	# quindi il limite qui e' 12 e non 13: `o_wwan_radio06` ne fa gia' 14.
+	# Le gemelle IPv6 delle politiche per WAN.
+	#
+	# Il `6` va in TESTA - `o6_<net>` e non `o_<net>6` - perche' e' l'unica
+	# forma che si puo' rileggere senza ambiguita': una porta ethernet chiamata
+	# `lan6` produce l'interfaccia `wan_lan6`, e `o_wan_lan6` non direbbe piu' se
+	# la WAN e' `wan_lan` in IPv6 o `wan_lan6` in IPv4.
+	#
+	# Il prefisso e' di tre caratteri invece di due, quindi il limite qui e' 12.
 	[ -n "$(uci -q get "network.${net}6")" ] || continue
 	if [ ${#net} -gt 12 ]; then
-		say "ATTENZIONE: ${net}6 e' troppo lungo per una politica mwan3: le"
-		say "regole IPv6 dedicate a questa WAN non funzioneranno"
+		say "ATTENZIONE: $net e' troppo lungo per una politica mwan3 IPv6 (max"
+		say "12 caratteri): le regole IPv6 dedicate a questa WAN non funzioneranno"
 		continue
 	fi
-	if [ -z "$(uci -q get "mwan3.o_${net}6")" ]; then
-		uci set "mwan3.o_${net}6=policy"
-		uci set "mwan3.o_${net}6.last_resort=unreachable"
-		uci add_list "mwan3.o_${net}6.use_member=${net}6_f"
+	if [ -z "$(uci -q get "mwan3.o6_$net")" ]; then
+		uci set "mwan3.o6_$net=policy"
+		uci set "mwan3.o6_$net.last_resort=unreachable"
+		uci add_list "mwan3.o6_$net.use_member=${net}6_f"
 		NEED_MWAN=1
 	fi
-	if [ -z "$(uci -q get "mwan3.p_${net}6")" ]; then
-		uci set "mwan3.p_${net}6=policy"
-		uci set "mwan3.p_${net}6.last_resort=default"
-		uci add_list "mwan3.p_${net}6.use_member=${net}6_f"
+	if [ -z "$(uci -q get "mwan3.p6_$net")" ]; then
+		uci set "mwan3.p6_$net=policy"
+		uci set "mwan3.p6_$net.last_resort=default"
+		uci add_list "mwan3.p6_$net.use_member=${net}6_f"
 		NEED_MWAN=1
 	fi
 done

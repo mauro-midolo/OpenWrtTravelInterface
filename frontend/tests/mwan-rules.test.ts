@@ -4,6 +4,7 @@ import { call } from '../src/lib/ubus';
 import {
   addRule,
   globalPolicy,
+  parsePolicy,
   policyFor,
   ruleFamily,
   setDefaultRule,
@@ -99,11 +100,58 @@ describe('i nomi delle politiche', () => {
     expect(globalPolicy('balance', 6)).toBe('travel_bal6');
   });
 
-  it('quelle per WAN puntano alla gemella, non a una variante', () => {
+  it('quelle per WAN mettono il 6 in testa, non in coda', () => {
     expect(policyFor('wan', true)).toBe('o_wan');
-    expect(policyFor('wan', true, 6)).toBe('o_wan6');
-    expect(policyFor('wan', false, 6)).toBe('p_wan6');
+    expect(policyFor('wan', true, 6)).toBe('o6_wan');
+    expect(policyFor('wan', false, 6)).toBe('p6_wan');
     expect(policyFor('wwan_radio0', true, 6).length).toBeLessThanOrEqual(15);
+  });
+
+  it('e si rileggono senza ambiguita’, anche su una WAN che finisce per 6', () => {
+    // Con il 6 in coda, `o_wan_lan6` non direbbe piu' se la WAN e' `wan_lan`
+    // in IPv6 o `wan_lan6` in IPv4 - e `wan_lan6` e' un nome legittimo, perche'
+    // una porta ethernet chiamata `lan6` produce quell'interfaccia.
+    expect(parsePolicy(policyFor('wan_lan6', true, 4))).toEqual({
+      network: 'wan_lan6',
+      strict: true,
+      family: 4,
+    });
+    expect(parsePolicy(policyFor('wan_lan', true, 6))).toEqual({
+      network: 'wan_lan',
+      strict: true,
+      family: 6,
+    });
+  });
+
+  it('il giro completo non corrompe la politica di una regola IPv6', async () => {
+    // Il difetto: `parsePolicy('o_wan6')` rispondeva `network: 'wan6'`, che WAN
+    // non e'; il modulo la caricava cosi', e al salvataggio scriveva `o_wan66`
+    // - una politica che non esiste, quindi una regola che non fa niente.
+    const parsed = parsePolicy('o6_wan');
+    expect(parsed?.network).toBe('wan');
+
+    await addRule(
+      {
+        src_ip: '',
+        dest_ip: '2001:db8::/32',
+        dest_port: '',
+        proto: 'all',
+        network: parsed!.network,
+        strict: parsed!.strict,
+        sticky: false,
+        timeout: 600,
+      },
+      { mode: 'failover', sticky: false, timeout: 600 },
+    );
+
+    const rule = writes().find((w) => w.values.dest_ip === '2001:db8::/32');
+    expect(rule?.values.use_policy).toBe('o6_wan');
+  });
+
+  it('legge ancora i prefissi lunghi di prima', () => {
+    // Una configurazione non ancora migrata deve continuare a mostrarsi.
+    expect(parsePolicy('only_wan')).toEqual({ network: 'wan', strict: true, family: 4 });
+    expect(parsePolicy('pref_wan')).toEqual({ network: 'wan', strict: false, family: 4 });
   });
 
   it('una regola IPv6 usa la politica IPv6', async () => {
@@ -123,7 +171,7 @@ describe('i nomi delle politiche', () => {
 
     const rule = writes().find((w) => w.values.dest_ip === '2001:db8::/32');
     expect(rule?.values.family).toBe('ipv6');
-    expect(rule?.values.use_policy).toBe('o_wan6');
+    expect(rule?.values.use_policy).toBe('o6_wan');
   });
 });
 

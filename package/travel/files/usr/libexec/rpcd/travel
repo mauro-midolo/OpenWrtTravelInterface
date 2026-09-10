@@ -1905,7 +1905,11 @@ method_mwan() {
 	# questo la regola predefinita va sempre tenuta per ultima.
 	json_add_array rules
 	for rule in $(uci show mwan3 2>/dev/null | sed -n 's/^mwan3\.\([^.]*\)=rule$/\1/p'); do
-		[ "$rule" = "travel_default" ] && continue
+		# Le DUE regole predefinite restano fuori dall'elenco: non sono regole
+		# dell'utente, sono la modalita' multi-WAN vista da sotto. Mostrarle
+		# vorrebbe dire poterle cancellare, e cancellare `travel_default6`
+		# toglierebbe IPv6 dal failover senza che niente lo dica.
+		[ "$rule" = "travel_default" ] || [ "$rule" = "travel_default6" ] && continue
 		json_add_object
 		json_add_string  section    "$rule"
 		json_add_string  src_ip     "$(uci -q get "mwan3.$rule.src_ip")"
@@ -2168,6 +2172,32 @@ method_usb_reset() {
 #
 # Il ricaricamento della rete rinnova gli indirizzi ma non tocca le
 # associazioni WiFi, che vivono un livello piu' sotto.
+# La modalita' multi-WAN, scritta su ENTRAMBE le regole predefinite.
+#
+# Lasciarne una su una politica e l'altra su un'altra manderebbe IPv4 e IPv6 su
+# WAN diverse: meta' del web che carica, che e' molto piu' difficile da
+# diagnosticare di un guasto pulito. Sono la stessa decisione, quindi si
+# scrivono nello stesso posto.
+#
+# `travel_default6` puo' mancare su un router non ancora aggiornato: si salta,
+# invece di crearla qui puntando a una politica che `mwan3-setup.sh` non ha
+# ancora scritto.
+mwan_set_mode() {
+	if [ "$1" = "balance" ]; then
+		uci set mwan3.travel_default.use_policy=travel_balance
+	else
+		uci set mwan3.travel_default.use_policy=travel_failover
+	fi
+
+	if [ -n "$(uci -q get mwan3.travel_default6)" ]; then
+		if [ "$1" = "balance" ]; then
+			uci set mwan3.travel_default6.use_policy=travel_bal6
+		else
+			uci set mwan3.travel_default6.use_policy=travel_fail6
+		fi
+	fi
+}
+
 method_mwan_apply() {
 	local holder
 
@@ -2185,7 +2215,7 @@ method_mwan_apply() {
 	# un'altra, ed e' esattamente lo stato che questo progetto rifiuta altrove.
 	if policy_balance; then
 		holder=$(policy_holder balance) && {
-			uci set mwan3.travel_default.use_policy=travel_failover
+			mwan_set_mode failover
 			uci commit mwan3
 			/etc/init.d/mwan3 restart >/dev/null 2>&1
 			fail_json "non posso passare al bilanciamento: $(policy_reason "$holder")"
@@ -4484,7 +4514,7 @@ method_profile_apply() {
 	uci commit travel
 
 	if [ -n "$(uci -q get mwan3.travel_default)" ]; then
-		uci set mwan3.travel_default.use_policy="$([ "$P_MODE" = "balance" ] && echo travel_balance || echo travel_failover)"
+		mwan_set_mode "$P_MODE"
 		uci set mwan3.travel_default.sticky="$P_STICKY"
 		uci set mwan3.travel_default.timeout="$P_TIMEOUT"
 	fi

@@ -272,10 +272,13 @@ export interface RuleInput {
  * `o_`/`p_` restano 13 caratteri per il nome della WAN.
  */
 export function policyFor(network: string, strict: boolean, family: IpFamily = 4): string {
-  // La politica IPv6 e' quella della gemella `<net>6`, non una variante della
-  // stessa: `mwan3.<sezione>` e' mono-famiglia, e il nome della sezione deve
-  // essere quello di un'interfaccia netifd vera.
-  return `${strict ? 'o' : 'p'}_${network}${family === 6 ? '6' : ''}`;
+  // Il `6` va in TESTA e non in coda, ed e' l'unica forma che si puo' rileggere
+  // senza ambiguita': con `o_<net>6` non si saprebbe se la WAN e' `<net>` in
+  // IPv6 o una WAN che si chiama `<net>6` - e `wan_lan6` e' un nome legittimo,
+  // perche' le porte ethernet danno il nome all'interfaccia. `parsePolicy`
+  // riporterebbe una WAN che non esiste, e il salvataggio successivo
+  // scriverebbe `o_wan_lan66`.
+  return `${strict ? 'o' : 'p'}${family === 6 ? '6' : ''}_${network}`;
 }
 
 /**
@@ -297,11 +300,17 @@ export function globalPolicy(mode: MwanMode, family: IpFamily = 4): string {
  * migrata deve continuare a leggersi, altrimenti le regole gia' scritte
  * sparirebbero dall'elenco invece di mostrarsi.
  */
-export function parsePolicy(policy: string): { network: string; strict: boolean } | null {
-  if (policy.startsWith('o_')) return { network: policy.slice(2), strict: true };
-  if (policy.startsWith('p_')) return { network: policy.slice(2), strict: false };
-  if (policy.startsWith('only_')) return { network: policy.slice(5), strict: true };
-  if (policy.startsWith('pref_')) return { network: policy.slice(5), strict: false };
+export function parsePolicy(
+  policy: string,
+): { network: string; strict: boolean; family: IpFamily } | null {
+  // Le forme IPv6 per prime: `o6_` inizia per `o`, quindi provare `o_` prima
+  // non combacerebbe comunque, ma l'ordine rende la lettura ovvia.
+  if (policy.startsWith('o6_')) return { network: policy.slice(3), strict: true, family: 6 };
+  if (policy.startsWith('p6_')) return { network: policy.slice(3), strict: false, family: 6 };
+  if (policy.startsWith('o_')) return { network: policy.slice(2), strict: true, family: 4 };
+  if (policy.startsWith('p_')) return { network: policy.slice(2), strict: false, family: 4 };
+  if (policy.startsWith('only_')) return { network: policy.slice(5), strict: true, family: 4 };
+  if (policy.startsWith('pref_')) return { network: policy.slice(5), strict: false, family: 4 };
   return null;
 }
 

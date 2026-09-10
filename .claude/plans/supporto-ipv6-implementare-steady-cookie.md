@@ -1212,7 +1212,7 @@ commentati sul posto proprio per questo.
 
 ### Esito
 
-`tsc --noEmit` pulito, **472 test su 27 file** (15 nuovi), build a 237 kB, `sh -n` su
+`tsc --noEmit` pulito, **475 test su 27 file** (18 nuovi), build a 237 kB, `sh -n` su
 `mwan3-setup.sh`. Sul router tutte e quattro le gemelle esistono già — le ha create la Fase 4 — quindi
 la fase è realizzabile per **ogni** WAN e non solo per `wan`, che era il limite scritto qui sopra.
 
@@ -1222,7 +1222,7 @@ la fase è realizzabile per **ogni** WAN e non solo per `wan`, che era il limite
 travel_failover    15 caratteri   ← il massimo che mwan3 accetta
 travel_fail6       12
 travel_bal6        11
-o_wwan_radio06     14
+o6_wwan_radio0     14
 ```
 
 mwan3 impone **15 caratteri** ai nomi delle politiche — è il limite dei nomi di catena di iptables —
@@ -1261,6 +1261,30 @@ sulla stessa WAN.
 
 Si scioglie invece l'altro vincolo: **`isValidTarget` accetta ora entrambe le famiglie**, perché
 `ruleValues` deduce la famiglia dai criteri invece di scrivere sempre `ipv4`.
+
+### Quattro difetti della prima stesura, tutti la stessa forma
+
+Tre erano **scritture di una famiglia sola** in punti che non avevo cercato, e uno era un nome
+ambiguo. Il filo comune: aver reso dual-stack le funzioni che *sapevo* di dover toccare, senza
+cercare tutti i posti che scrivono le stesse cose.
+
+**1. Il nome delle politiche per WAN era ambiguo.** `o_<net>6` non si rilegge: una porta ethernet
+chiamata `lan6` produce l'interfaccia `wan_lan6`, e `o_wan_lan6` non direbbe più se la WAN è
+`wan_lan` in IPv6 o `wan_lan6` in IPv4. `parsePolicy` rispondeva quindi con una WAN che non esiste,
+il modulo la caricava così, e al salvataggio scriveva **`o_wan_lan66`** — una politica inesistente,
+cioè una regola che non fa niente. Il `6` è passato **in testa**: `o6_<net>`, `p6_<net>`. Un test
+verifica il giro completo proprio su una WAN che finisce per `6`.
+
+**2. `travel_default6` compariva fra le regole dell'utente.** L'rpcd filtrava solo `travel_default`.
+Non sono regole dell'utente: sono la modalità multi-WAN vista da sotto, e mostrarle vuol dire poterle
+cancellare — togliendo IPv6 dal failover senza che niente lo dica.
+
+**3. e 4. La modalità veniva riportata su una sola predefinita**, in due punti diversi: quando
+`mwan_apply` rifiuta il bilanciamento e lo riporta a failover, e quando si applica un profilo
+salvato. In entrambi i casi IPv4 finiva su una politica e IPv6 restava sull'altra — precisamente il
+guasto «metà del web carica» che questa fase esiste per evitare, e in uno dei due casi su un percorso
+di *errore*, cioè quello in cui si guarda meno. Ora c'è `mwan_set_mode`, ed è l'unico posto che sa
+come si scrive una modalità.
 
 ### `ruleFamily`, e cosa rifiuta
 
