@@ -1358,7 +1358,7 @@ mostravano un IPv6 funzionante. La riga ora si qualifica — «Indirizzo IPv4» 
 
 ---
 
-## Fase 10 — Documentazione
+## Fase 10 — Documentazione ✅ *(fatta il 2026-09-10)*
 
 `docs/architettura.md` va riallineato: `:528-539` (multi-WAN IPv4, "non esiste una gestione completa
 IPv6"), `:597-603` (LAN IPv4 /24), `:1247-1249` ("IPv6 gestito dall'app" fra le cose mancanti), più
@@ -1366,6 +1366,28 @@ IPv6"), `:597-603` (LAN IPv4 /24), `:1247-1249` ("IPv6 gestito dall'app" fra le 
 distinzione fra `dhcp_option 6` e `dhcp.lan.dns`**: sono le due cose che si sbagliano rileggendo il
 codice fra sei mesi. Se una fase introduce un'operazione di apply nuova, aggiornare la tabella dei
 timeout a `:159-167`.
+
+### Esito
+
+**Nuova sezione `## IPv6` in `docs/architettura.md`** (~190 righe), con dentro le due cose che il
+piano chiedeva per esteso — la tabella delle tre modalità RA, e la tabella che mette a confronto
+`dhcp_option 6` e `dhcp.lan.dns` — più le WAN, il firewall, la VPN, WireGuard, mwan3 e un elenco
+finale di *quello che resta IPv4-only di proposito*.
+
+Riallineati: la sezione WAN/multi-WAN (non dice più «non esiste una gestione completa IPv6», e
+spiega che le interfacce v6 restano fuori dall'**elenco** ma non dalla lettura); la sezione LAN (DNS
+per famiglia, indirizzi v6 mostrati e non configurati); `travel.clients` (vicini v6, una riga per
+dispositivo, e il motivo per cui il lease file di odhcpd non si analizza); la tabella del firewall
+VPN (`masq6`, `travel_vpn_wg6`, kill switch dual-family); l'inoltro e le rotte del tunnel.
+
+**Tabella dei timeout:** nessuna operazione di apply nuova, ma la riga `LAN` ha ora una verifica in
+più — la modalità di annuncio IPv6 deve aver preso, non solo l'indirizzo.
+
+**Debiti tecnici:** la voce «IPv6 gestito dall'app» è sparita dalle cose mancanti e ha lasciato il
+posto a due voci oneste — il captive portal solo IPv4, e ICMP che il kill switch non ferma.
+
+**`README.md`:** la riga che diceva «l'integrazione completa di IPv6 resta da realizzare» ora dice
+cosa c'è e cosa no, e la riga della scheda *Rete locale* nomina la scelta degli annunci IPv6.
 
 ---
 
