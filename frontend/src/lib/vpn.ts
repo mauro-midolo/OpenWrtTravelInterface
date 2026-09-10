@@ -541,7 +541,9 @@ export function wgEndpointProblem(host: string): string {
   return hostname.test(bare) ? '' : 'non è un nome di host né un indirizzo';
 }
 
-export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string; fix: string }> {
+export function wgRoutingSteps(
+  wg: WgState,
+): Array<{ ok: boolean; label: string; fix: string; advisory?: boolean }> {
   const r = wg.routing;
   if (!r) return [];
   return [
@@ -570,17 +572,23 @@ export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string;
     // Le due righe IPv6 compaiono solo se il profilo instrada IPv6. Un tunnel
     // v4-only non ha niente da instradare in v6, e segnarlo come mancante
     // sarebbe segnalare l'assenza di qualcosa che non deve esserci.
+    //
+    // Sono `advisory`, e la distinzione e' portante: dicono che una PARTE del
+    // traffico non passa dal tunnel, non che il tunnel non porta traffico.
+    // Vedi `wgCarrying`.
     ...(r.has_v6
       ? [
           {
             ok: r.route6 === true,
             label: 'Rotta IPv6 dentro il tunnel (tabella 53)',
-            fix: 'manca la rotta IPv6 nella tabella del tunnel',
+            fix: 'manca la rotta IPv6: il traffico IPv6 esce dalla WAN in chiaro',
+            advisory: true,
           },
           {
             ok: r.rule6 === true,
             label: 'Regola IPv6 che ci manda il traffico (pref 901)',
             fix: 'manca la regola IPv6 — da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+            advisory: true,
           },
         ]
       : []),
@@ -601,7 +609,19 @@ export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string;
  */
 export function wgCarrying(wg: WgState): boolean {
   if (!wg.enabled || !wgAlive(wg.status)) return false;
-  return wgRoutingSteps(wg).every((step) => step.ok);
+  // Le righe `advisory` - quelle IPv6 - non entrano nel verdetto, e lasciarcele
+  // sarebbe stato un errore serio: una rotta v6 mancante significa che una
+  // PARTE del traffico non passa dal tunnel, non che il tunnel non porta
+  // traffico. Contandole, un tunnel che porta IPv4 benissimo risulterebbe
+  // spento - ed e' lo stato normale di ogni router finche' `vpn-setup.sh
+  // runtime` non e' stato rieseguito dopo l'aggiornamento.
+  //
+  // Conta anche dove finisce questa risposta: `killSwitchHasTunnel` la usa per
+  // decidere se un tunnel c'e'. Un "no" li' direbbe a chi ha il tunnel su e
+  // Internet che funziona di non essere protetto da niente. E la perdita v6 che
+  // le righe segnalano il kill switch la chiude comunque: la sua regola e'
+  // dual-family (Fase 0), quindi acceso blocca anche quella.
+  return wgRoutingSteps(wg).every((step) => step.ok || step.advisory === true);
 }
 
 export async function getVpn(): Promise<VpnState> {

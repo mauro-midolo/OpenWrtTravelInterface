@@ -3485,10 +3485,16 @@ wg_v6_form() {
 		printf '%s' "$group" | grep -qE '^[0-9a-fA-F]{1,4}$' || return 1
 	done
 
-	# Un ':' singolo a un estremo e' un troncamento: "1:2:3:" o ":1:2".
+	# Un ':' singolo a un estremo e' un troncamento: "1:2:3:" o ":1:2". I due
+	# estremi si guardano SEPARATAMENTE: con un `case` solo, "::1:" passerebbe
+	# perche' l'inizio combacia con "::*" e la fine non verrebbe piu' guardata.
 	case "$addr" in
-		*::|::*) ;;
-		:*|*:) return 1 ;;
+		::*) ;;
+		:*) return 1 ;;
+	esac
+	case "$addr" in
+		*::) ;;
+		*:) return 1 ;;
 	esac
 
 	return 0
@@ -3584,6 +3590,26 @@ valid_wg_host() {
 # dalla porta - con 51820, cinque cifre, la stringa e' invalida e l'errore si
 # vede - ed e' proprio per questo che le parentesi non sono facoltative: il
 # caso silenzioso e' quello che sembra innocuo.
+# Un host scritto a mano nel modulo, portato nella forma in cui si salva.
+#
+# Qui non si spezza niente - il modulo ha due campi separati - si mettono solo
+# le parentesi a un IPv6 nudo. Serve perche' quel percorso NON passa da
+# `wg_split_endpoint`: i campi arrivano gia' divisi dal browser.
+#
+# Senza, due guasti insieme. `valid_wg_host` rifiuterebbe un IPv6 nudo, cioe'
+# proprio la forma che il campo dichiara di accettare; e se anche lo accettasse,
+# finirebbe in uci SENZA parentesi - che e' esattamente il bug che questa fase
+# esiste per chiudere, perche' netifd lo ricomporrebbe come "2001:db8::1:443".
+wg_normalize_host() {
+	case "$1" in
+		# Gia' fra parentesi, o un nome, o un IPv4: si lascia com'e'.
+		\[*\]) printf '%s' "$1" ;;
+		# Due o piu' ':': un IPv6 nudo. Nessun nome e nessun IPv4 ne ha due.
+		*:*:*) printf '[%s]' "$1" ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+
 wg_split_endpoint() {
 	local raw="$1" rest
 
@@ -4083,6 +4109,11 @@ method_wg_save() {
 	json_get_var WGF_ALLOWED   allowed_ips
 	json_get_var WGF_KEEPALIVE keepalive
 	json_get_var drop_psk      drop_preshared
+
+	# L'endpoint arriva gia' diviso dal modulo, quindi qui non si spezza: si
+	# normalizza soltanto, mettendo le parentesi a un IPv6 nudo. Prima di
+	# convalidare, o si rifiuterebbe la forma che il campo dichiara di accettare.
+	WGF_HOST=$(wg_normalize_host "$WGF_HOST")
 
 	# I segreti che il browser non ha: restano quelli scritti sul router.
 	[ -n "$WGF_PRIV" ] || WGF_PRIV="$(uci -q get "network.$id.private_key")"

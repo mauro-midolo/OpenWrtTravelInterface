@@ -109,6 +109,38 @@ describe('il giro completo, come lo vede chi incolla un file', () => {
   });
 });
 
+describe('l’endpoint scritto nel modulo, che non passa da wg_split_endpoint', () => {
+  /** `wg_normalize_host` sul valore dato. */
+  function normalize(host: string): string {
+    const script = [fn('wg_normalize_host'), `wg_normalize_host '${host}'`].join('\n');
+    const result = spawnSync(shell, ['-c', script], { encoding: 'utf8' });
+    if (result.error) throw result.error;
+    return result.stdout;
+  }
+
+  it('mette le parentesi a un IPv6 nudo', () => {
+    // Il modulo ha due campi separati, quindi il salvataggio NON passa da
+    // wg_split_endpoint: senza normalizzazione l'indirizzo finirebbe in uci
+    // senza parentesi, e netifd lo ricomporrebbe come "2001:db8::1:443".
+    expect(normalize('2001:db8::1')).toBe('[2001:db8::1]');
+    expect(normalize('fd00::1')).toBe('[fd00::1]');
+  });
+
+  it('lascia stare quello che parentesi non ne vuole', () => {
+    expect(normalize('vpn.example.com')).toBe('vpn.example.com');
+    expect(normalize('192.0.2.1')).toBe('192.0.2.1');
+    expect(normalize('[2001:db8::1]')).toBe('[2001:db8::1]');
+  });
+
+  it('quello che normalizza, valid_wg_host lo accetta', () => {
+    // E' la proprieta' che mancava: il campo dichiara di accettare un IPv6
+    // senza parentesi, e il router lo rifiutava.
+    for (const typed of ['2001:db8::1', 'fd00::1', '[2001:db8::1]', 'vpn.example.com', '192.0.2.1']) {
+      expect(accepts('valid_wg_host', normalize(typed))).toBe(true);
+    }
+  });
+});
+
 describe('valid_wg_host', () => {
   it.each(['vpn.example.com', 'router', '192.0.2.1', '[2001:db8::1]', '[fd00::1]'])(
     'accetta %s',
@@ -151,6 +183,9 @@ describe('valid_wg_addrs, per famiglia', () => {
     '10.0.0.0/33',
     '2001:db8::1/129',
     '10.0.0.0/',
+    // I due estremi si guardano separatamente: con un `case` solo, questo
+    // passava perche' l'inizio combaciava con "::*".
+    '::1:',
   ])('rifiuta %s', (addrs) => {
     expect(accepts('valid_wg_addrs', addrs)).toBe(false);
   });

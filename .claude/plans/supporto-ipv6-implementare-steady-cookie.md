@@ -1094,7 +1094,7 @@ verificare: `[2001:db8::1]:51820` fa round-trip identico, e `2001:db8::1` divent
 
 ### Esito
 
-`tsc --noEmit` pulito, **446 test su 25 file** (34 nuovi), build a 236 kB, `sh -n` su rpcd e
+`tsc --noEmit` pulito, **457 test su 26 file** (45 nuovi), build a 236 kB, `sh -n` su rpcd e
 `vpn-setup.sh`. Le funzioni sono state provate **con l'ash del router**, non solo con Git Bash:
 
 ```
@@ -1135,6 +1135,43 @@ v6 al profilo acceso:
   leggono come una sola, e si perde quella che conta.
 - **Il default AllowedIPs resta `0.0.0.0/0`**, come previsto: un file che non lo dice è un file che a
   IPv6 non ha pensato, e indovinare `::/0` creerebbe un buco nero su ogni profilo del genere.
+
+### Due difetti che la prima stesura aveva introdotti
+
+**1. Il modulo non passa da `wg_split_endpoint`.** L'importazione da file sì; il salvataggio dal
+modulo no, perché lì i campi arrivano già divisi dal browser. `wg_validate` chiamava quindi
+`valid_wg_host` su quello che l'utente aveva scritto — e `valid_wg_host` rifiuta un IPv6 nudo, cioè
+**esattamente la forma che il suggerimento sotto il campo dichiara di accettare** («anche senza
+parentesi: le mette il router»). Il router rifiutava quello che il browser prometteva.
+
+E se anche l'avesse accettato sarebbe stato peggio: l'indirizzo sarebbe finito in uci **senza
+parentesi**, cioè con il bug che questa fase esiste per chiudere. `wg_normalize_host` mette le
+parentesi prima di convalidare, e un test verifica che tutto ciò che normalizza, `valid_wg_host` poi
+lo accetti.
+
+**2. Le righe IPv6 cambiavano il verdetto su «il tunnel porta traffico».** `wgCarrying` fa `.every()`
+sulla lista di `wgRoutingSteps`, e aggiungerci le due righe v6 significava che un profilo dual-stack
+con l'instradamento v6 non ancora scritto risultava **non funzionante** — che è lo stato normale di
+ogni router finché `vpn-setup.sh runtime` non viene rieseguito, ed è esattamente quello osservato sul
+dispositivo (`has_v6: true, rule6: false, route6: false`).
+
+Conta dove finisce quel verdetto: `killSwitchHasTunnel` lo usa per decidere se un tunnel c'è. Un «no»
+lì direbbe a chi ha il tunnel su e Internet che funziona di non essere protetto da niente — che è
+proprio ciò contro cui il commento di `wgCarrying` metteva in guardia.
+
+Le due righe sono ora `advisory`: si mostrano, con un testo che dice cosa comporta la loro assenza
+(«il traffico IPv6 esce dalla WAN in chiaro»), ma non entrano nel verdetto. **Una rotta v6 mancante
+significa che una parte del traffico non passa dal tunnel, non che il tunnel non porta traffico** — e
+quella perdita il kill switch la chiude comunque, perché la sua regola è dual-family (Fase 0).
+
+*Nel passare, un terzo:* `wg_v6_form` accettava `::1:`, perché un `case` solo con
+`*::|::*` guardava l'inizio e non tornava più a guardare la fine. I due estremi ora si controllano
+separatamente.
+
+**Nuovo test `wg-carrying.test.ts`**, che tiene ferma la distinzione: le righe v6 compaiono solo con
+`has_v6`, sono marcate `advisory`, quelle IPv4 no; `wgCarrying` resta vero con la catena v6
+incompleta e **falso se manca un anello IPv4** — perché il verdetto non doveva essere indebolito, solo
+riportato a ciò che decide davvero.
 
 ---
 
