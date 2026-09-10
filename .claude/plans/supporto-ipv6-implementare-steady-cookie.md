@@ -44,27 +44,112 @@ ogni campo nuovo dell'rpcd è **obbligatorio** sull'interfaccia TS e riempito in
 
 ---
 
-## Fase 0 — Verificare cinque fatti sul router (nessun codice)
+## Fase 0 — Verificare cinque fatti sul router ✅ *(fatta il 2026-09-10)*
 
-Tutto il resto dipende da queste risposte; tirare a indovinare è il modo in cui questo piano
-sbaglia. Da SSH:
+Eseguita via SSH su `192.168.10.1` — **GL.iNet GL-MT3600BE, OpenWrt 25.12.5 r33051-f5dae5ece4**
+(non il Beryl 7 del Context: annotato perché il modello decide quali interfacce esistono).
+Tutte letture; l'unica scrittura è stata una `uci set` **non committata e subito revertita** per far
+rendere a `fw4` una regola disabilitata.
 
-1. `fw4 print | grep -n -A3 travel-killswitch` — la regola compare **una volta**, in una catena
-   `inet`, **senza** `meta nfproto ipv4`? `travel_killswitch` è una `rule` senza `family` e senza
-   indirizzi (`vpn-setup.sh:514-521`), quindi *dovrebbe* già coprire entrambe le famiglie. Se non è
-   così, **la Fase 5 non parte** finché non esiste un gemello `travel_killswitch6`: un kill switch
-   che perde IPv6 è peggio di nessun kill switch.
-2. `ubus call network.interface dump | jsonfilter -e '@.interface[*].interface'` con
-   `network.wan.ipv6` non impostato — netifd crea un `wan_6` dinamico, o l'immagine ha una
-   `config interface 'wan6'` esplicita? Decide l'appaiamento della Fase 3 e se la Fase 9 è possibile.
-3. `ip -6 neigh show dev br-lan` — colonne esatte e quanti `fe80::` per client.
-4. `uci -q get dhcp.odhcpd.leasefile` e `head -5` del file — conferma la scelta della Fase 6 di
-   **non** analizzarlo.
-5. `uci -q get network.globals.ula_prefix` — presente? `setup.sh` non lo genera oggi, e odhcpd non
-   se lo inventa.
+**1. Kill switch — copre già entrambe le famiglie. La Fase 5 non è bloccata.**
+`travel_killswitch` è `enabled='0'` oggi, quindi `fw4 print` lo salta (`is disabled, ignoring
+section`); staged a `1` senza commit, rende in `table inet fw4`, `chain forward_lan`:
+
+```
+meta l4proto tcp counter jump reject_to_wan comment "!fw4: travel-killswitch"
+meta l4proto udp counter jump reject_to_wan comment "!fw4: travel-killswitch"
+chain reject_to_wan { oifname { "eth0", "phy0.0-sta0" } counter jump handle_reject
+                      comment "!fw4: reject wan IPv4/IPv6 traffic" }
+```
+
+Nessun `meta nfproto ipv4`, tabella `inet`, e il bersaglio se lo dice da solo: *IPv4/IPv6*.
+**Niente gemello `travel_killswitch6`** — la voce corrispondente sparisce dalla Fase 7 e dai Rischi.
+
+*Trovato per strada, non nel piano:* la regola rende **due** righe, `tcp` e `udp`, perché
+`travel_killswitch` non ha `proto` e il default di fw4 è `tcp udp`. Il kill switch quindi **non
+ferma ICMP**, e in v6 non ferma ICMPv6. È un buco che esiste già oggi in IPv4 e che IPv6 non
+peggiora — non appartiene a questo piano, ma va deciso a parte se lasciarlo.
+
+**2. `wan6` è esplicito nell'immagine — e i due casi convivono sullo stesso router.**
+`ubus call network.interface dump` elenca `lan, loopback, travel_wg2, wan, wan6, wwan_radio0,
+wwan_radio1`. In uci:
+
+```
+network.wan.device='eth0'   proto='dhcp'    ipv6='0'  metric='10'
+network.wan6.device='eth0'  proto='dhcpv6'             metric='0'
+network.wwan_radio0.ipv6='0'  network.wwan_radio1.ipv6='0'  network.wan_usb.ipv6='0'
+firewall.@zone[1].network='wan' 'wan6' 'wwan_radio0' 'wwan_radio1' 'wan_usb'
+```
+
+Quindi: la WAN ethernet ha un gemello **statico** `wan6` già in zona firewall, mentre wwan/USB non
+ne hanno nessuno e, tolto `ipv6=0`, prenderanno un `<net>_6` **dinamico** da netifd.
+**L'appaiamento sul `l3_device` della Fase 3 è confermato ed è obbligatorio**: nessuna regola sui
+nomi copre entrambi i casi. Nota che `wan6.device` è `'eth0'` letterale, non `'@wan'`.
+Per la Fase 9 (opzionale): il gemello mwan3 è possibile **solo per `wan`**, che una sezione reale ce
+l'ha; per wwan/USB andrebbe creata.
+
+**3. `ip -6 neigh show dev br-lan` — stesse colonne di v4.**
+
+```
+fe80::44b9:79e1:3303:657a         lladdr 30:c5:99:13:12:bd REACHABLE
+fd66:67c3:698b:0:c8c2:74c0:24e7:3eb lladdr 30:c5:99:13:12:bd DELAY
+fd66:67c3:698b:0:c8:188e:f90e:be6c  lladdr 26:50:b7:ed:38:81 STALE
+fe80::2450:b7ff:feed:3881         lladdr 26:50:b7:ed:38:81 STALE
+```
+
+`<indirizzo> lladdr <mac> <STATO>`, identico a v4 salvo che le righe v4 `FAILED` **non hanno affatto
+il campo `lladdr`** (`192.168.10.205 FAILED`) — il sed deve reggerlo. Due indirizzi per client oggi
+(un `fe80::` più un ULA), nessuna GUA perché non c'è upstream v6: con una WAN v6 collegata saranno
+tre o quattro per client, il che conferma sia il salto di `fe80::` sia la scelta di **una riga per
+MAC**.
+
+**4. Il lease file esiste, ha contenuto, e resta non analizzato.** `dhcp.odhcpd.leasefile` =
+`/tmp/odhcpd.leases`; `dhcp.odhcpd.maindhcp='0'` (dnsmasq fa v4, odhcpd fa v6 — è la premessa della
+Fase 5 su `dhcp.lan.dns`). Prima riga:
+
+```
+# br-lan 0001000130afdb8c30c5991312bd 630c599 Asus_Strix_G16 1789046852 2f3 128 fd66:67c3:698b::2f3/128
+```
+
+Il rifiuto **resta**, e ora c'è la prova di *perché* è una trappola: quel DUID è di tipo `0001`
+(DUID-LLT) e il MAC ce l'ha dentro in coda (`30c5991312bd`), quindi l'unione *sembra* funzionare
+sul primo client che si guarda. Ma il DUID del router stesso è `network.globals.dhcp_default_duid` =
+`0004...` (DUID-UUID), che di MAC non ne contiene nessuno: chi scrivesse l'estrazione la vedrebbe
+funzionare in laboratorio e fallire in albergo. Va scritto nel commento della Fase 6.
+Secondo fatto: l'indirizzo in lease `fd66:67c3:698b::2f3/128` **non compare in `ip -6 neigh`** — quel
+client usa i suoi indirizzi SLAAC. Non analizzando il file perdiamo l'indirizzo DHCPv6, non il
+client: accettabile, perché una riga per MAC c'è comunque.
+
+**5. `ula_prefix` c'è.** `network.globals.ula_prefix='fd66:67c3:698b::/48'`, e in più
+`network.lan.ip6assign='60'` è già impostato. `setup.sh` non deve generarli. `lan_cidr6()` (Fase 7)
+può contare sull'ULA su questo dispositivo ma **deve reggere l'assenza**, perché il piano non lo
+crea.
+
+### Due fatti in più, non chiesti, che cambiano la Fase 7
+
+**L'inoltro IPv6 è già acceso, da OpenWrt stesso.** `/etc/sysctl.d/10-default.conf` contiene
+`net.ipv6.conf.all.forwarding=1` e `net.ipv6.conf.default.forwarding=1`; `sysctl` conferma
+`net.ipv6.conf.all.forwarding = 1`. `30-travel-forwarding.conf` scrive oggi solo `net.ipv4.ip_forward=1`.
+Aggiungerci la riga v6 è quindi **un no-op che ribadisce un default**, non un cambio di stato — e il
+rischio in cima al piano ("`forwarding=1` spegne IPv6") descrive una condizione che su questo
+dispositivo **esiste già da prima di noi**.
+
+**E infatti `accept_ra=0` ovunque** (`eth0`, `phy0.0-sta0`, `br-lan`, e `default`), con IPv6 che su
+OpenWrt funziona lo stesso: `proto dhcpv6` gira su **odhcp6c in spazio utente**, che gli RA se li
+legge da sé su socket raw e non dipende da `accept_ra` del kernel. La cura "`accept_ra=2` sulle WAN"
+va quindi **riformulata prima di implementarla**: il controllo con `say "ATTENZIONE: ..."` così com'è
+scritto oggi allarmerebbe su ogni router sano. **Da verificare in Fase 4**, quando una WAN v6 sarà
+davvero su: se `wan6` prende un indirizzo con `accept_ra=0`, il controllo va tolto dalla Fase 7, non
+riscritto.
+
+**Stato di partenza di `dhcp.lan`** (utile alla Fase 5): `ra='server'`, `dhcpv6='server'`,
+`ra_flags='managed-config' 'other-config'`, `ra_preference='medium'`, `ra_slaac` e `ra_default` non
+impostate. È già esattamente la riga **"Automatico"** della tabella, quindi `matchRaMode()` su un
+router appena installato deve rispondere `'automatico'` — con `ra_slaac` **assente** (default `1`),
+non scritta: il match deve trattare l'assenza come `1`, o mostrerà "Personalizzato" a tutti.
+Nessuna `dhcp_option` e nessuna `dhcp.*.dns` presente oggi.
 
 ---
-
 ## Fase 1 — `lib/ip.ts`, senza cambi di comportamento
 
 **Nuovo modulo `frontend/src/lib/ip.ts`.** Non un'estensione di `lan.ts`: quel file parla della rete
@@ -157,6 +242,11 @@ alla riga del fratello v4**, non ne aprono una nuova.
   **`l3_device`**, non sul nome (`wan6` può chiamarsi in qualunque modo ma sta per forza sopra lo
   stesso device); ripiego sui nomi `${net}6`/`${net}_6` a interfaccia giù; **mai** sul `device` uci,
   che è un riferimento simbolico (`@wan`).
+  **La Fase 0 ha confermato che i due casi convivono sullo stesso router**, quindi l'appaiamento sul
+  `l3_device` non è prudenza ma necessità: `wan` ha un gemello statico `wan6` (`proto dhcpv6`,
+  `device 'eth0'` letterale, in zona firewall), mentre `wwan_radio0/1` e `wan_usb` non ne hanno
+  nessuno e, tolto `ipv6=0`, prenderanno un `<net>_6` dinamico. Nessuna regola sui soli nomi li
+  copre entrambi. Attenzione al ripiego a interfaccia giù: qui il nome giusto è `wan6`, non `wan_6`.
 - Emettere `ipv6[]` (indirizzo/prefisso uniti), `gateway6`, `prefix6`, `dns6[]`.
 - `default_gateway` (`:314-326`) prende il target come `$2` (`0.0.0.0` o `::`). **Non** farle
   accettare l'uno o l'altro: un nexthop v4 finirebbe in `gateway6`.
@@ -204,7 +294,7 @@ tocca niente**, e un utente che rimette `ipv6=0` dopo il marcatore se lo tiene.
 
 ## Fase 5 — LAN IPv6
 
-*Dipende dalla risposta 1 della Fase 0.*
+*Sbloccata: la risposta 1 della Fase 0 ha confermato che il kill switch è già dual-family.*
 
 **Lettura** (`method_lan`, `rpcd:1054-1121`), da `ubus call network.interface.lan status`:
 `@["ipv6-address"][*]` e soprattutto `@["ipv6-prefix-assignment"][*]` — è **questo** il /64
@@ -290,18 +380,27 @@ accumulatore `mac→indirizzi` costruito dalle due letture `ip neigh` prima di e
 
 ## Fase 7 — Firewall, inoltro e VPN
 
-**`vpn-setup.sh:18-63 enable_forwarding`** — aggiungere `net.ipv6.conf.all.forwarding=1` al file
-sysctl.d e a `/proc`, mantenendo la struttura leggi-e-riporta. **L'avvertenza va nel commento**,
-perché è il modo in cui questa fase spegne IPv6 credendo di accenderlo:
+**`vpn-setup.sh:18-63 enable_forwarding`** — **ridimensionata dalla Fase 0.** OpenWrt accende già
+`net.ipv6.conf.all.forwarding=1` e `net.ipv6.conf.default.forwarding=1` in
+`/etc/sysctl.d/10-default.conf`, e `sysctl` lo conferma a runtime. Aggiungere la riga v6 a
+`30-travel-forwarding.conf` **ribadisce un default invece di cambiare stato**: la si scrive lo stesso,
+per la stessa ragione per cui il file esiste in v4 (le interfacce nate fuori da netifd la mancano),
+ma il commento deve dire che non è questo file ad accenderlo.
 
-> Il kernel accetta i Router Advertisement solo quando NON sta inoltrando: `accept_ra=1` significa
-> "accetta se non inoltro". Accendere l'inoltro globale fa quindi smettere di accettare gli RA su
-> ogni interfaccia rimasta a 1 — cioè la WAN smette di autoconfigurarsi e IPv6 muore. La cura è
-> `accept_ra=2` sulle WAN, che netifd scrive da solo per le interfacce che gestisce con IPv6 attivo:
-> qui non lo si tocca, lo si **controlla** e si avvisa se non è così.
+L'avvertenza che il piano portava qui — *l'inoltro globale fa smettere il kernel di accettare i
+Router Advertisement, quindi la WAN non si autoconfigura e IPv6 muore* — descrive una condizione che
+su questo dispositivo **esiste già, e non fa danno**: `accept_ra` è `0` su `eth0`, `phy0.0-sta0`,
+`br-lan` e `default`, con l'inoltro a `1`, e IPv6 sulla LAN funziona (i client hanno indirizzi ULA).
+Il motivo è che `proto dhcpv6` su OpenWrt è **odhcp6c in spazio utente**, che gli RA se li legge da
+sé su socket raw e di `accept_ra` del kernel non ha bisogno.
 
-Aggiungere quel controllo con lo stesso `say "ATTENZIONE: ..."` della verifica esistente, nominando il
-device. `iface_forwarding` (`:150-152`) guadagna il gemello v6 per `tailscale0`.
+**Quindi il controllo con `say "ATTENZIONE: ..."` non va scritto come previsto**: allarmerebbe su
+ogni router sano. Decisione rinviata alla Fase 4, quando `wan6` sarà davvero su con un upstream v6:
+se prende un indirizzo con `accept_ra=0`, il controllo si **toglie**, non si riscrive.
+
+`iface_forwarding` (`:150-152`) guadagna il gemello v6 per `tailscale0` — lì serve davvero, perché
+`tailscale0` nasce fuori da netifd e `.default.forwarding` vale solo per le interfacce create dopo
+che il sysctl è stato applicato.
 
 - **Zona `travel_vpn`**: `masq='1'` è solo IPv4 → aggiungere `masq6='1'`. Senza, l'indirizzo ULA di un
   client esce nel tailnet senza via di ritorno, e il sintomo è "alcune cose funzionano".
@@ -310,8 +409,11 @@ device. `iface_forwarding` (`:150-152`) guadagna il gemello v6 per `tailscale0`.
   dalla stessa funzione — due sezioni esplicite e non una regola senza famiglia, perché la disciplina
   del file è "una sezione per cosa, sempre presente, commutata da `enabled`", e `src_ip` forzerebbe
   comunque la famiglia.
-- **Kill switch**: confermato dalla Fase 0. Se risulta v4-only, gemello `travel_killswitch6`
-  **prima** che la Fase 5 accenda IPv6 sulla LAN.
+- **Kill switch**: ~~gemello `travel_killswitch6`~~ — **non serve, verificato in Fase 0.**
+  `travel_killswitch` rende in `table inet fw4` senza `meta nfproto`, verso `reject_to_wan` che fw4
+  stesso etichetta *reject wan IPv4/IPv6 traffic*. Nessun lavoro in questa fase. (Rende però solo
+  `tcp` e `udp` — default di fw4 quando `proto` manca — quindi ICMP e ICMPv6 passano: buco
+  preesistente in IPv4, fuori dal perimetro di questo piano, da decidere a parte.)
 - **Tailscale `--advertise-routes`** (rpcd `:2459-2462`, `lan_cidr()` `:2503-2521`): aggiungere
   `lan_cidr6()` e unire con la virgola. **Annunciare solo l'ULA, mai la GUA derivata dalla delega**:
   il prefisso delegato cambia a ogni albergo, e una rotta GUA annunciata diventa stantia appena ci si
@@ -361,6 +463,12 @@ verificare: `[2001:db8::1]:51820` fa round-trip identico, e `2001:db8::1` divent
 `mwan3.<interfaccia>` è **mono-famiglia** e il nome della sezione deve coincidere con quello
 dell'interfaccia netifd: un gemello v6 richiede una `config interface '<wan>6'` reale
 (`proto dhcpv6`, `device '@<wan>'`), perché una `wan_6` dinamica non è tracciabile in modo affidabile.
+
+**La Fase 0 dice quanta di questa fase è possibile:** `wan6` esiste già nell'immagine, quindi il
+gemello mwan3 della WAN ethernet si può fare senza creare niente. `wwan_radio0/1` e `wan_usb`, no —
+per loro andrebbero create sezioni `<wan>6` esplicite che oggi il piano non prevede. Se la fase si
+fa, o si accetta che il failover v6 copra la **sola** WAN ethernet (e allora va scritto perché), o la
+fase cresce di quel pezzo.
 
 **Fino alla Fase 8 compresa, mwan3 resta IPv4** — `family=ipv4` a `mwan3-setup.sh:146` e
 `dest_ip=0.0.0.0/0` a `:252` restano, **con un commento che dice che restano di proposito**. Il modo
@@ -421,8 +529,9 @@ UI-nuova/pacchetto-vecchio, che è lo stato normale fra il deploy della SPA e qu
 
 ## Rischi — cosa può chiudere fuori dal router
 
-- **`net.ipv6.conf.all.forwarding=1` spegne IPv6** se le WAN non hanno `accept_ra=2` (Fase 7).
-- **Kill switch che perde IPv6** se la Fase 5 parte prima della verifica della Fase 0.
+- ~~**`net.ipv6.conf.all.forwarding=1` spegne IPv6**~~ e ~~**kill switch che perde IPv6**~~:
+  **entrambi archiviati dalla Fase 0.** L'inoltro v6 è già un default di OpenWrt e IPv6 funziona lo
+  stesso, perché odhcp6c legge gli RA in spazio utente; il kill switch è già dual-family.
 - **`::/0` in tabella 53 senza `suppress_prefixlength`** ripete il blocco documentato a
   `vpn-setup.sh:262-267`, e in v6 è peggio: SSH su v4 continua a funzionare, quindi il router sembra
   a posto mentre ogni browser si pianta.
