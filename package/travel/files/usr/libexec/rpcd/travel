@@ -3215,7 +3215,19 @@ ts_exit_wg_one() {
 		uci set "firewall.$section.dest=vpn"
 		uci set "firewall.$section.src_ip=$src_ip"
 		uci set "firewall.$section.family=$family"
+		# Senza `proto`, fw4 non accetta tutto: accetta `tcp udp`, e ICMP resta
+		# fuori. In IPv6 quello significa niente "Packet Too Big", e siccome i
+		# router v6 non frammentano, i pacchetti grandi spariscono in silenzio.
+		uci set "firewall.$section.proto=all"
 		uci set "firewall.$section.target=ACCEPT"
+		uci set "firewall.$section.enabled=$want"
+		return 0
+	fi
+
+	# La regola puo' essere nata prima che `proto` ci fosse: si allinea qui, e
+	# conta come cambiamento perche' il firewall va ricaricato.
+	if [ "$(uci -q get "firewall.$section.proto")" != "all" ]; then
+		uci set "firewall.$section.proto=all"
 		uci set "firewall.$section.enabled=$want"
 		return 0
 	fi

@@ -92,6 +92,41 @@ describe('l’uscita del tailnet dentro WireGuard', () => {
     expect(get('firewall.travel_vpn_wg6.src_ip')).toBe('fd7a:115c:a1e0::/48');
   });
 
+  it('accetta tutti i protocolli, ICMP compreso', () => {
+    // Senza `proto`, fw4 NON accetta tutto: rende due regole `meta l4proto tcp`
+    // e `meta l4proto udp`, e ICMP resta fuori. In IPv6 e' un guasto vero -
+    // niente "Packet Too Big", e i router v6 non frammentano - quindi i
+    // pacchetti grandi sparirebbero in silenzio.
+    const { get } = toggle('1');
+
+    expect(get('firewall.travel_vpn_wg.proto')).toBe('all');
+    expect(get('firewall.travel_vpn_wg6.proto')).toBe('all');
+  });
+
+  it('mette proto su una regola nata senza, e chiede il reload', () => {
+    // Le regole scritte prima che `proto` esistesse vanno allineate: restare
+    // senza vorrebbe dire tenere il guasto su un router aggiornato.
+    writeFileSync(
+      file('uci.db'),
+      [
+        'firewall.travel_vpn_wg=rule',
+        'firewall.travel_vpn_wg.family=ipv4',
+        'firewall.travel_vpn_wg.enabled=1',
+        'firewall.travel_vpn_wg6=rule',
+        'firewall.travel_vpn_wg6.family=ipv6',
+        'firewall.travel_vpn_wg6.enabled=1',
+      ].join('\n') + '\n',
+    );
+
+    const { get, changed } = toggle('1');
+
+    expect(get('firewall.travel_vpn_wg.proto')).toBe('all');
+    expect(get('firewall.travel_vpn_wg6.proto')).toBe('all');
+    // Niente e' cambiato in `enabled`, ma la regola resa e' diversa: il
+    // firewall va ricaricato lo stesso.
+    expect(changed).toBe(true);
+  });
+
   it('le accende insieme', () => {
     const { get, changed } = toggle('1');
 

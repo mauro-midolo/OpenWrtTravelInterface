@@ -534,6 +534,7 @@ if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
 	uci set firewall.travel_vpn_wg.dest='vpn'
 	uci set firewall.travel_vpn_wg.src_ip='100.64.0.0/10'
 	uci set firewall.travel_vpn_wg.family='ipv4'
+	uci set firewall.travel_vpn_wg.proto='all'
 	uci set firewall.travel_vpn_wg.target='ACCEPT'
 	uci set firewall.travel_vpn_wg.enabled="$TS_ADVERTISE"
 	NEED_FW=1
@@ -555,10 +556,32 @@ if [ -z "$(uci -q get firewall.travel_vpn_wg6)" ]; then
 	uci set firewall.travel_vpn_wg6.dest='vpn'
 	uci set firewall.travel_vpn_wg6.src_ip='fd7a:115c:a1e0::/48'
 	uci set firewall.travel_vpn_wg6.family='ipv6'
+	uci set firewall.travel_vpn_wg6.proto='all'
 	uci set firewall.travel_vpn_wg6.target='ACCEPT'
 	uci set firewall.travel_vpn_wg6.enabled="$TS_ADVERTISE"
 	NEED_FW=1
 fi
+
+# `proto all` non e' ridondante: senza `proto`, fw4 NON accetta tutto, accetta
+# `tcp udp`. Verificato su questo dispositivo - la regola rende come due righe
+# `meta l4proto tcp` e `meta l4proto udp` - e quello che resta fuori e' ICMP.
+#
+# In IPv6 e' un guasto, non un fastidio. ICMPv6 porta il "Packet Too Big", e in
+# IPv6 i router NON frammentano: la scoperta della MTU del percorso e' l'unico
+# meccanismo che c'e', e senza quei messaggi i pacchetti grandi spariscono in
+# silenzio. E' lo stesso guasto contro cui la zona mette `mtu_fix`, che pero'
+# limita la MSS del solo TCP: UDP resterebbe scoperto.
+#
+# Fuori dai blocchi di creazione, come `masq6`, per arrivare anche sulle regole
+# gia' scritte senza `proto`. Non toglie niente alla protezione: a decidere chi
+# entra restano `src_ip` e la coppia di zone, che non cambiano.
+for _s in travel_vpn_wg travel_vpn_wg6; do
+	[ -n "$(uci -q get "firewall.$_s")" ] || continue
+	[ "$(uci -q get "firewall.$_s.proto")" = "all" ] && continue
+	say "$_s: accetto tutti i protocolli (senza, ICMP resterebbe fuori)"
+	uci set "firewall.$_s.proto=all"
+	NEED_FW=1
+done
 
 # --- 4. La regola del kill switch ---------------------------------------------
 #

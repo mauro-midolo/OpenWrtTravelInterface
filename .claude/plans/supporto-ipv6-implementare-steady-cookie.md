@@ -67,8 +67,14 @@ Nessun `meta nfproto ipv4`, tabella `inet`, e il bersaglio se lo dice da solo: *
 
 *Trovato per strada, non nel piano:* la regola rende **due** righe, `tcp` e `udp`, perché
 `travel_killswitch` non ha `proto` e il default di fw4 è `tcp udp`. Il kill switch quindi **non
-ferma ICMP**, e in v6 non ferma ICMPv6. È un buco che esiste già oggi in IPv4 e che IPv6 non
-peggiora — non appartiene a questo piano, ma va deciso a parte se lasciarlo.
+ferma ICMP**, e in v6 non ferma ICMPv6.
+
+> **Correzione, dalla Fase 7.** Qui era scritto che è «un buco che esiste già in IPv4 e che IPv6 non
+> peggiora». **Non è vero:** accendere IPv6 sulla LAN raddoppia le famiglie in cui quella perdita
+> esiste, quindi IPv6 la peggiora. La stessa opzione mancante si è ripresentata in Fase 7 sulla
+> regola d'uscita del tailnet, dove il verso era rovesciato — su un ACCEPT il `proto` mancante
+> *blocca* invece di lasciar passare — ed è stata corretta lì. Sul kill switch resta aperta: fuori
+> dal perimetro di questo piano, ma da decidere, e non da archiviare come innocua.
 
 **2. `wan6` è esplicito nell'immagine — e i due casi convivono sullo stesso router.**
 `ubus call network.interface dump` elenca `lan, loopback, travel_wg2, wan, wan6, wwan_radio0,
@@ -961,7 +967,7 @@ che il sysctl è stato applicato.
 
 ### Esito
 
-`tsc --noEmit` pulito, **410 test su 24 file** (5 nuovi), build a 235 kB, `sh -n` su rpcd e
+`tsc --noEmit` pulito, **412 test su 24 file** (7 nuovi), build a 235 kB, `sh -n` su rpcd e
 `vpn-setup.sh`. `method_vpn` provato **sul router vero**:
 
 ```
@@ -1016,6 +1022,35 @@ codice.
 con `uci` simulato: le due sezioni con le due famiglie, accese insieme, spente insieme, nessun
 cambiamento segnalato quando non ce n'è — chi chiama usa quella risposta per decidere se ricaricare
 il firewall — e la gemella v6 creata su un router che ha solo la v4.
+
+### La trappola del `proto` mancante, di nuovo
+
+La prima stesura della gemella v6 non aveva `proto`, ed è **la stessa trappola trovata in Fase 0 sul
+kill switch**: senza quell'opzione fw4 non accetta tutto, accetta `tcp udp`. Verificato sul router:
+
+```
+senza proto:  meta l4proto tcp ip saddr 100.64.0.0/10 ... jump accept_to_vpn
+              meta l4proto udp ip saddr 100.64.0.0/10 ... jump accept_to_vpn
+con proto=all:            ip saddr 100.64.0.0/10 ... jump accept_to_vpn
+                          ip6 saddr fd7a:115c:a1e0::/48 ... jump accept_to_vpn
+```
+
+**Su una regola di ACCEPT il verso del guasto si rovescia**, e in IPv6 diventa serio. Quello che
+restava fuori è ICMPv6, che porta il *Packet Too Big*; e siccome i router IPv6 **non frammentano**,
+la scoperta della MTU del percorso è l'unico meccanismo esistente. Senza quei messaggi i pacchetti
+grandi spariscono in silenzio — esattamente il guasto contro cui la zona mette `mtu_fix`, che però
+limita la MSS del solo TCP e lascia UDP scoperto.
+
+`proto='all'` su **entrambe** le gemelle, dentro i blocchi di creazione e con un allineamento
+idempotente fuori, per le regole già scritte. Non toglie niente alla protezione: a decidere chi entra
+restano `src_ip` e la coppia di zone, che non cambiano. La correzione tocca anche la regola IPv4,
+che aveva lo stesso buco da sempre — lì costava un ping che non passa, non un buco nero.
+
+> **Resta aperto, ed è la stessa opzione:** `travel_killswitch` non ha `proto`, quindi ferma `tcp` e
+> `udp` e lascia passare ICMP e **ICMPv6**. Su una regola di REJECT è una perdita, non un blocco, e
+> ora che la LAN ha IPv6 quella perdita esiste in due famiglie invece che in una. La Fase 0 l'aveva
+> archiviata come «buco preesistente in IPv4 che IPv6 non peggiora»: **quella valutazione andrebbe
+> rifatta**, perché IPv6 lo peggiora eccome. Fuori dal perimetro di questo piano, ma da decidere.
 
 ---
 
