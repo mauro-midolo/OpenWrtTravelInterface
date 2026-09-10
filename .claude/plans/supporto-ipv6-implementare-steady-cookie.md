@@ -1231,8 +1231,8 @@ silenzio**: la politica non viene applicata e le regole che la usano non fanno n
 come è già successo in questo progetto con `only_wwan_radio0`. Da qui `travel_fail6` e `travel_bal6`,
 e un test che verifica la lunghezza invece di fidarsi.
 
-Per lo stesso motivo il limite sulle politiche per WAN scende da 13 a **12** caratteri: il nome della
-gemella cresce di uno, e `o_wwan_radio06` è già a 14.
+Per lo stesso motivo il limite sulle politiche per WAN scende da 13 a **12** caratteri: il prefisso
+IPv6 è di tre caratteri (`o6_`) invece di due, e `o6_wwan_radio0` è già a 14.
 
 ### «Nella stessa transazione o in nessuna»
 
