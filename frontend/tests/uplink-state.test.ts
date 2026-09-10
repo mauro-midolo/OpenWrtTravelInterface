@@ -91,11 +91,22 @@ describe('fin dove arriva IPv6', () => {
   it('con indirizzo e SENZA gateway IPv6 resta in casa', () => {
     // Il caso vero, visto su una FRITZ!Box senza IPv6 dal provider: annuncia un
     // prefisso ULA ma nessuna rotta predefinita - router lifetime a zero - e
-    // fa bene. L'indirizzo e' valido, il gateway non esiste, e verso Internet
-    // si esce in IPv4. Un trattino li' farebbe sospettare un guasto che non c'e'.
+    // fa bene. L'indirizzo e' valido e il gateway non esiste: un trattino li'
+    // farebbe sospettare un guasto che non c'e'.
     expect(
       ipv6Reach(uplink({ ipv6: ['fdbd:e14b:8a72:0:9683:c4ff:fed6:c74d/64'], gateway6: '' })),
     ).toBe('local');
+  });
+
+  it('“locale” non dice niente su IPv4, e non deve', () => {
+    // La risposta e' la stessa con o senza IPv4, perche' questa funzione
+    // guarda una famiglia sola. Un uplink v6-only senza gateway v6 non ha
+    // nessuna uscita, e promettergli IPv4 sarebbe dire una cosa falsa.
+    const conV4 = uplink({ ipv4: '192.168.0.43', ipv6: ['fd00::1/64'], gateway6: '' });
+    const senzaV4 = uplink({ ipv4: '', ipv6: ['fd00::1/64'], gateway6: '' });
+
+    expect(ipv6Reach(conV4)).toBe('local');
+    expect(ipv6Reach(senzaV4)).toBe('local');
   });
 
   it('vale il gateway, non la forma dell’indirizzo', () => {

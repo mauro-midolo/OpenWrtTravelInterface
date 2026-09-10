@@ -122,13 +122,18 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
             <>
               <Row label="Indirizzo IPv6" value={uplink.ipv6.join('  ')} />
               {/* Un trattino accanto a un indirizzo valido fa sospettare un
-                  guasto che non c'e': senza rotta predefinita IPv6 non si esce,
-                  e la riga lo dice invece di lasciarlo dedurre. */}
+                  guasto che non c'e': senza rotta predefinita IPv6 non esce
+                  dalla rete locale, e la riga lo dice invece di lasciarlo
+                  dedurre.
+
+                  Quello che NON dice e' come vada IPv4: questa riga non lo sa.
+                  Un uplink puo' non avere affatto un indirizzo IPv4, e anche
+                  averlo non basta - dietro un captive portal non si esce lo
+                  stesso. A quella domanda risponde la verifica dell'uscita,
+                  che e' un'altra cosa e sta apposta altrove. */}
               <Row
                 label="Gateway IPv6"
-                value={
-                  uplink.gateway6 || 'nessuno · IPv6 resta nella rete locale, si esce in IPv4'
-                }
+                value={uplink.gateway6 || 'nessuno · IPv6 non esce dalla rete locale'}
               />
               {uplink.dns6.length > 0 && (
                 <Row label="DNS IPv6" value={uplink.dns6.join('  ')} />

@@ -697,15 +697,20 @@ resta vuoto: non è un errore di lettura, è il router a monte che dichiara di n
 essere un gateway IPv6.
 
 Succede quando quel router IPv6 dal provider non ce l'ha: distribuisce un ULA
-perché i dispositivi di casa si parlino fra loro, e verso Internet si esce in
-IPv4. Osservato su una FRITZ!Box, dove la tabella di instradamento conteneva
-solo prefissi `fd…`, nessuna `default`, e `ping6` verso Internet rispondeva
-*Network unreachable*.
+perché i dispositivi della rete locale si parlino fra loro, e non si annuncia
+come uscita. Osservato su una FRITZ!Box, dove la tabella di instradamento
+conteneva solo prefissi `fd…`, nessuna `default`, e `ping6` verso Internet
+rispondeva *Network unreachable*.
 
 `ipv6Reach()` distingue quindi tre casi — nessun IPv6, IPv6 solo locale, IPv6 che
 esce — e a deciderlo è **il gateway, non la forma dell'indirizzo**: un ULA
 instradato esce, una GUA senza rotta predefinita no. Le schede lo scrivono al
 posto di un trattino, che invita alla conclusione sbagliata.
+
+Quello che quelle righe **non** dicono è come vada IPv4, e l'omissione è
+voluta: un uplink può non avere affatto un indirizzo IPv4, e anche averlo non
+basta — dietro un captive portal non si esce lo stesso. «Si esce davvero» è una
+domanda separata, ed è quella a cui risponde la verifica dell'uscita.
 
 Una migrazione una tantum, sotto il marcatore `travel.globals.ipv6_init`,
 **cancella** i vecchi `ipv6 '0'` dalle WAN esistenti. Cancella e non scrive `1`:

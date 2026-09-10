@@ -191,11 +191,15 @@ export type Ipv6Reach = 'none' | 'local' | 'internet';
  * a monte che annuncia un prefisso ULA ma NESSUNA rotta predefinita - cioe' un
  * Router Advertisement con router lifetime a zero. E' quello che fa una
  * FRITZ!Box quando il provider non le da' un prefisso globale, ed e' corretto:
- * i dispositivi di casa si parlano in IPv6, e verso Internet si esce in IPv4.
- * L'indirizzo c'e' ed e' valido, ma il gateway non esiste e non deve esistere.
+ * serve a far parlare in IPv6 i dispositivi della rete locale. L'indirizzo c'e'
+ * ed e' valido, ma il gateway non esiste e non deve esistere.
  *
  * Il segnale e' il gateway, non la forma dell'indirizzo: senza rotta
  * predefinita non si esce, per quanti indirizzi ci siano.
+ *
+ * `local` dice dove NON arriva IPv6, e non promette niente su IPv4: qui non si
+ * sa se l'uplink un indirizzo v4 ce l'abbia, ne' - se ce l'ha - se da li' si
+ * esca davvero, che e' la domanda a cui risponde la verifica dell'uscita.
  */
 export function ipv6Reach(u: { ipv6: string[]; gateway6: string }): Ipv6Reach {
   if (u.ipv6.length === 0) return 'none';
