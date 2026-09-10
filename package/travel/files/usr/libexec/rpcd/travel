@@ -340,10 +340,14 @@ default_gateway() {
 # Stato dell'interfaccia logica IPv6 gemella di una WAN, cercato nel dump.
 #
 # netifd tiene IPv6 in un'interfaccia logica a se', e quale sia non si puo'
-# indovinare: su questo router `wan` ha una `config interface 'wan6'` scritta
-# nell'immagine, mentre le WiFi e il tethering, quando IPv6 e' acceso, si
-# ritrovano una `<net>_6` creata al volo da netifd. I due casi convivono, quindi
-# una regola sui soli nomi non basta.
+# indovinare dal nome della WAN: `wan` ha una `config interface 'wan6'` scritta
+# nell'immagine, e le altre WAN ne vogliono una uguale.
+#
+# Verificato su OpenWrt 25.12: nessuno script in /lib/netifd/proto/ crea alias
+# `<net>_6` al volo, e il proto `dhcp` l'opzione `ipv6` non la legge nemmeno.
+# Una sezione esplicita e' quindi l'UNICO modo di avere IPv6 su una WAN. Il
+# ripiego su `${net}_6` qui sotto resta per le versioni che quegli alias li
+# creano, e su questa non combaciera' mai.
 #
 # L'appaiamento e' sul l3_device: il gemello sta per forza sopra lo stesso
 # device del fratello v4. Solo a interfaccia giu', dove il device non esiste da

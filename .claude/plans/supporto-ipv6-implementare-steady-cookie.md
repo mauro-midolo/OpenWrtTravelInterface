@@ -421,7 +421,56 @@ proprio la forma che il confine deve normalizzare non serve a niente.
 
 ---
 
-## Fase 4 — WAN dual-stack accese
+## Fase 4 — WAN dual-stack accese ✅ *(rifatta il 2026-09-10; verifica sul campo da fare)*
+
+> **La premessa originale della fase era sbagliata.** `option ipv6 '0'` su una `proto dhcp` non fa
+> niente su OpenWrt 25.12: `/lib/netifd/proto/dhcp.sh` non nomina `ipv6` da nessuna parte, e nessuno
+> script in `/lib/netifd/proto/` crea alias `<net>_6`. Toglierla è **inerte**. IPv6 su una WAN si
+> accende in un modo solo, con una **`config interface '<net>6'` esplicita** — quella che l'immagine
+> di fabbrica porta già per `wan`. La fase è stata riscritta di conseguenza; il racconto di come si è
+> scoperto sta in «Cosa è successo davvero sul router».
+
+**Come è fatta adesso.** Due blocchi in `setup.sh`, in due punti diversi del file:
+
+1. La migrazione `travel.globals.ipv6_init`, che **resta** dov'era: toglie un'opzione morta, e
+   lasciarla scritta suggerirebbe al prossimo lettore che serva a qualcosa.
+2. Un ciclo sulle reti della zona firewall `wan` che, per ogni WAN `proto dhcp` **senza** gemella,
+   crea `<net>6` con `proto dhcpv6` e `device '@<net>'`, la aggiunge alla zona firewall, e **riallinea
+   la metrica a quella della sorella v4 a ogni giro**.
+
+`device '@<net>'` e non il nome del device: per una STA WiFi il device in uci non c'è affatto — glielo
+assegna la sezione wireless — e cambia a ogni riassociazione. Il riferimento simbolico segue la
+sorella v4 dovunque vada.
+
+**Il ciclo sta dopo `sh mwan3-setup.sh`, e non è un dettaglio di ordinamento.** Le metriche delle WAN
+v4 le assegna quello script (`mwan3-setup.sh:99-105`), e su un'installazione nuova prima del suo giro
+**non esistono**. Messo più in alto — dov'era nella prima stesura — ogni gemella nasceva con
+`metric=0`: tutte uguali, tutte "migliori", e siccome le sezioni si creano una volta sola quel valore
+sbagliato non lo avrebbe corretto più nessuno. Esattamente il guasto che la metrica copiata doveva
+evitare, cioè v4 e v6 che escono da WAN diverse e «metà del web carica».
+
+Due conseguenze di quello spostamento, entrambe necessarie:
+
+- **La metrica si riallinea a ogni esecuzione**, non solo alla creazione. Riordinare le priorità
+  delle WAN dall'interfaccia riscrive le metriche v4, e una gemella rimasta indietro spezzerebbe la
+  coppia. Vale anche per il `wan6` dell'immagine, che nasce con metrica `0`: quella non è una
+  preferenza dell'utente, è la metà v6 di una coppia.
+- **Il ciclo ha i suoi `NEED_IPV6_*_RELOAD` e la sua ricarica in fondo**, perché gira *dopo* il
+  blocco che ricarica rete e firewall (`setup.sh:464-469`). Riusare i `NEED_*` di sopra non avrebbe
+  ricaricato niente — sono già stati letti — e avrebbe fatto credere al lettore successivo che quel
+  reload copra anche questa parte.
+- **La lettura della metrica vuole `|| true`**, ed è l'idioma che il file già documenta a `:334-336`:
+  con `set -e` (`setup.sh:8`) un'assegnazione da un'opzione che non c'è ferma tutto lo script. Qui il
+  caso non è teorico: `mwan3-setup.sh` esce a `:28` **prima di assegnare qualunque metrica** quando
+  mwan3 non è installabile perché manca Internet — e lo dice, promettendo che «tutto il resto
+  funziona». Senza la guardia, `setup.sh` sarebbe morto proprio lì, saltando `vpn-setup.sh`, l'avvio
+  di travelD e il riavvio di rpcd. La prima installazione di un router senza Internet, cioè il caso
+  peggiore possibile.
+
+Si crea **solo se manca**: il `wan6` dell'immagine resta intatto, e chi vuole IPv6 spento su una WAN
+mette `disabled 1` sulla sua `<net>6` — che sopravvive, mentre cancellarla la farebbe solo ricreare.
+`stageEthPort` fa lo stesso per le porte create dall'interfaccia, così una porta nuova non nasce
+IPv4-only.
 
 Togliere `ipv6=0` da `setup.sh:160,194,230` e da `lan.ts:616` (`stageEthPort`).
 
@@ -434,6 +483,135 @@ Migrazione una tantum in `setup.sh`, col pattern esistente (`travel.globals.eth_
 **Nuovo test shell `ipv6-migration.test.ts`**, nello stile di `toggle-ap.test.ts` (script veri, `uci`
 simulato, Git Bash su Windows): installazione nuova, aggiornamento, **seconda esecuzione che non
 tocca niente**, e un utente che rimette `ipv6=0` dopo il marcatore se lo tiene.
+
+### Esito
+
+I tre `uci set ... ipv6=0` di `setup.sh` e quello di `stageEthPort` sono spariti — non sostituiti da
+`ipv6=1`: l'opzione non si scrive affatto, perché nessuno la legge. Il blocco
+`travel.globals.ipv6_init` sta accanto al gemello `dhcp_hostname_init`, che è il pattern che imita.
+
+`tsc --noEmit` pulito, **348 test su 19 file** (19 nuovi), build a 231 kB, `sh -n` su `setup.sh`.
+
+Il test **estrae i due blocchi dal `setup.sh` vero** invece di ricopiarli: se qualcuno li riscrive, il
+test legge la riscrittura, e se il ciclo delle gemelle diventasse ambiguo l'estrazione fallisce invece
+di prendere quello sbagliato in silenzio.
+
+Sulla migrazione: aggiornamento, installazione nuova (niente da cancellare, e soprattutto **nessun
+reload chiesto per un lavoro non fatto** — un `network reload` inutile fa cadere chi è collegato),
+seconda esecuzione, utente che rimette `ipv6=0` dopo il marcatore, verifica esplicita che `1` non
+venga mai scritto, rete nominata nella zona ma inesistente, e — il test che tiene ferma la lezione —
+**che da sola non crei nessuna `<net>6`**, cioè che non accenda niente.
+
+Sulle gemelle: una per WAN con `proto dhcpv6` e `device '@<net>'`, l'ingresso nella zona firewall, la
+metrica copiata, la **gemella della gemella che non nasce** (senza il filtro sul proto uscirebbe un
+`wan66`, e al giro dopo un `wan666`), la seconda esecuzione che non tocca niente, e una gemella
+esistente — il `wan6` di fabbrica, o una con `disabled 1` — lasciata intatta.
+
+Sulla metrica e sull'ordine, dopo la correzione: che **senza metrica v4 non ne inventi una** (meglio
+nessuna che una sbagliata e definitiva), che il riallineamento avvenga quando la sorella cambia, che
+tocchi anche il `wan6` a metrica `0`, che a metrica già allineata **non chieda nessun reload**, e —
+il test che rende irrilevanti gli altri — che **il ciclo stia dopo `mwan3-setup.sh` dentro il file**.
+Quest'ultimo è stato provato al contrario, invertendo davvero i due blocchi: fallisce con
+`expected 620 to be greater than 700`.
+
+Il runner controlla **entrambe** le coppie di contatori, `NEED_*` e `NEED_IPV6_*`, così un flag
+scritto in quella sbagliata — che non ricaricherebbe niente — si vede invece di passare inosservato.
+
+**E gira sotto `set -e`, come lo script vero.** Non c'era, e senza di esso il test viveva in un mondo
+più clemente di quello reale: l'assegnazione della metrica su un'opzione assente lasciava
+tranquillamente la variabile vuota invece di uccidere lo script. Aggiungendolo, **tutti e sei** i
+test sulle gemelle sono passati da verdi a rossi con `expected 1 to be +0` — cioè il difetto c'era da
+subito e il test non poteva vederlo. Il controllo sull'uscita a zero vale ora per ogni chiamata, ed è
+il vero contenuto del test «senza nessuna metrica non interrompe il setup».
+
+*Lezione, più generale di questa fase:* un test che esegue pezzi di uno script deve riprodurne anche
+le opzioni di shell, non solo il testo.
+
+Lo stub di `uci` confronta le chiavi con `awk` e non con una regex di `sed`: le chiavi contengono
+`@zone[1]`, e `sed` interpreterebbe `[1]` come una classe di caratteri senza trovare niente.
+
+### Cosa è successo davvero sul router
+
+Deploy eseguito e `setup.sh` lanciato. **La migrazione ha funzionato come scritto**: le quattro
+opzioni cancellate, `wan6` saltata perché non ne aveva, marcatore a `1`, nessuna modifica pendente.
+
+**Ma IPv6 non si è acceso**, e non per un errore di esecuzione: `ubus call network.interface dump`
+non mostra nessun `wwan_radio0_6`, non gira nessun `odhcp6c`, non c'è nessuna rotta predefinita v6 e
+`ping6` risponde *Network unreachable*. La ragione, verificata sul router:
+
+```
+grep -n ipv6 /lib/netifd/proto/dhcp.sh      → nessuna riga
+grep -rn "_6" /lib/netifd/proto/*.sh        → nessuna riga
+```
+
+Il proto `dhcp` di netifd **non legge affatto** l'opzione `ipv6`, e nessuno script di protocollo crea
+alias `<net>_6`. Su questo OpenWrt IPv6 su una WAN si ottiene in un modo solo: una **`config
+interface '<net>6'` esplicita con `proto dhcpv6`** — esattamente quella che l'immagine GL.iNet
+fornisce per `wan`, e che la Fase 0 aveva trovato senza che se ne cogliesse il significato. Quel
+`wan6` non è una particolarità dell'immagine: è *l'unico meccanismo esistente*.
+
+**Ricadute sulle fasi già fatte:**
+
+- **Fase 4 va rifatta.** Cancellare `ipv6=0` è innocuo ma non basta: servono sezioni `<net>6`
+  (`proto dhcpv6`, device della WAN) create per ogni WAN e aggiunte alla zona firewall `wan`. La
+  migrazione attuale può restare — toglie un'opzione morta — ma non è la fase.
+- **Fase 3 regge, con una correzione al commento.** L'appaiamento sul `l3_device` resta quello
+  giusto, e anzi diventa l'unico possibile; ma il caso «`<net>_6` dinamica creata da netifd»
+  **non esiste su questa piattaforma**. Il ripiego sul nome `${net}_6` è innocuo e non combacerà mai,
+  mentre `${net}6` è il caso vero.
+- **Fase 9 diventa più fattibile di quanto scritto**, non meno: se ogni WAN ha già la sua `<net>6`
+  esplicita, il gemello mwan3 è possibile per tutte e non solo per `wan`.
+
+**L'interruzione di Internet.** `setup.sh` ha chiesto un `network reload` (`NEED_NETWORK_RELOAD=1`,
+di suo progetto quando tocca la rete): netifd ha riavviato la STA WiFi, che si è riassociata e ha
+preso un lease nuovo (`192.168.0.91` → `192.168.0.87`). Nella finestra fra i due la LAN è rimasta
+senza uscita. Si è ripreso da sola — uplink su e stabile, 5 ping su 5, e la macchina in LAN naviga —
+ma **il costo è stato pagato per un cambiamento che non ha alcun effetto**, ed è la ragione per cui
+questa scoperta va scritta qui e non lasciata al prossimo giro.
+
+### Verifica sul router: com'era pianificata
+
+La migrazione è stata provata **in sola lettura** contro la configurazione vera di
+`192.168.10.1`, simulando cosa farebbe:
+
+```
+marcatore travel.globals.ipv6_init: assente  → la migrazione partirebbe
+  wan          → cancellerebbe ipv6=0
+  wan6         → già a posto, non tocca      (il gemello statico non ha l'opzione)
+  wwan_radio0  → cancellerebbe ipv6=0
+  wwan_radio1  → cancellerebbe ipv6=0
+  wan_usb      → cancellerebbe ipv6=0
+```
+
+Dei tre controlli previsti, il primo è passato (`uci -q get network.wan.ipv6` non esiste più); il
+secondo — `ubus call network.interface.wan status` con un `ipv6-address` non vuoto — **è fallito**,
+ed è quello che ha portato alla scoperta qui sopra. Il terzo, la riesecuzione che non tocca niente,
+resta coperto da `ipv6-migration.test.ts`.
+
+**Il router non è stato toccato dopo la riscrittura**, per scelta: le sezioni `<net>6` esistono nel
+codice e nei test ma non ancora sul dispositivo. Alla prossima esecuzione di `setup.sh` verranno
+create — quattro sezioni nuove più l'ingresso in zona firewall — e quello comporterà un altro
+`network reload`, cioè un'altra interruzione breve. Vale la pena programmarlo, non subirlo.
+
+**Attenzione a cosa può dire la prova.** La rete a monte di questo router (`192.168.0.1`) potrebbe
+non offrire IPv6 affatto: in quel caso le `<net>6` si alzeranno senza prendere niente, e non si
+saprà distinguere «il codice non funziona» da «non c'è IPv6 da prendere». Un controllo preliminare —
+un `wan6` su cavo verso una linea con IPv6, o un tethering su rete mobile — vale più della prova
+stessa.
+
+**La domanda della Fase 0 resta aperta.** Se `accept_ra=0` basti perché una WAN v6 si autoconfiguri
+non è ancora verificabile: nessuna WAN v6 è mai salita. Si potrà rispondere solo dopo che le sezioni
+`<net>6` esisteranno davvero — e serve un upstream che IPv6 lo offra, cosa che la rete a monte
+(`192.168.0.1`) potrebbe non fare.
+
+### Bug trovato in `tools/deploy.ps1`
+
+Il deploy è fallito con `tar: invalid magic`. Il tar in locale è integro e misura **179410** byte,
+quello arrivato sul router **179413**: tre byte in più, cioè un **BOM UTF-8** che lo `StreamWriter`
+di `$proc.StandardInput` antepone allo stream binario prima della `CopyTo` su `.BaseStream`
+(`deploy.ps1:99-113`). Non c'entra con IPv6 ed è indipendente da questo piano, ma **il deploy da
+PowerShell è rotto** finché non viene sistemato. Aggirato trasferendo il tar con
+`cat file | ssh root@router 'cat > ...'`, che è binario-sicuro.
 
 ---
 

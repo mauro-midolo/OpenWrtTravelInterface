@@ -530,6 +530,21 @@ export async function stageEthMac(port: EthPort, requested: string): Promise<voi
  * Con mwan3 presente la sua voce segue la porta: altrimenti resterebbe un
  * health check su una WAN che non esiste piu'.
  */
+/**
+ * Vero se la sezione uci esiste gia'.
+ *
+ * `uci get` su una sezione che non c'e' risponde con un errore, non con un
+ * valore vuoto: l'assenza si legge solo intercettandolo.
+ */
+async function sectionExists(config: string, section: string): Promise<boolean> {
+  try {
+    await call('uci', 'get', { config, section });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function stageEthPort(
   info: EthPorts,
   port: EthPort,
@@ -576,23 +591,44 @@ export async function stageEthPort(
         values: { disabled: '0', device: port.name },
       });
     } else {
-      // IPv6 disattivato come su tutte le altre WAN: mwan3 lo gestisce a meta'
-      // e i captive portal peggio. `hostname: '*'` significa non mandare
-      // nessun nome nella richiesta DHCP: e' il default del progetto, e una
-      // porta nuova non deve nascere piu' loquace delle altre.
+      // Nessun `ipv6`: l'opzione su una `proto dhcp` non la legge nessuno
+      // (netifd non la nomina nemmeno), quindi scriverla in un senso o
+      // nell'altro non cambierebbe niente. IPv6 lo accende la sezione `<net>6`
+      // qui sotto, che e' l'unico meccanismo che esiste.
+      //
+      // `hostname: '*'` significa non mandare nessun nome nella richiesta
+      // DHCP: e' il default del progetto, e una porta nuova non deve nascere
+      // piu' loquace delle altre.
       await call('uci', 'add', {
         config: 'network',
         type: 'interface',
         name: network,
-        values: { proto: 'dhcp', device: port.name, ipv6: '0', hostname: '*' },
+        values: { proto: 'dhcp', device: port.name, hostname: '*' },
       });
     }
 
-    if (info.zone_section && !info.zone_networks.includes(network)) {
+    // La gemella IPv6, come la crea setup.sh per le altre WAN: `device` e' il
+    // riferimento simbolico `@<net>`, cosi' segue la sorella v4 anche se il suo
+    // device cambia. Senza questa sezione la porta nascerebbe IPv4-only, e
+    // sarebbe l'unica WAN del router a esserlo.
+    const network6 = `${network}6`;
+    if (!(await sectionExists('network', network6))) {
+      await call('uci', 'add', {
+        config: 'network',
+        type: 'interface',
+        name: network6,
+        values: { proto: 'dhcpv6', device: `@${network}` },
+      });
+    }
+
+    // Le due sezioni entrano insieme nella zona firewall: una WAN v6 fuori
+    // dalla zona sembrerebbe su senza far passare niente.
+    const missing = [network, network6].filter((n) => !info.zone_networks.includes(n));
+    if (info.zone_section && missing.length > 0) {
       await call('uci', 'set', {
         config: 'firewall',
         section: info.zone_section,
-        values: { network: [...info.zone_networks, network] },
+        values: { network: [...info.zone_networks, ...missing] },
       });
     }
   } else if (port.network) {
