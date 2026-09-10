@@ -207,6 +207,15 @@ function WanCard({
           <Row label="Indirizzo" value={wan.ipv4 || 'nessuno'} />
           <Row label="Gateway" value={wan.gateway || '—'} />
           <Row label="DNS" value={wan.dns?.length ? wan.dns.join('  ') : '—'} />
+          {/* Solo dove IPv6 c'e': vedi la stessa scelta in Wifi.tsx. */}
+          {wan.ipv6.length > 0 && (
+            <>
+              <Row label="Indirizzo IPv6" value={wan.ipv6.join('  ')} />
+              <Row label="Gateway IPv6" value={wan.gateway6 || '—'} />
+              {wan.dns6.length > 0 && <Row label="DNS IPv6" value={wan.dns6.join('  ')} />}
+              {wan.prefix6 && <Row label="Prefisso delegato" value={wan.prefix6} />}
+            </>
+          )}
           <Row label="MAC in uso" value={wan.mac || '—'} />
           {wan.kind === 'usb' && (
             <>

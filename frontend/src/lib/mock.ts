@@ -966,9 +966,22 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           mac: sta.mac || `94:83:c4:d6:c7:4${r.index}`,
           up: hasIp,
           ipv4: hasIp ? `192.168.0.${octet}` : '',
-          netmask: hasIp ? '255.255.255.0' : '',
+          // Il numero di bit e non la maschera puntata: e' quello che ubus
+          // riporta davvero, e il simulatore serve a poco se semplifica proprio
+          // la forma che il confine deve normalizzare.
+          netmask: hasIp ? '24' : '',
           gateway: hasIp ? '192.168.0.1' : '',
           dns: hasIp ? ['192.168.0.1', '1.1.1.1'] : [],
+          // Solo la STA a 5 GHz (index 1) e' dual-stack: quella a 2.4 resta
+          // v4-only, cosi' le due righe si possono confrontare a colpo d'occhio.
+          ...(hasIp && r.index === 1
+            ? {
+                ipv6: ['2001:db8:c0ca:1::b1c/64', 'fd42:1:2::b1c/64'],
+                gateway6: 'fe80::1',
+                prefix6: '2001:db8:c0ca:1::/64',
+                dns6: ['2001:4860:4860::8888'],
+              }
+            : { ipv6: [], gateway6: '', prefix6: '', dns6: [] }),
         };
       }),
   }),
@@ -1044,6 +1057,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         ipv4: `192.168.0.${r.index === 0 ? 76 : 43}`,
         gateway: '192.168.0.1',
         dns: ['192.168.0.1', '1.1.1.1'],
+        // Dual-stack solo a 5 GHz, come in travel.uplinks: le due risposte
+        // descrivono lo stesso router e non devono raccontarlo in due modi.
+        ipv6: r.index === 1 ? ['2001:db8:c0ca:1::b1c/64', 'fd42:1:2::b1c/64'] : [],
+        gateway6: r.index === 1 ? 'fe80::1' : '',
+        prefix6: r.index === 1 ? '2001:db8:c0ca:1::/64' : '',
+        dns6: r.index === 1 ? ['2001:4860:4860::8888'] : [],
         mac: `94:83:c4:d6:c7:4${r.index}`,
         metric: r.index === 0 ? 20 : 10,
         rx_rate: jitter(240000, 180000),
@@ -1073,9 +1092,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       channel: 0,
       signal: 0,
       bitrate: 0,
+      // La WAN via cavo resta v4-only anche quando un cavo c'e': e' il caso
+      // dell'albergo, e serve a vedere che una riga senza IPv6 non cambia
+      // aspetto rispetto a prima.
       ipv4: '',
       gateway: '',
       dns: [],
+      ipv6: [],
+      gateway6: '',
+      prefix6: '',
+      dns6: [],
       mac: '94:83:c4:d6:c7:4f',
       metric: 30,
       rx_rate: 0,
@@ -1105,9 +1131,17 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       channel: 0,
       signal: 0,
       bitrate: 0,
-      ipv4: '192.168.42.129',
-      gateway: '192.168.42.129',
-      dns: ['192.168.42.129'],
+      // Tethering v6-only: e' il caso 464XLAT, comune sulle reti mobili, ed e'
+      // l'unico modo di vedere davvero il passaggio no-address -> addressed.
+      // Senza una riga cosi' nel simulatore, la regola "basta una delle due
+      // famiglie" resterebbe una riga di codice che nessuno guarda.
+      ipv4: '',
+      gateway: '',
+      dns: [],
+      ipv6: ['2a00:1450:4001:80f::200e/64'],
+      gateway6: 'fe80::dead:beef',
+      prefix6: '2a00:1450:4001:80f::/60',
+      dns6: ['2606:4700:4700::1111'],
       mac: '9a:2c:11:04:8e:21',
       metric: 40,
       rx_rate: jitter(90000, 60000),

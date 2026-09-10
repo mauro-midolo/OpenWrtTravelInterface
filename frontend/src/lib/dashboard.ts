@@ -58,6 +58,17 @@ export interface DashWan {
   ipv4: string;
   gateway: string;
   dns: string[];
+  /**
+   * Indirizzi IPv6 col prefisso attaccato, gateway, prefisso delegato e DNS v6.
+   *
+   * Obbligatori come su `Uplink`, e riempiti all'ingresso da
+   * `withDashWanDefaults`: un router con il pacchetto vecchio non li manda, e
+   * nessuna scheda della dashboard deve saperlo.
+   */
+  ipv6: string[];
+  gateway6: string;
+  prefix6: string;
+  dns6: string[];
   mac: string;
   metric: number;
   /** Nome inviato nel DHCP, grezzo da uci: `*` nessuno, vuoto quello del router. */
@@ -105,8 +116,28 @@ export interface Dashboard {
   last_error: string;
 }
 
-export function getDashboard(): Promise<Dashboard> {
-  return call<Dashboard>('traveld', 'dashboard', { detail: '' });
+/** La WAN come arriva da travelD, dove i campi v6 possono mancare. */
+type RawDashWan = Omit<DashWan, 'ipv6' | 'gateway6' | 'prefix6' | 'dns6'> &
+  Partial<Pick<DashWan, 'ipv6' | 'gateway6' | 'prefix6' | 'dns6'>>;
+
+/** Stessa regola di `withUplinkDefaults`, sull'altra porta d'ingresso. */
+function withDashWanDefaults(raw: RawDashWan): DashWan {
+  return {
+    ...raw,
+    ipv6: raw.ipv6 ?? [],
+    gateway6: raw.gateway6 ?? '',
+    prefix6: raw.prefix6 ?? '',
+    dns6: raw.dns6 ?? [],
+  };
+}
+
+export async function getDashboard(): Promise<Dashboard> {
+  const board = await call<Omit<Dashboard, 'wans'> & { wans?: RawDashWan[] }>(
+    'traveld',
+    'dashboard',
+    { detail: '' },
+  );
+  return { ...board, wans: (board.wans ?? []).map(withDashWanDefaults) };
 }
 
 export type OverallState =

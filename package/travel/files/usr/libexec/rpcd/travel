@@ -310,19 +310,99 @@ method_radios() {
 # Gateway predefinito di un'interfaccia, dal suo stato ubus.
 #
 # Non basta prendere route[0]: l'elenco puo' contenere prima le rotte della
-# sottorete locale. Si cerca quella con destinazione 0.0.0.0.
+# sottorete locale. Si cerca quella con la destinazione chiesta in $2, che e'
+# "0.0.0.0" per IPv4 e "::" per IPv6.
+#
+# La destinazione e' un parametro e NON un "una delle due": accettando
+# entrambe, la prima rotta predefinita trovata vincerebbe qualunque famiglia
+# avesse, e un nexthop IPv4 finirebbe dentro gateway6. Sarebbe scritto, non
+# segnalato, e sbagliato.
 default_gateway() {
-	local routes route target
+	local routes route target want
 
-	routes=$(printf '%s' "$1" | jsonfilter -e '@.route[*]')
+	want="$2"
+	# Uno stato vuoto - interfaccia giu', o gemello v6 inesistente - non e' un
+	# errore: senza questa uscita jsonfilter si lamenterebbe su stderr a ogni
+	# WAN scollegata, e il log del router diventerebbe illeggibile.
+	[ -n "$1" ] || return 0
+
+	routes=$(printf '%s' "$1" | jsonfilter -e '@.route[*]' 2>/dev/null)
 	printf '%s\n' "$routes" | while read -r route; do
 		[ -n "$route" ] || continue
 		target=$(printf '%s' "$route" | jsonfilter -e '@.target')
-		if [ "$target" = "0.0.0.0" ]; then
+		if [ "$target" = "$want" ]; then
 			printf '%s' "$route" | jsonfilter -e '@.nexthop'
 			break
 		fi
 	done
+}
+
+# Stato dell'interfaccia logica IPv6 gemella di una WAN, cercato nel dump.
+#
+# netifd tiene IPv6 in un'interfaccia logica a se', e quale sia non si puo'
+# indovinare: su questo router `wan` ha una `config interface 'wan6'` scritta
+# nell'immagine, mentre le WiFi e il tethering, quando IPv6 e' acceso, si
+# ritrovano una `<net>_6` creata al volo da netifd. I due casi convivono, quindi
+# una regola sui soli nomi non basta.
+#
+# L'appaiamento e' sul l3_device: il gemello sta per forza sopra lo stesso
+# device del fratello v4. Solo a interfaccia giu', dove il device non esiste da
+# nessuna delle due parti, si ripiega sui nomi. Mai sul `device` di uci, che e'
+# un riferimento simbolico (`@wan`) e non il nome di niente.
+ipv6_sibling() {
+	local dump="$1" net="$2" l3="$3"
+	local entry name
+
+	printf '%s\n' "$dump" | while read -r entry; do
+		[ -n "$entry" ] || continue
+		case "$(printf '%s' "$entry" | jsonfilter -e '@.proto')" in
+			dhcpv6|6in4|6to4|6rd|464xlat) ;;
+			*) continue ;;
+		esac
+
+		name=$(printf '%s' "$entry" | jsonfilter -e '@.interface')
+		[ "$name" = "$net" ] && continue
+
+		if [ -n "$l3" ]; then
+			[ "$(printf '%s' "$entry" | jsonfilter -e '@.l3_device')" = "$l3" ] || continue
+		else
+			[ "$name" = "${net}6" ] || [ "$name" = "${net}_6" ] || continue
+		fi
+
+		printf '%s' "$entry"
+		break
+	done
+}
+
+# Indirizzi IPv6 di uno stato ubus, come "indirizzo/prefisso".
+#
+# Il prefisso resta attaccato, al contrario degli indirizzi v4 che escono nudi:
+# quelli alimentano un campo di input, questi una riga di sola lettura, e li' il
+# prefisso e' la meta' informativa.
+ipv6_addresses() {
+	local entry addr mask
+
+	printf '%s' "$1" | jsonfilter -e '@["ipv6-address"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@.address')
+		[ -n "$addr" ] || continue
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@.mask')
+		printf '%s/%s\n' "$addr" "${mask:-128}"
+	done
+}
+
+# Prefisso delegato dal provider, come "prefisso/lunghezza", vuoto se non c'e'.
+#
+# E' quello da cui la LAN ricava il proprio /64: vederlo sulla riga della WAN
+# dice se la delega e' arrivata davvero, che e' la prima cosa da guardare quando
+# i dispositivi non prendono un indirizzo v6.
+ipv6_prefix() {
+	local addr mask
+
+	addr=$(printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix"][0].address' 2>/dev/null)
+	[ -n "$addr" ] || return 0
+	mask=$(printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix"][0].mask' 2>/dev/null)
+	printf '%s/%s' "$addr" "${mask:-64}"
 }
 
 # Interfacce logiche che sono WAN, cioe' quelle nella zona firewall "wan".
@@ -418,6 +498,16 @@ active_l3_device() {
 		| awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
 }
 
+# La stessa cosa per IPv6, che ha una tabella di instradamento tutta sua.
+#
+# Serve perche' una rete v6-only - 464XLAT sul cellulare e' il caso comune - non
+# ha nessuna rotta predefinita v4: senza questa, la WAN che sta davvero portando
+# il traffico risulterebbe inattiva.
+active_l3_device6() {
+	ip -6 route show default 2>/dev/null \
+		| awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
 # Sezione uci della STA agganciata a una certa interfaccia logica, se c'e'.
 sta_section_of_network() {
 	local want="$1" section
@@ -442,24 +532,43 @@ sta_section_of_network() {
 # fuori da quella WAN.
 method_uplinks() {
 	local status network section radio band ifname info netstat up signal
-	local active l3 kind usb_driver
+	local active active6 l3 kind usb_driver
+	local dump v6stat is_active
 
 	status=$(wireless_status)
 	active=$(active_l3_device)
+	active6=$(active_l3_device6)
+
+	# Il dump di tutte le interfacce, una volta sola e fuori dal ciclo: costa
+	# meno di N chiamate `status` in piu', ed e' l'unico modo di vedere una
+	# `<net>_6` dinamica, il cui nome non compare da nessuna parte in uci.
+	dump=$(ubus call network.interface dump 2>/dev/null | jsonfilter -e '@.interface[*]')
 
 	json_init
 	json_add_array uplinks
 
 	for network in $(wan_networks); do
-		# Le interfacce IPv6 si saltano: IPv6 e' disattivato per scelta, e
-		# `wan6` accanto a `wan` comparirebbe come una seconda Ethernet che non
-		# esiste. Un giorno, se IPv6 tornera', avra' una sua rappresentazione.
+		# Le interfacce IPv6 si saltano, e il salto RESTA anche adesso che IPv6
+		# e' acceso: `wan6` accanto a `wan` comparirebbe come una seconda porta
+		# ethernet che non esiste. Dual-stack qui significa una porta sola con
+		# due famiglie, quindi gli indirizzi v6 si uniscono alla riga del
+		# fratello v4 invece di aprirne una nuova - lo fa `ipv6_sibling` piu'
+		# sotto.
 		case "$(uci -q get "network.$network.proto")" in
 			dhcpv6|6in4|6to4|6rd|464xlat) continue ;;
 		esac
 
 		netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
 		l3=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
+		v6stat=$(ipv6_sibling "$dump" "$network" "$l3")
+
+		# Su una rete v6-only l'interfaccia v4 non prende nessun lease e resta
+		# giu', senza device: il device vero ce l'ha solo il gemello. Senza
+		# questo ripiego una WAN v6-only non risulterebbe MAI quella attiva,
+		# perche' il confronto con la rotta predefinita si fa sul device.
+		if [ -z "$l3" ] && [ -n "$v6stat" ]; then
+			l3=$(printf '%s' "$v6stat" | jsonfilter -e '@.l3_device' 2>/dev/null)
+		fi
 
 		section=$(sta_section_of_network "$network")
 		radio=""
@@ -505,6 +614,11 @@ method_uplinks() {
 		fi
 
 		up=$(printf '%s' "$netstat" | jsonfilter -e '@.up')
+		# Stessa ragione del device: la v4 di una rete v6-only e' giu' mentre il
+		# gemello v6 e' su e sta funzionando. `up` significa quindi "almeno una
+		# delle due famiglie e' su", ed e' cosi' che lo leggono uplinkState in
+		# lib/wifi.ts e in traveld.uc.
+		[ "$up" = "true" ] || up=$(printf '%s' "$v6stat" | jsonfilter -e '@.up' 2>/dev/null)
 		signal=$(printf '%s' "$info" | jsonfilter -e '@.signal')
 
 		json_add_object
@@ -528,7 +642,17 @@ method_uplinks() {
 		# -1 significa "non si sa", per esempio se l'interfaccia non esiste.
 		json_add_int     carrier  "$(carrier_of "$ifname")"
 		# Vero per la sola WAN che sta portando il traffico adesso.
-		json_add_boolean active   "$([ -n "$l3" ] && [ "$l3" = "$active" ] && echo 1 || echo 0)"
+		#
+		# Si preferisce la risposta v4 e si ripiega su v6 soltanto quando una
+		# rotta predefinita v4 non c'e' affatto: su una rete v6-only e' l'unica
+		# che esiste, mentre su una dual-stack chiedere a v6 potrebbe indicare
+		# una WAN diversa da quella che porta il traffico vero.
+		if [ -n "$active" ]; then
+			is_active=$([ -n "$l3" ] && [ "$l3" = "$active" ] && echo 1 || echo 0)
+		else
+			is_active=$([ -n "$l3" ] && [ "$l3" = "$active6" ] && echo 1 || echo 0)
+		fi
+		json_add_boolean active   "$is_active"
 		if [ -n "$section" ]; then
 			json_add_boolean enabled "$([ "$(uci -q get "wireless.$section.disabled")" = "1" ] && echo 0 || echo 1)"
 		else
@@ -549,12 +673,40 @@ method_uplinks() {
 
 		json_add_boolean up       "$([ "$up" = "true" ] && echo 1 || echo 0)"
 		json_add_string  ipv4     "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')"
+		# Attenzione: qui ubus riporta il NUMERO di bit ("24"), non la maschera
+		# puntata che il nome fa pensare. Si passa cosi' com'e' e a dargli una
+		# forma sola ci pensa il confine in lib/wifi.ts, che e' l'unico posto a
+		# vedere anche i pacchetti vecchi.
 		json_add_string  netmask  "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].mask')"
-		json_add_string  gateway  "$(default_gateway "$netstat")"
+		json_add_string  gateway  "$(default_gateway "$netstat" "0.0.0.0")"
 
 		json_add_array dns
-		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]'); do
+		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null); do
+			# Un resolver v6 in questo elenco sarebbe mostrato nella riga dei
+			# DNS v4: le due famiglie restano separate anche quando arrivano
+			# dalla stessa interfaccia.
+			case "$_dns" in *:*) continue ;; esac
 			json_add_string "" "$_dns"
+		done
+		json_close_array
+
+		# --- IPv6, unito alla riga del fratello v4 -------------------------
+		#
+		# Gli indirizzi si prendono da entrambi gli stati: quasi sempre stanno
+		# sul gemello (proto dhcpv6), ma una WAN `proto static` configurata a
+		# mano puo' averli sulla propria interfaccia, senza nessun gemello.
+		json_add_array ipv6
+		for _addr in $(ipv6_addresses "$netstat"; ipv6_addresses "$v6stat"); do
+			json_add_string "" "$_addr"
+		done
+		json_close_array
+
+		json_add_string  gateway6 "$(default_gateway "${v6stat:-$netstat}" "::")"
+		json_add_string  prefix6  "$(ipv6_prefix "${v6stat:-$netstat}")"
+
+		json_add_array dns6
+		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null; printf '%s' "$v6stat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null); do
+			case "$_dns" in *:*) json_add_string "" "$_dns" ;; esac
 		done
 		json_close_array
 

@@ -111,6 +111,18 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
           <Row label="Indirizzo" value={uplink.ipv4 || 'nessuno'} />
           <Row label="Gateway" value={uplink.gateway || '—'} />
           <Row label="DNS" value={uplink.dns?.length ? uplink.dns.join('  ') : '—'} />
+          {/* Le righe IPv6 compaiono solo dove IPv6 c'e': su una rete v4-only
+              quattro righe con un trattino direbbero che manca qualcosa. */}
+          {uplink.ipv6.length > 0 && (
+            <>
+              <Row label="Indirizzo IPv6" value={uplink.ipv6.join('  ')} />
+              <Row label="Gateway IPv6" value={uplink.gateway6 || '—'} />
+              {uplink.dns6.length > 0 && (
+                <Row label="DNS IPv6" value={uplink.dns6.join('  ')} />
+              )}
+              {uplink.prefix6 && <Row label="Prefisso delegato" value={uplink.prefix6} />}
+            </>
+          )}
           <Row label="MAC in uso" value={uplink.mac || '—'} />
           {typeof uplink.signal === 'number' && (
             <Row label="Segnale" value={`${uplink.signal} dBm`} />

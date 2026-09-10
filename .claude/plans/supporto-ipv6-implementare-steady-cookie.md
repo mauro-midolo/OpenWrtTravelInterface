@@ -312,7 +312,7 @@ con `dest_ip` v6 verrebbe salvata e non combacerebbe mai. Il vincolo cade in Fas
 
 ---
 
-## Fase 3 — WAN dual-stack in lettura
+## Fase 3 — WAN dual-stack in lettura ✅ *(fatta il 2026-09-10)*
 
 Il cuore della fase è il **problema `wan6`**. netifd tiene IPv6 in un'interfaccia logica a sé, e
 l'elenco la salta di proposito perché accanto a `wan` comparirebbe come una seconda porta ethernet
@@ -358,6 +358,66 @@ passaggio `no-address` → `addressed`.
 **`lan-defaults.test.ts`**, che dà a ogni funzione di confine un payload con **tutti i campi nuovi
 tolti** e verifica che il risultato sia il comportamento di oggi. È l'unico test che dimostra che lo
 stato intermedio dell'aggiornamento funziona.
+
+### Esito
+
+`tsc --noEmit` pulito, **329 test su 18 file** (20 nuovi), build a 230 kB. `sh -n` sull'rpcd e
+`ucode -c` su `traveld.uc` — con l'interprete del router — passano entrambi.
+
+**Correzione dopo la prima stesura: `up` e `l3_device` non bastava leggerli dalla v4.** La prima
+versione emetteva entrambi dal solo `netstat` dell'interfaccia v4, e su una WAN v6-only quella è
+*giù e senza device* — il lease DHCPv4 non arriva mai — mentre il gemello v6 è su e funziona. Il
+risultato era che il caso per cui questa fase esiste restava classificato **"senza indirizzo" e
+"inattivo"**: `up=false` mandava `uplinkState` su `no-address` a prescindere dagli indirizzi v6, e
+`l3` vuoto rendeva impossibile il confronto con la rotta predefinita, quindi `active` era sempre
+falso. Due righe di ripiego sul gemello, e `up` cambia significato: ora vuol dire **"almeno una
+delle due famiglie è su"**, documentato sia sul campo `Uplink.up` sia accanto alle due letture.
+Verificato sul router con lo scenario v6-only sintetico (`l3` → `eth0`, `up` → `true`,
+`active` → `1`) e con un test dedicato.
+
+**L'appaiamento è stato provato sul router**, contro un dump sintetico dato ad ash e jsonfilter veri,
+perché oggi nessuna interfaccia ha IPv6 e il percorso non si eserciterebbe da solo. Cinque casi, tutti
+verdi: gemello statico `wan6` appaiato sul device; gemello dinamico `wwan_radio1_6`, nome non
+indovinabile; ripiego sul nome a interfaccia giù; nessun gemello → vuoto; e il fratello v4 che non
+appaia se stesso. Verificato anche che `default_gateway "$v6stat" "0.0.0.0"` **non** restituisca
+niente: è la riga che impedisce a un nexthop di finire nella famiglia sbagliata.
+
+**Rumore su stderr:** le prime versioni ne aggiungevano 2 righe (jsonfilter su stato vuoto). Ora si
+è tornati alla linea di partenza — 10 righe, tutte da punti preesistenti altrove — con una guardia in
+`default_gateway` e i redirect mancanti.
+
+### Il bug che è saltato fuori verificando: la netmask non è una netmask
+
+`ubus` riporta `ipv4-address[0].mask` come **numero di bit** (`24`), non come maschera puntata, e
+l'rpcd lo passava così com'è. Sul router vero:
+
+```
+{ "address": "192.168.0.91", "mask": 24 }   →   "netmask": "24"
+```
+
+`findConflicts` si aspetta `255.255.255.0`, e su `"24"` `subnetOfMask` risponde `null`: **la WAN
+veniva saltata in silenzio e nessun conflitto è mai stato segnalato su un router vero.** Nel
+simulatore funzionava, perché il mock scriveva la forma puntata — cioè il simulatore nascondeva il
+guasto invece di mostrarlo. È un bug preesistente, non introdotto da IPv6: la vecchia `subnetOf`
+faceva `ipToInt("24") → null` esattamente allo stesso modo.
+
+Riconciliato **al confine**, in `withUplinkDefaults`, che è l'unico posto a vedere entrambe le forme
+e anche i pacchetti vecchi. Il mock ora manda `'24'` come il router: un simulatore che semplifica
+proprio la forma che il confine deve normalizzare non serve a niente.
+
+### Scostamenti dal piano
+
+- **`withIpv6Defaults()` si chiama `withUplinkDefaults()`.** Non riempie solo i campi v6: normalizza
+  anche la netmask, e il nome vecchio avrebbe mentito.
+- **Anche i DNS v4 ora filtrano gli indirizzi con i due punti.** Su una WAN `proto static` dual-stack
+  `dns-server` può contenere entrambe le famiglie, e un resolver v6 sarebbe finito nella riga dei DNS
+  v4. Una riga, e le due famiglie restano separate anche quando arrivano dalla stessa interfaccia.
+- **Gli indirizzi v6 si leggono da entrambi gli stati**, non solo dal gemello: una WAN `proto static`
+  configurata a mano li ha sulla propria interfaccia e di gemello non ne ha nessuno.
+- **Le righe v6 nelle schermate compaiono solo se IPv6 c'è.** Quattro righe con un trattino su una
+  rete v4-only direbbero che manca qualcosa, invece che "qui IPv6 non c'è".
+- **`Connect.tsx` mostra il primo indirizzo v6** quando non c'è IPv4, gateway compreso: scrivere "IP"
+  seguito dal vuoto farebbe sembrare rotta una connessione che funziona.
 
 ---
 

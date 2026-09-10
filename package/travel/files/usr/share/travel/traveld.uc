@@ -232,7 +232,12 @@ function uplinkState(u) {
 		return 'no-carrier';
 	}
 
-	if (!u.up || !u.ipv4 || u.ipv4 === "") return 'no-address';
+	// Un indirizzo di una qualunque delle due famiglie basta. Deve cambiare
+	// insieme a uplinkState() in lib/wifi.ts: se lo fa solo una delle due, una
+	// rete v6-only viene mostrata in due modi diversi nella stessa app.
+	let noV4 = !u.ipv4 || u.ipv4 === "";
+	let noV6 = !u.ipv6 || length(u.ipv6) == 0;
+	if (!u.up || (noV4 && noV6)) return 'no-address';
 	return 'addressed';
 }
 
@@ -1073,6 +1078,13 @@ conn.publish('traveld', {
 					ipv4: u.ipv4,
 					gateway: u.gateway,
 					dns: u.dns,
+					// Si ripassano cosi' come arrivano da travel.uplinks: qui
+					// non si decide niente su IPv6, si evita solo che la
+					// dashboard debba fare una seconda chiamata per averlo.
+					ipv6: u.ipv6 ? u.ipv6 : [],
+					gateway6: u.gateway6 ? u.gateway6 : "",
+					prefix6: u.prefix6 ? u.prefix6 : "",
+					dns6: u.dns6 ? u.dns6 : [],
 					mac: u.mac,
 					metric: u.metric,
 					hostname: u.hostname,
