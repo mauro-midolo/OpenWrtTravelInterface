@@ -2700,7 +2700,7 @@ ts_running() {
 # piedi scelte che dall'interfaccia risultano tolte. Quello che si vede deve
 # essere quello che c'e'.
 ts_flags() {
-	local exit_node accept_routes accept_dns advertise_lan advertise_exit cidr
+	local exit_node accept_routes accept_dns advertise_lan advertise_exit cidr cidr6
 
 	exit_node=$(uci -q get travel.tailscale.exit_node)
 	accept_routes=$(uci -q get travel.tailscale.accept_routes)
@@ -2745,7 +2745,12 @@ ts_flags() {
 	fi
 
 	if [ "$advertise_lan" = "1" ]; then
+		# Le due famiglie in un elenco solo separato da virgole: e' la forma che
+		# vuole tailscale, e mandarne una per volta cancellerebbe l'altra -
+		# `--advertise-routes` sostituisce, non aggiunge.
 		cidr=$(lan_cidr)
+		cidr6=$(lan_cidr6)
+		[ -n "$cidr6" ] && cidr="${cidr:+$cidr,}$cidr6"
 		[ -n "$cidr" ] && printf ' --advertise-routes=%s' "$cidr"
 	else
 		printf ' --advertise-routes='
@@ -2806,6 +2811,40 @@ lan_cidr() {
 	network=$(printf '%s\n' "$out" | sed -n 's/^NETWORK=//p')
 	bits=$(printf '%s\n' "$out" | sed -n 's/^PREFIX=//p')
 	[ -n "$network" ] && [ -n "$bits" ] && printf '%s/%s' "$network" "$bits"
+}
+
+# La sottorete IPv6 della LAN da annunciare al tailnet: SOLO l'ULA.
+#
+# Mai la GUA che deriva dalla delega del provider, ed e' la riga portante di
+# questa funzione. Un prefisso delegato cambia a ogni albergo: una rotta GUA
+# annunciata al tailnet diventa stantia appena ci si sposta, e resta li' - un
+# buco nero che sopravvive alla riconnessione, perche' il tailnet continua a
+# mandare quel prefisso a questo nodo mentre il nodo non lo ha piu'. L'ULA
+# invece e' del router e non cambia mai.
+#
+# Si legge da `ipv6-prefix-assignment` e non da `network.globals.ula_prefix`:
+# quello e' il /48 da cui il router pesca, questo e' il prefisso davvero
+# assegnato a br-lan, e annunciare piu' di quello che si instrada sarebbe un
+# altro modo di creare un buco nero.
+lan_cidr6() {
+	local netstat entry addr mask
+
+	netstat=$(ubus call network.interface.lan status 2>/dev/null)
+	[ -n "$netstat" ] || return 0
+
+	printf '%s' "$netstat" | jsonfilter -e '@["ipv6-prefix-assignment"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@.address' 2>/dev/null)
+		[ -n "$addr" ] || continue
+		# fc00::/7, cioe' i primi due caratteri "fc" o "fd".
+		case "$addr" in
+			[fF][cCdD]*) ;;
+			*) continue ;;
+		esac
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@.mask' 2>/dev/null)
+		printf '%s/%s' "$addr" "${mask:-64}"
+		break
+	done
 }
 
 # Stato della VPN: cosa c'e', cosa sta facendo, e cosa abbiamo chiesto noi.
@@ -2976,6 +3015,9 @@ method_vpn() {
 	json_add_boolean advertise_lan  "$([ "$(uci -q get travel.tailscale.advertise_lan)" = "1" ] && echo 1 || echo 0)"
 	json_add_boolean advertise_exit "$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)"
 	json_add_string  lan_cidr       "$(lan_cidr)"
+	# Solo l'ULA: la GUA cambia a ogni albergo e diventerebbe una rotta
+	# stantia nel tailnet. Il perche' per esteso sta in lan_cidr6.
+	json_add_string  lan_cidr6      "$(lan_cidr6)"
 	json_close_object
 
 	policy_json
@@ -3160,26 +3202,41 @@ ts_runtime() {
 #
 # Torna 0 se ha cambiato qualcosa, come `ts_forwarding`: chi chiama decide se
 # ricaricare il firewall.
-ts_exit_wg_rule() {
-	local want="$1"
+# Una delle due sezioni gemelle. Torna 0 se ha cambiato qualcosa.
+ts_exit_wg_one() {
+	local section="$1" family="$2" src_ip="$3" name="$4" want="$5"
 
 	# Puo' mancare su un router configurato prima che questa regola esistesse:
 	# si crea qui invece di pretendere un altro deploy.
-	if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
-		uci set firewall.travel_vpn_wg=rule
-		uci set firewall.travel_vpn_wg.name='travel-exit-via-wg'
-		uci set firewall.travel_vpn_wg.src='vpn'
-		uci set firewall.travel_vpn_wg.dest='vpn'
-		uci set firewall.travel_vpn_wg.src_ip='100.64.0.0/10'
-		uci set firewall.travel_vpn_wg.family='ipv4'
-		uci set firewall.travel_vpn_wg.target='ACCEPT'
-		uci set firewall.travel_vpn_wg.enabled="$want"
+	if [ -z "$(uci -q get "firewall.$section")" ]; then
+		uci set "firewall.$section=rule"
+		uci set "firewall.$section.name=$name"
+		uci set "firewall.$section.src=vpn"
+		uci set "firewall.$section.dest=vpn"
+		uci set "firewall.$section.src_ip=$src_ip"
+		uci set "firewall.$section.family=$family"
+		uci set "firewall.$section.target=ACCEPT"
+		uci set "firewall.$section.enabled=$want"
 		return 0
 	fi
 
-	[ "$(uci -q get firewall.travel_vpn_wg.enabled)" = "$want" ] && return 1
-	uci set firewall.travel_vpn_wg.enabled="$want"
+	[ "$(uci -q get "firewall.$section.enabled")" = "$want" ] && return 1
+	uci set "firewall.$section.enabled=$want"
 	return 0
+}
+
+# Le due famiglie si commutano INSIEME, in una chiamata sola.
+#
+# Lasciarne accesa una e spenta l'altra e' lo stato peggiore possibile: meta'
+# del traffico esce dal tunnel e meta' viene rifiutata, e chi guarda vede
+# "internet a tratti" invece di un guasto pulito. Sono la stessa decisione,
+# quindi si scrivono insieme e non hanno due interruttori.
+ts_exit_wg_rule() {
+	local want="$1" changed=1
+
+	ts_exit_wg_one travel_vpn_wg  ipv4 '100.64.0.0/10'       travel-exit-via-wg  "$want" && changed=0
+	ts_exit_wg_one travel_vpn_wg6 ipv6 'fd7a:115c:a1e0::/48' travel-exit-via-wg6 "$want" && changed=0
+	return "$changed"
 }
 
 ts_forwarding() {

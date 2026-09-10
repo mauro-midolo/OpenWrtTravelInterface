@@ -33,13 +33,20 @@ enable_forwarding() {
 	# ogni avvio e a ogni cambio di impostazioni, e una scrittura in flash per
 	# rimettere lo stesso contenuto e' una scrittura buttata.
 	mkdir -p /etc/sysctl.d 2>/dev/null
-	grep -q '^net.ipv4.ip_forward=1$' "$FORWARD_CONF" 2>/dev/null || cat > "$FORWARD_CONF" <<'EOF'
-# Inoltro IPv4, richiesto da exit node e subnet router della VPN.
+	grep -q '^net.ipv6.conf.all.forwarding=1$' "$FORWARD_CONF" 2>/dev/null || cat > "$FORWARD_CONF" <<'EOF'
+# Inoltro IP, richiesto da exit node e subnet router della VPN.
 #
-# Su questo dispositivo era spento: netifd abilita l'inoltro interfaccia per
-# interfaccia, e le interfacce che nascono fuori da lui - tailscale0, e in
+# IPv4 su questo dispositivo era spento: netifd abilita l'inoltro interfaccia
+# per interfaccia, e le interfacce che nascono fuori da lui - tailscale0, e in
 # seguito wireguard - restano fuori. A decidere cosa passa resta il firewall.
+#
+# IPv6 lo accende gia' OpenWrt, in /etc/sysctl.d/10-default.conf: la riga qui
+# sotto NON e' quella che lo attiva, e ribadisce un valore che c'e' gia'. Si
+# scrive lo stesso, e per la stessa ragione della riga IPv4: le interfacce nate
+# fuori da netifd non ereditano niente, e questo file e' il posto che se ne
+# ricorda al riavvio.
 net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
 EOF
 
 	# I due nomi sono la stessa manopola, ma scriverli entrambi non costa
@@ -47,6 +54,15 @@ EOF
 	# che si propaga alle interfacce gia' esistenti - cioe' a `tailscale0`.
 	printf '1\n' > /proc/sys/net/ipv4/ip_forward 2>/dev/null
 	printf '1\n' > /proc/sys/net/ipv4/conf/all/forwarding 2>/dev/null
+
+	# L'inoltro IPv6 NON spegne l'autoconfigurazione delle WAN su questo
+	# sistema, e vale la pena scriverlo perche' la regola del kernel dice il
+	# contrario: `accept_ra=1` significa "accetta gli RA solo se non inoltro".
+	# Su OpenWrt le WAN v6 le gestisce `odhcp6c`, che gli RA se li legge da se'
+	# su socket raw e di `accept_ra` non ha bisogno - infatti sul dispositivo
+	# vale 0 su tutte le interfacce, con l'inoltro a 1 e IPv6 che funziona.
+	# Nessun controllo e nessun avviso, quindi: allarmerebbe su ogni router sano.
+	printf '1\n' > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null
 
 	after=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
 
@@ -147,9 +163,19 @@ ensure_ts_rule() {
 # L'inoltro sull'interfaccia del tunnel, scritto esplicitamente se esiste.
 # Dovrebbe ereditare dal valore globale, ma `tailscale0` la crea tailscaled e
 # puo' comparire dopo: scriverlo qui toglie un "dovrebbe".
+#
+# Vale per entrambe le famiglie: `net.ipv6.conf.default.forwarding` si applica
+# alle interfacce create DOPO che il sysctl e' stato letto, e `tailscale0` nasce
+# quando le vuole tailscaled. Senza questa riga un client v6 uscirebbe dal
+# tunnel e non rientrerebbe, con il sintomo peggiore: "alcune cose funzionano".
 iface_forwarding() {
-	[ -e /proc/sys/net/ipv4/conf/tailscale0/forwarding ] || return 0
-	printf '1\n' > /proc/sys/net/ipv4/conf/tailscale0/forwarding 2>/dev/null
+	if [ -e /proc/sys/net/ipv4/conf/tailscale0/forwarding ]; then
+		printf '1\n' > /proc/sys/net/ipv4/conf/tailscale0/forwarding 2>/dev/null
+	fi
+	if [ -e /proc/sys/net/ipv6/conf/tailscale0/forwarding ]; then
+		printf '1\n' > /proc/sys/net/ipv6/conf/tailscale0/forwarding 2>/dev/null
+	fi
+	return 0
 }
 
 # La rotta verso il tailnet, nella tabella di Tailscale.
@@ -393,8 +419,10 @@ ensure_ts_rule
 ensure_ts_route
 ensure_wg_routing
 
-# IPv6 non si tocca: e' disattivato per scelta sulle WAN (vedi architettura), e
-# accenderne l'inoltro attiverebbe un percorso che nessuno sta sorvegliando.
+# IPv6 passa dagli stessi meccanismi di IPv4, sezione per sezione: masquerade
+# sulla zona, regola d'uscita, inoltro sull'interfaccia. Non c'e' un
+# interruttore separato, e non deve essercene uno: una VPN che copre una sola
+# famiglia e' una VPN che perde traffico senza dirlo.
 
 # --- 3. La zona firewall del tunnel -------------------------------------------
 #
@@ -422,6 +450,19 @@ if [ -z "$(uci -q get firewall.travel_vpn)" ]; then
 	NEED_FW=1
 else
 	say "zona firewall 'vpn' gia' presente"
+fi
+
+# `masq` e' SOLO IPv4, e su una zona dual-stack questo non si vede: la sezione
+# c'e', sembra a posto, e il traffico v6 esce lo stesso - con l'indirizzo ULA
+# del client, che nel tailnet non e' instradabile all'indietro. Il sintomo e'
+# "alcune cose funzionano", che e' il modo peggiore di rompersi.
+#
+# Fuori dal blocco di creazione perche' deve arrivare anche sui router dove la
+# zona esiste da prima, ed e' idempotente: si scrive solo se manca.
+if [ "$(uci -q get firewall.travel_vpn.masq6)" != "1" ]; then
+	say "abilito il masquerade IPv6 sulla zona 'vpn'"
+	uci set firewall.travel_vpn.masq6='1'
+	NEED_FW=1
 fi
 
 if [ -z "$(uci -q get firewall.travel_vpn_fwd)" ]; then
@@ -495,6 +536,27 @@ if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
 	uci set firewall.travel_vpn_wg.family='ipv4'
 	uci set firewall.travel_vpn_wg.target='ACCEPT'
 	uci set firewall.travel_vpn_wg.enabled="$TS_ADVERTISE"
+	NEED_FW=1
+fi
+
+# La gemella IPv6, con il range v6 del tailnet.
+#
+# Due sezioni esplicite e non una regola senza `family`: la disciplina di questo
+# file e' "una sezione per cosa, sempre presente, commutata da `enabled`", e
+# `src_ip` forzerebbe comunque la famiglia - una regola sola non puo' avere due
+# sorgenti di famiglie diverse. Vengono accese e spente insieme, dalla stessa
+# funzione, perche' sono la stessa decisione.
+if [ -z "$(uci -q get firewall.travel_vpn_wg6)" ]; then
+	TS_ADVERTISE=$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)
+	say "preparo l'uscita IPv6 del tailnet dentro WireGuard ($([ "$TS_ADVERTISE" = "1" ] && echo accesa || echo spenta))"
+	uci set firewall.travel_vpn_wg6=rule
+	uci set firewall.travel_vpn_wg6.name='travel-exit-via-wg6'
+	uci set firewall.travel_vpn_wg6.src='vpn'
+	uci set firewall.travel_vpn_wg6.dest='vpn'
+	uci set firewall.travel_vpn_wg6.src_ip='fd7a:115c:a1e0::/48'
+	uci set firewall.travel_vpn_wg6.family='ipv6'
+	uci set firewall.travel_vpn_wg6.target='ACCEPT'
+	uci set firewall.travel_vpn_wg6.enabled="$TS_ADVERTISE"
 	NEED_FW=1
 fi
 

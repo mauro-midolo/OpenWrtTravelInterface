@@ -917,7 +917,7 @@ prossimo lettore troverebbe ragionevole.
 
 ---
 
-## Fase 7 — Firewall, inoltro e VPN
+## Fase 7 — Firewall, inoltro e VPN ✅ *(fatta il 2026-09-10)*
 
 **`vpn-setup.sh:18-63 enable_forwarding`** — **ridimensionata dalla Fase 0.** OpenWrt accende già
 `net.ipv6.conf.all.forwarding=1` e `net.ipv6.conf.default.forwarding=1` in
@@ -958,6 +958,64 @@ che il sysctl è stato applicato.
   il prefisso delegato cambia a ogni albergo, e una rotta GUA annunciata diventa stantia appena ci si
   sposta — un buco nero che sopravvive alla riconnessione. `method_vpn` (`:2689`) emette `lan_cidr6`;
   `Vpn.tsx:487` mostra entrambi.
+
+### Esito
+
+`tsc --noEmit` pulito, **410 test su 24 file** (5 nuovi), build a 235 kB, `sh -n` su rpcd e
+`vpn-setup.sh`. `method_vpn` provato **sul router vero**:
+
+```
+"lan_cidr": "192.168.10.0/24",  "lan_cidr6": "fd66:67c3:698b::/60"
+```
+
+**Il filtro ULA è stato provato a parte**, con sei payload sintetici dati alla funzione vera su ash e
+jsonfilter del router — perché sul dispositivo non c'è nessuna GUA, e il ramo che conta non si
+sarebbe esercitato da solo:
+
+| caso | risposta |
+|---|---|
+| solo ULA | `fd66:67c3:698b::/60` |
+| **solo GUA delegata** | **vuoto** — non la annuncia |
+| GUA prima, ULA dopo | sceglie l'ULA |
+| `fc00::` (l'altra metà di `fc00::/7`) | accettato |
+| nessuna assegnazione | vuoto |
+| maiuscole | accettato |
+
+### L'avviso su `accept_ra` non è stato scritto, ed è la decisione della fase
+
+Il piano prevedeva un controllo con `say "ATTENZIONE: ..."` sulle WAN che non avessero `accept_ra=2`.
+**Non c'è**, e al suo posto c'è un commento che spiega perché non ci sarà. La regola del kernel dice
+davvero che `accept_ra=1` significa «accetta gli RA solo se non inoltro», ma su OpenWrt le WAN v6 le
+gestisce **odhcp6c in spazio utente**, che gli RA se li legge da sé su socket raw e di `accept_ra`
+non ha bisogno: sul dispositivo vale `0` su tutte le interfacce, con l'inoltro a `1` e IPv6 che
+funziona. Quel controllo avrebbe allarmato su ogni router sano.
+
+La Fase 4 doveva confermarlo osservando una WAN v6 davvero su, e non ha potuto — nessuna è mai
+salita. La decisione si regge quindi sul meccanismo, non sull'osservazione, e questo è scritto nel
+codice.
+
+### Dettagli decisi qui
+
+- **`masq6` sta fuori dal blocco di creazione della zona**, così arriva anche sui router dove la
+  zona `travel_vpn` esiste da prima. È idempotente. Senza, l'indirizzo ULA di un client uscirebbe nel
+  tailnet senza via di ritorno, e la zona *sembrerebbe* a posto: c'è, è configurata, e il traffico v6
+  esce lo stesso — solo che non torna.
+- **`enable_forwarding` scrive la riga v6 pur non essendo lei ad accenderla.** OpenWrt la mette già
+  in `10-default.conf`; si scrive per la stessa ragione della riga v4, cioè le interfacce nate fuori
+  da netifd, e il commento dice che ribadisce un default invece di cambiarlo. Nessun allarme sul v6:
+  quello sul v4 resta perché lì il valore era davvero osservato a zero.
+- **`ts_exit_wg_rule` si è spaccata in due**, con `ts_exit_wg_one` per la singola sezione. Le due
+  famiglie si commutano **in una chiamata sola**: lasciarne accesa una e spenta l'altra è lo stato
+  peggiore possibile, perché metà del traffico esce e metà viene rifiutata, e chi guarda vede
+  «internet a tratti» invece di un guasto pulito.
+- **`lan_cidr6` legge `ipv6-prefix-assignment`, non `network.globals.ula_prefix`.** Quello è il /48
+  da cui il router pesca; questo è il prefisso davvero assegnato a `br-lan`. Annunciare più di quello
+  che si instrada sarebbe un altro modo di creare un buco nero.
+
+**Nuovo test `vpn-firewall.test.ts`**, che estrae le due funzioni dal plugin rpcd vero e le esegue
+con `uci` simulato: le due sezioni con le due famiglie, accese insieme, spente insieme, nessun
+cambiamento segnalato quando non ce n'è — chi chiama usa quella risposta per decidere se ricaricare
+il firewall — e la gemella v6 creata su un router che ha solo la v4.
 
 ---
 
@@ -1087,7 +1145,9 @@ UI-nuova/pacchetto-vecchio, che è lo stato normale fra il deploy della SPA e qu
   a posto mentre ogni browser si pianta.
 - **Router a metà aggiornamento** (UI nuova, pacchetto vecchio): ogni campo nuovo è riempito al
   confine, e nessun componente legge `lan.addresses6[0]` senza guardia.
-- **GUA annunciata a Tailscale**: rotta stantia a ogni cambio di albergo. Solo ULA.
+- ~~**GUA annunciata a Tailscale**~~: **chiuso in Fase 7.** `lan_cidr6` filtra su `fc00::/7` e la
+  GUA non esce mai; verificato con sei payload sintetici, compreso quello in cui la GUA compare
+  prima dell'ULA nell'elenco.
 - **Le parentesi in `endpoint_host` sembrano un bug** e qualcuno le toglierà, reintroducendo
   `2001:db8::1:443`. Il commento deve dire che è netifd a fare la giunzione ingenua — e usare una
   porta di quattro cifre nell'esempio, perché è il caso che passa inosservato (vedi Fase 1).

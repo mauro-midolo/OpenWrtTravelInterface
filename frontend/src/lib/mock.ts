@@ -1286,6 +1286,9 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         advertise_lan: vpnState.advertiseLan,
         advertise_exit: vpnState.advertiseExit,
         lan_cidr: `${lanState.addresses[0].split('/')[0].replace(/\.\d+$/, '.0')}/24`,
+        // L'ULA e non la GUA, come sul router: e' la sola sottorete v6 che si
+        // annuncia, perche' il prefisso delegato cambia a ogni albergo.
+        lan_cidr6: lanState.ula.replace(/\/\d+$/, '/60'),
       },
       policy: mockPolicy(),
       killswitch: {

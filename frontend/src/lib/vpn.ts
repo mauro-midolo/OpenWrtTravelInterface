@@ -152,6 +152,14 @@ export interface TsSettings {
   advertise_exit: boolean;
   /** La sottorete che verrebbe annunciata, calcolata dal router. */
   lan_cidr: string;
+  /**
+   * La sottorete IPv6 annunciata, che e' sempre e solo l'ULA.
+   *
+   * Mai il prefisso globale delegato dal provider: quello cambia a ogni
+   * albergo, e una rotta annunciata al tailnet gli sopravvivrebbe diventando un
+   * buco nero. Vuota se il router non ha un ULA sulla LAN.
+   */
+  lan_cidr6: string;
 }
 
 export interface KillSwitch {
@@ -536,8 +544,11 @@ export function wgCarrying(wg: WgState): boolean {
   return wgRoutingSteps(wg).every((step) => step.ok);
 }
 
-export function getVpn(): Promise<VpnState> {
-  return call<VpnState>('travel', 'vpn');
+export async function getVpn(): Promise<VpnState> {
+  const vpn = await call<VpnState>('travel', 'vpn');
+  // Riempito al confine: un router con il pacchetto vecchio questo campo non lo
+  // manda, e la schermata non deve saperlo.
+  return { ...vpn, settings: { ...vpn.settings, lan_cidr6: vpn.settings?.lan_cidr6 ?? '' } };
 }
 
 /**

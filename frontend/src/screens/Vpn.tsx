@@ -484,9 +484,15 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
           />
           <span>
             <strong>Annuncia la LAN del router</strong>
-            {vpn.settings.lan_cidr ? ` (${vpn.settings.lan_cidr})` : ''}: gli altri nodi
-            possono raggiungere i dispositivi collegati qui. Va poi approvata dalla console
-            di Tailscale, altrimenti resta annunciata e inutilizzata.
+            {/* Entrambe le famiglie, se ci sono: sapere che cosa viene
+                annunciato e' la meta' del motivo per cui questa riga esiste,
+                e con IPv6 le sottoreti sono due. */}
+            {[vpn.settings.lan_cidr, vpn.settings.lan_cidr6].filter(Boolean).length > 0
+              ? ` (${[vpn.settings.lan_cidr, vpn.settings.lan_cidr6].filter(Boolean).join(', ')})`
+              : ''}
+            : gli altri nodi possono raggiungere i dispositivi collegati qui. Va poi
+            approvata dalla console di Tailscale, altrimenti resta annunciata e
+            inutilizzata.
           </span>
         </label>
 
