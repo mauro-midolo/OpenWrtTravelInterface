@@ -15,6 +15,7 @@
  */
 
 import { call } from './ubus';
+import { parseIp } from './ip';
 
 /** Gli stati che il backend di Tailscale riporta, piu' il caso "non c'e'". */
 export type TsState =
@@ -261,6 +262,18 @@ export interface WgRouting {
   route: boolean;
   /** L'interfaccia e' nella zona firewall del tunnel. */
   in_zone: boolean;
+  /**
+   * Le due gemelle IPv6, che esistono solo se il profilo instrada IPv6.
+   *
+   * Predefinite a `false` e mostrate **soltanto** quando il profilo ha
+   * AllowedIPs v6: su un tunnel v4-only sarebbero due righe rosse permanenti, e
+   * un elenco con dentro un rosso che non si puo' togliere insegna a ignorare
+   * l'elenco - cioe' toglie valore anche alle righe che contano.
+   */
+  route6?: boolean;
+  rule6?: boolean;
+  /** Il profilo acceso instrada davvero qualcosa di IPv6. */
+  has_v6?: boolean;
 }
 
 /**
@@ -498,6 +511,36 @@ export function wgAlive(status: WgStatus): boolean {
  * Sta qui e non nella scheda perche' la stessa domanda la fa anche il kill
  * switch: "c'e' un tunnel che porta il traffico?" deve avere una risposta sola.
  */
+/**
+ * Cosa non va nell'endpoint scritto a mano, stringa vuota se va bene.
+ *
+ * Rispecchia `valid_wg_host` sul router, dove quel campo fino a ora non veniva
+ * controllato affatto: un endpoint sbagliato si scriveva, il tunnel si creava, e
+ * il guasto si scopriva solo dal log di netifd - che dice unicamente che
+ * l'handshake non arriva.
+ *
+ * Qui un IPv6 si accetta anche NUDO, al contrario che sul router: e' la forma in
+ * cui lo si incolla da un file `.conf`, e le parentesi gliele mette
+ * `wg_split_endpoint` quando lo salva.
+ */
+export function wgEndpointProblem(host: string): string {
+  const text = host.trim();
+  if (text === '') return '';
+
+  const bare = text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text;
+  if (parseIp(bare)) return '';
+
+  // Due punti e non e' un indirizzo: quasi sempre e' un IPv6 troncato, oppure
+  // ci si e' attaccata la porta. Vale la pena dirlo, perche' e' l'errore che
+  // questa fase esiste per rendere visibile.
+  if (bare.includes(':')) {
+    return 'sembra un indirizzo IPv6 incompleto: la porta va nel campo accanto';
+  }
+
+  const hostname = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+  return hostname.test(bare) ? '' : 'non è un nome di host né un indirizzo';
+}
+
 export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string; fix: string }> {
   const r = wg.routing;
   if (!r) return [];
@@ -524,6 +567,23 @@ export function wgRoutingSteps(wg: WgState): Array<{ ok: boolean; label: string;
       label: 'Nella zona firewall del tunnel',
       fix: 'l’interfaccia non è nella zona vpn: reimporta la configurazione',
     },
+    // Le due righe IPv6 compaiono solo se il profilo instrada IPv6. Un tunnel
+    // v4-only non ha niente da instradare in v6, e segnarlo come mancante
+    // sarebbe segnalare l'assenza di qualcosa che non deve esserci.
+    ...(r.has_v6
+      ? [
+          {
+            ok: r.route6 === true,
+            label: 'Rotta IPv6 dentro il tunnel (tabella 53)',
+            fix: 'manca la rotta IPv6 nella tabella del tunnel',
+          },
+          {
+            ok: r.rule6 === true,
+            label: 'Regola IPv6 che ci manda il traffico (pref 901)',
+            fix: 'manca la regola IPv6 — da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+          },
+        ]
+      : []),
   ];
 }
 

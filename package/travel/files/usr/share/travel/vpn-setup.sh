@@ -226,6 +226,27 @@ lan_probe_addr() {
 	printf '%s.2' "${addr%.*}"
 }
 
+# La stessa cosa in IPv6, per la prova di sicurezza qui sotto.
+#
+# Si prende il prefisso assegnato alla LAN e ci si mette dentro `::2`: come per
+# l'IPv4, non deve esistere davvero - interessa da quale device USCIREBBE.
+lan_probe_addr6() {
+	local prefix
+
+	prefix=$(ubus call network.interface.lan status 2>/dev/null |
+		jsonfilter -e '@["ipv6-prefix-assignment"][0].address' 2>/dev/null)
+	[ -n "$prefix" ] || return 1
+
+	# Solo la forma che finisce con "::": comporre un indirizzo dentro un
+	# prefisso scritto in un altro modo vorrebbe dire fare aritmetica IPv6 in
+	# shell, ed e' meglio non provare la sicurezza che provarla su un indirizzo
+	# inventato male.
+	case "$prefix" in
+		*::) printf '%s2' "$prefix" ;;
+		*) return 1 ;;
+	esac
+}
+
 wg_routing_down() {
 	local n=0
 
@@ -238,6 +259,40 @@ wg_routing_down() {
 		ip rule del pref "$WG_LOCAL_PREF" 2>/dev/null || break
 		n=$((n + 1))
 	done
+
+	# Anche le regole IPv6: sono due famiglie e due elenchi separati, e una
+	# regola v6 lasciata in piedi dopo aver spento il tunnel manderebbe il
+	# traffico v6 in una tabella vuota - cioe' in un buco nero che il traffico
+	# v4, funzionante, nasconde.
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$WG_RULE_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+}
+
+# Vero se il profilo acceso instrada davvero qualcosa di IPv6.
+#
+# E' la condizione che decide se scrivere le regole v6, e non e' prudenza: una
+# rotta predefinita v6 dentro un tunnel che IPv6 non lo porta fa SPARIRE IPv6.
+# I client hanno un indirizzo, il router ha una rotta, e i pacchetti entrano in
+# un tunnel che non li fa uscire - mentre IPv4 continua a funzionare, quindi il
+# guasto sembra "certi siti non vanno".
+wg_has_v6_routes() {
+	local entry
+
+	for entry in $(uci -q get "network.${1}_peer.allowed_ips" 2>/dev/null); do
+		case "$entry" in
+			*:*) return 0 ;;
+		esac
+	done
+
+	return 1
 }
 
 # La configurazione WireGuard accesa, o niente.
@@ -321,6 +376,48 @@ ensure_wg_routing() {
 				;;
 		esac
 	}
+
+	# --- Le stesse due regole in IPv6, ma SOLO se il tunnel porta IPv6 -------
+	#
+	# La condizione e' la parte importante. Una `default` v6 in un tunnel senza
+	# AllowedIPs v6 non e' un di piu' inutile: fa sparire IPv6 del tutto, e lo
+	# fa in silenzio, perche' IPv4 continua a funzionare e il guasto sembra
+	# "certi siti non vanno".
+	if wg_has_v6_routes "$iface"; then
+		ip -6 route replace default dev "$iface" table "$WG_TABLE" 2>/dev/null
+
+		# Prima la salvaguardia, poi il dirottamento, esattamente come sopra.
+		if ! ip -6 rule add pref "$WG_LOCAL_PREF" lookup main suppress_prefixlength 0 2>/dev/null; then
+			say "ATTENZIONE: ip -6 non supporta suppress_prefixlength, non instrado IPv6 nel tunnel"
+			ip -6 route flush table "$WG_TABLE" 2>/dev/null
+		elif ! ip -6 rule add pref "$WG_RULE_PREF" not fwmark "$WG_BYPASS_MARK" lookup "$WG_TABLE" 2>/dev/null; then
+			say "ATTENZIONE: non sono riuscito a scrivere la regola IPv6 di WireGuard"
+			ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null
+			ip -6 route flush table "$WG_TABLE" 2>/dev/null
+		else
+			# La prova di sicurezza vale ANCORA DI PIU' in IPv6, ed e' il
+			# motivo per cui non si e' ripetuto il blocco a occhi chiusi: lo
+			# stesso errore in v6 lascia SSH-su-v4 funzionante, quindi il router
+			# sembra a posto mentre ogni browser che preferisce IPv6 - cioe'
+			# tutti - si pianta. In v4 ci si accorgeva subito perche' cadeva la
+			# sessione; qui no.
+			probe=$(lan_probe_addr6) && {
+				out=$(ip -6 route get "$probe" 2>/dev/null)
+				case "$out" in
+					*"$iface"*)
+						say "ATTENZIONE: l'instradamento IPv6 del tunnel cattura anche la LAN: lo tolgo"
+						ip -6 rule del pref "$WG_RULE_PREF" 2>/dev/null
+						ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null
+						ip -6 route flush table "$WG_TABLE" 2>/dev/null
+						;;
+				esac
+			}
+		fi
+	else
+		# Il tunnel non porta IPv6: la tabella v6 si svuota, cosi' un profilo
+		# cambiato da dual-stack a solo-v4 non si lascia dietro una rotta.
+		ip -6 route flush table "$WG_TABLE" 2>/dev/null
+	fi
 
 	say "instradamento WireGuard (pref $WG_RULE_PREF, tabella $WG_TABLE) a posto"
 }

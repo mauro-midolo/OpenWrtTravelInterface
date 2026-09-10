@@ -1054,7 +1054,7 @@ che aveva lo stesso buco da sempre — lì costava un ping che non passa, non un
 
 ---
 
-## Fase 8 — WireGuard IPv6
+## Fase 8 — WireGuard IPv6 ✅ *(fatta il 2026-09-10)*
 
 **Il bug concreto**, `rpcd:3455-3459`: `Endpoint = 2001:db8::1` diventa host `2001:db8:` e porta `1`.
 Due valori plausibili e sbagliati scritti in uci — il modo peggiore di sbagliare: il tunnel si scrive,
@@ -1091,6 +1091,50 @@ quattro cifre, che è anche un gruppo legale. Nel commento va quella.)*
 **Nuovo test shell `wg-endpoint.test.ts`**: cinque `.conf` attraverso `wg_parse_conf`. Proprietà da
 verificare: `[2001:db8::1]:51820` fa round-trip identico, e `2001:db8::1` diventa
 `[2001:db8::1]:51820` — non identico all'incollato, ma **corretto e stabile al secondo giro**.
+
+### Esito
+
+`tsc --noEmit` pulito, **446 test su 25 file** (34 nuovi), build a 236 kB, `sh -n` su rpcd e
+`vpn-setup.sh`. Le funzioni sono state provate **con l'ash del router**, non solo con Git Bash:
+
+```
+vpn.example.com:51820  -> host=[vpn.example.com]  port=[51820]
+[2001:db8::1]:51820    -> host=[[2001:db8::1]]    port=[51820]
+[2001:db8::1]          -> host=[[2001:db8::1]]    port=[51820]
+2001:db8::1            -> host=[[2001:db8::1]]    port=[51820]   ← era host "2001:db8:" e porta "1"
+```
+
+E `method_wg_get` sul router, prima e dopo aver aggiunto (in staging, poi revertito) un AllowedIPs
+v6 al profilo acceso:
+
+```
+"has_v6": false, "rule6": false, "route6": false     ← profilo v4-only: le due righe non compaiono
+"has_v6": true,  "rule6": false, "route6": false     ← con ::/0: compaiono, e segnalano cosa manca
+```
+
+### Dettagli decisi qui
+
+- **`valid_wg_addrs` è stata riscritta per famiglia**, con `wg_v6_form` a parte. La classe di
+  caratteri unica di prima — `[0-9a-fA-F:.]+(/[0-9]{1,3})?` — accettava `::::::`, `::1::2`, `1:2:3:`
+  e `10.0.0.0/999`: sono tutti caratteri leciti, in un ordine che indirizzo non è. E il prefisso ora
+  si confronta con il massimo della **sua** famiglia: `/33` su IPv4 e `/129` su IPv6 sono errori
+  quanto `/999`.
+- **`valid_wg_host` rifiuta un IPv6 nudo**, e non è una svista: `wg_split_endpoint` lo mette sempre
+  fra parentesi, quindi accettarlo significherebbe accettare uno stato che il resto del codice non
+  produce. Lato browser invece `wgEndpointProblem` lo accetta — lì è la forma in cui lo si incolla
+  da un `.conf`, e le parentesi gliele mette il router.
+- **`wg_has_v6_routes` esiste in due copie**, una in `vpn-setup.sh` e una nell'rpcd
+  (`wg_profile_has_v6`), e il commento lo dice: se le due divergessero, la schermata segnerebbe come
+  mancante una regola che nessuno ha motivo di scrivere — o tacerebbe su una che manca davvero.
+- **La prova di sicurezza v6 non è una copia della v4.** Il commento spiega perché lì conta di più:
+  lo stesso errore in v6 lascia SSH-su-v4 funzionante, quindi il router *sembra* a posto mentre ogni
+  browser che preferisce IPv6 si pianta. In v4 la sessione cadeva e ci si accorgeva subito.
+- **Il campo Endpoint ha una validazione lato client**, che prima non aveva affatto: un endpoint
+  sbagliato si scriveva, il tunnel si creava, e il guasto si scopriva solo dal log di netifd. Il
+  messaggio prende il posto del suggerimento invece di aggiungersi — due righe sotto un campo si
+  leggono come una sola, e si perde quella che conta.
+- **Il default AllowedIPs resta `0.0.0.0/0`**, come previsto: un file che non lo dice è un file che a
+  IPv6 non ha pensato, e indovinare `::/0` creerebbe un buco nero su ogni profilo del genere.
 
 ---
 
@@ -1175,14 +1219,17 @@ UI-nuova/pacchetto-vecchio, che è lo stato normale fra il deploy della SPA e qu
 - ~~**`net.ipv6.conf.all.forwarding=1` spegne IPv6**~~ e ~~**kill switch che perde IPv6**~~:
   **entrambi archiviati dalla Fase 0.** L'inoltro v6 è già un default di OpenWrt e IPv6 funziona lo
   stesso, perché odhcp6c legge gli RA in spazio utente; il kill switch è già dual-family.
-- **`::/0` in tabella 53 senza `suppress_prefixlength`** ripete il blocco documentato a
-  `vpn-setup.sh:262-267`, e in v6 è peggio: SSH su v4 continua a funzionare, quindi il router sembra
-  a posto mentre ogni browser si pianta.
+- ~~**`::/0` in tabella 53 senza `suppress_prefixlength`**~~: **chiuso in Fase 8.** La regola v6 si
+  scrive solo dopo che `ip -6 rule add ... suppress_prefixlength 0` è riuscita, e se non riesce la
+  tabella v6 viene svuotata invece di lasciarla a metà. La prova di sicurezza ha il suo gemello
+  `lan_probe_addr6`, e il commento dice perché lì conta di più: SSH su v4 continua a funzionare,
+  quindi il router sembra a posto mentre ogni browser si pianta.
 - **Router a metà aggiornamento** (UI nuova, pacchetto vecchio): ogni campo nuovo è riempito al
   confine, e nessun componente legge `lan.addresses6[0]` senza guardia.
 - ~~**GUA annunciata a Tailscale**~~: **chiuso in Fase 7.** `lan_cidr6` filtra su `fc00::/7` e la
   GUA non esce mai; verificato con sei payload sintetici, compreso quello in cui la GUA compare
   prima dell'ULA nell'elenco.
-- **Le parentesi in `endpoint_host` sembrano un bug** e qualcuno le toglierà, reintroducendo
-  `2001:db8::1:443`. Il commento deve dire che è netifd a fare la giunzione ingenua — e usare una
-  porta di quattro cifre nell'esempio, perché è il caso che passa inosservato (vedi Fase 1).
+- ~~**Le parentesi in `endpoint_host` sembrano un bug**~~: **chiuso in Fase 8.** Il commento sopra
+  `wg_split_endpoint` dice che e' netifd a fare la giunzione ingenua, usa `443` come esempio - la
+  porta di quattro cifre, quella che passa inosservata - e un test verifica che le parentesi restino
+  dentro l'host in tutte e tre le forme v6.

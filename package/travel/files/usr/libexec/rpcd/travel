@@ -3467,18 +3467,153 @@ valid_wg_key() {
 	printf '%s' "$1" | grep -qE '^[A-Za-z0-9+/]{43}=$'
 }
 
+# La forma di un IPv6, senza prefisso.
+#
+# Non la semantica: quanti gruppi servano lo decide netifd. Qui si scartano le
+# forme che indirizzo non sono affatto, e la vecchia classe di caratteri sola
+# non ne scartava nessuna - `::::::` sono tutti caratteri leciti.
+wg_v6_form() {
+	local addr="$1" group
+
+	printf '%s' "$addr" | grep -qE '^[0-9a-fA-F:]+$' || return 1
+	# Un solo "::", e mai ":::": due abbreviazioni renderebbero l'indirizzo
+	# ambiguo, e nessuno saprebbe quanti gruppi di zeri stanno da che parte.
+	printf '%s' "$addr" | grep -q ':::' && return 1
+	[ "$(printf '%s' "$addr" | grep -o '::' | wc -l)" -le 1 ] || return 1
+
+	for group in $(printf '%s' "$addr" | tr ':' ' '); do
+		printf '%s' "$group" | grep -qE '^[0-9a-fA-F]{1,4}$' || return 1
+	done
+
+	# Un ':' singolo a un estremo e' un troncamento: "1:2:3:" o ":1:2".
+	case "$addr" in
+		*::|::*) ;;
+		:*|*:) return 1 ;;
+	esac
+
+	return 0
+}
+
 # Un elenco di indirizzi separati da virgole o spazi. Non si convalida la
 # semantica - a quella pensa netifd - ma la forma: uno spazio di troppo in un
 # campo incollato finirebbe in `uci add_list` come indirizzo a se'.
+#
+# Le due famiglie si convalidano separate, e non con una classe di caratteri
+# sola. Quella di prima - `[0-9a-fA-F:.]+(/[0-9]{1,3})?` - accettava `::::::` e
+# `10.0.0.0/999`: tutti caratteri leciti, in un ordine che indirizzo non e'.
+# Soprattutto, il prefisso va confrontato con il massimo della SUA famiglia:
+# /64 su un IPv4 e /129 su un IPv6 sono errori tanto quanto /999.
 valid_wg_addrs() {
-	local entry
+	local entry addr prefix
 
 	[ -n "$1" ] || return 1
 	for entry in $(printf '%s' "$1" | tr ',' ' '); do
-		printf '%s' "$entry" | grep -qE '^[0-9a-fA-F:.]+(/[0-9]{1,3})?$' || return 1
+		addr="${entry%%/*}"
+		prefix=""
+		case "$entry" in
+			*/*) prefix="${entry#*/}" ;;
+		esac
+
+		# Un prefisso c'e' o non c'e': "10.0.0.0/" non e' ne' l'uno ne' l'altro.
+		if [ "$entry" != "$addr" ]; then
+			printf '%s' "$prefix" | grep -qE '^[0-9]{1,3}$' || return 1
+		fi
+
+		case "$addr" in
+			*:*)
+				wg_v6_form "$addr" || return 1
+				[ -z "$prefix" ] || [ "$prefix" -le 128 ] || return 1
+				;;
+			*)
+				printf '%s' "$addr" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+				[ -z "$prefix" ] || [ "$prefix" -le 32 ] || return 1
+				;;
+		esac
 	done
 
 	return 0
+}
+
+# L'host di un endpoint: un nome, un IPv4, oppure un IPv6 fra parentesi.
+#
+# Oggi non veniva controllato affatto, e un endpoint sbagliato si scopriva solo
+# dal log di netifd - che dice soltanto che l'handshake non arriva.
+#
+# Le parentesi sono ammesse e ATTESE per IPv6: e' la forma in cui
+# `wg_split_endpoint` lo lascia, ed e' quella che netifd deve poter ricomporre.
+valid_wg_host() {
+	local host="$1"
+
+	[ -n "$host" ] || return 1
+
+	case "$host" in
+		\[*\])
+			# IPv6 fra parentesi: si convalida quello che c'e' dentro, senza.
+			host="${host#\[}"
+			wg_v6_form "${host%\]}" && return 0
+			return 1
+			;;
+		*:*)
+			# Due punti fuori dalle parentesi: un IPv6 nudo, che qui non deve
+			# arrivare - `wg_split_endpoint` lo mette sempre fra parentesi.
+			return 1
+			;;
+	esac
+
+	# Un nome di host, o un IPv4. La forma dei nomi e' quella di RFC 1123:
+	# etichette di lettere, cifre e trattini, non piu' di 63 caratteri, e il
+	# trattino mai agli estremi.
+	printf '%s' "$host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+}
+
+# Separa `Endpoint` in host e porta, nelle quattro forme che esistono davvero.
+#
+# Il caso che rompeva tutto era l'IPv6 nudo: spezzando sull'ultimo ':',
+# `2001:db8::1` diventava host `2001:db8:` e porta `1`. Due valori plausibili e
+# sbagliati, scritti in uci senza che niente protestasse - il tunnel si crea,
+# netifd non si lamenta, l'handshake non arriva mai e nessuno sa dire perche'.
+#
+# Un IPv6 nudo si riconosce dal numero di ':': due o piu'. Nessun nome di host e
+# nessun IPv4 puo' contenerne due, quindi la regola non ha casi ambigui.
+#
+# LE PARENTESI RESTANO DENTRO `endpoint_host`, e sembra sbagliato ma non lo e':
+# netifd ricompone l'endpoint come "$endpoint_host:$endpoint_port", cioe' con
+# una giunzione ingenua. Senza parentesi, host `2001:db8::1` e porta `443`
+# darebbero `2001:db8::1:443`, che e' un indirizzo IPv6 VALIDO e diverso: il
+# tunnel punterebbe altrove e nessuno se ne accorgerebbe. Il guasto dipende
+# dalla porta - con 51820, cinque cifre, la stringa e' invalida e l'errore si
+# vede - ed e' proprio per questo che le parentesi non sono facoltative: il
+# caso silenzioso e' quello che sembra innocuo.
+wg_split_endpoint() {
+	local raw="$1" rest
+
+	case "$raw" in
+		\[*\]:*)
+			# [v6]:porta
+			WGF_HOST="${raw%%]*}]"
+			rest="${raw#*]:}"
+			WGF_PORT="$rest"
+			;;
+		\[*\])
+			# [v6] senza porta
+			WGF_HOST="$raw"
+			WGF_PORT=51820
+			;;
+		*:*:*)
+			# Due o piu' ':' e nessuna parentesi: IPv6 nudo, porta assente.
+			WGF_HOST="[$raw]"
+			WGF_PORT=51820
+			;;
+		*:*)
+			# host:porta, con un ':' solo.
+			WGF_PORT="${raw##*:}"
+			WGF_HOST="${raw%:*}"
+			;;
+		*)
+			WGF_HOST="$raw"
+			WGF_PORT=51820
+			;;
+	esac
 }
 
 wg_number_in() {
@@ -3521,6 +3656,7 @@ wg_validate() {
 	valid_wg_addrs "$WGF_ALLOWED" || { WG_ERR="AllowedIPs malformati"; return 1; }
 	[ -z "$WGF_DNS" ] || valid_wg_addrs "$WGF_DNS" || { WG_ERR="i DNS non sono indirizzi validi"; return 1; }
 	[ -n "$WGF_HOST" ] || { WG_ERR="manca l'endpoint del peer (Endpoint nella sezione [Peer])"; return 1; }
+	valid_wg_host "$WGF_HOST" || { WG_ERR="l'endpoint del peer non e' un nome ne' un indirizzo valido"; return 1; }
 	wg_number_in "$WGF_PORT" 1 65535 || { WG_ERR="la porta dell'endpoint non e' valida"; return 1; }
 	[ -z "$WGF_MTU" ] || wg_number_in "$WGF_MTU" 576 9200 || { WG_ERR="MTU fuori intervallo (576-9200)"; return 1; }
 	[ -z "$WGF_KEEPALIVE" ] || wg_number_in "$WGF_KEEPALIVE" 0 65535 || { WG_ERR="keepalive fuori intervallo"; return 1; }
@@ -3533,6 +3669,24 @@ wg_validate() {
 # i profili, anche quelli spenti - una zona che nomina un'interfaccia che non
 # esiste non fa niente, e aggiungerla al momento dell'accensione vorrebbe dire
 # un reload del firewall proprio mentre il traffico si sposta.
+# Vero se il profilo instrada davvero qualcosa di IPv6.
+#
+# Stessa lettura che fa `wg_has_v6_routes` in vpn-setup.sh, e per forza: se le
+# due dessero risposte diverse, l'interfaccia segnerebbe come mancante una
+# regola che nessuno ha motivo di scrivere - o peggio, tacerebbe su una che
+# manca davvero.
+wg_profile_has_v6() {
+	local entry
+
+	for entry in $(uci -q get "network.${1}_peer.allowed_ips" 2>/dev/null); do
+		case "$entry" in
+			*:*) return 0 ;;
+		esac
+	done
+
+	return 1
+}
+
 wg_join_zone() {
 	local section="$1"
 
@@ -3702,6 +3856,12 @@ method_wg_get() {
 	# Nella zona del tunnel: senza, il firewall scarta il traffico inoltrato
 	# anche quando l'instradamento e' perfetto.
 	json_add_boolean in_zone "$([ -n "$active" ] && uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$active" && echo 1 || echo 0)"
+	# Le gemelle IPv6, e soprattutto SE hanno motivo di esistere: un tunnel
+	# senza AllowedIPs v6 non deve instradare IPv6, quindi la loro assenza non e'
+	# un guasto ed e' `has_v6` a dirlo a chi mostra l'elenco.
+	json_add_boolean has_v6 "$([ -n "$active" ] && wg_profile_has_v6 "$active" && echo 1 || echo 0)"
+	json_add_boolean rule6 "$([ -n "$active" ] && ip -6 rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
+	json_add_boolean route6 "$([ -n "$active" ] && ip -6 route show table 53 2>/dev/null | grep -q '^default ' && echo 1 || echo 0)"
 	json_close_object
 
 	# La configurazione comandata dall'interruttore fisico, stringa vuota se la
@@ -3810,11 +3970,7 @@ EOF
 
 	# `Endpoint` e' host e porta insieme: si separano qui, perche' da qui in
 	# poi sono due campi distinti anche nel modulo di modifica.
-	if [ -n "$WGF_HOST" ]; then
-		WGF_PORT="${WGF_HOST##*:}"
-		WGF_HOST="${WGF_HOST%:*}"
-		[ "$WGF_HOST" = "$WGF_PORT" ] && WGF_PORT=51820
-	fi
+	[ -n "$WGF_HOST" ] && wg_split_endpoint "$WGF_HOST"
 
 	# Il valore che usano tutti quando il file non lo dice: senza keepalive un
 	# tunnel dietro NAT si addormenta e il ritorno non passa piu'.
