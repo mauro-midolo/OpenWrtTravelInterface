@@ -306,9 +306,28 @@ function RadioCard({
         </p>
       )}
 
+      {/* Perche' il pulsante qui sotto non si preme. Sta accanto al pulsante e
+          non in cima alla schermata: chi lo trova spento cerca la ragione li',
+          e "l'access point è acceso" da solo non spiega chi lo tiene acceso. */}
+      {radio.apSection && radio.apToggle && (
+        <p class="alert alert--info">
+          Questo access point segue l’interruttore fisico: si accende e si spegne muovendo
+          la levetta, non da qui. Per tornare a decidere da qui, cambia la funzione
+          dell’interruttore in Sistema.
+        </p>
+      )}
+
       <div class="radio__actions">
+        {/* Resta visibile anche quando lo comanda la levetta: dice com'e'
+            messo l'access point adesso, ed e' proprio cio' che serve leggere
+            per capire dov'e' la levetta. Sparire lascerebbe la scheda senza
+            quella riga, che e' il contrario di quello che si vuole. */}
         {radio.apSection && (
-          <button class="button button--ghost" onClick={() => onAp(!radio.apEnabled)}>
+          <button
+            class="button button--ghost"
+            disabled={radio.apToggle}
+            onClick={() => onAp(!radio.apEnabled)}
+          >
             {radio.apEnabled ? 'Spegni access point' : 'Accendi access point'}
           </button>
         )}

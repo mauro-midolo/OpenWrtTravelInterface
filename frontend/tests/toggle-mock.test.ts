@@ -3,7 +3,7 @@ import { mockCall } from '../src/lib/mock';
 
 it('simulates the toggle configuration persisting across reads and rejects unknown actions', async () => {
   expect(await mockCall('travel', 'toggle_get', {}))
-    .toEqual({ action: 'none', position: 'off', actions: ['none', 'led'], names: {} });
+    .toEqual({ action: 'none', position: 'off', actions: ['none', 'led', 'ap24', 'ap5'], names: {} });
   expect(await mockCall('travel', 'toggle_set', { action: 'led' }))
     .toMatchObject({ action: 'led' });
   expect(await mockCall('travel', 'toggle_get', {})).toMatchObject({ action: 'led' });
@@ -24,6 +24,29 @@ it('lines the simulated LED up with the switch when the function is chosen', asy
   expect(await mockCall('travel', 'led_get', {})).toMatchObject({ enabled: false });
 });
 
+it('lines the simulated access point up with the switch, one band at a time', async () => {
+  await mockCall('travel', 'toggle_set', { action: 'none' });
+  const bandOf = async (band: string) => {
+    const reply = await mockCall<{ aps: { band: string; enabled: boolean; toggle: boolean }[] }>(
+      'travel',
+      'ap',
+      {},
+    );
+    return reply.aps.find((ap) => ap.band === band);
+  };
+
+  // La levetta del simulatore sta in basso: scegliere la banda spegne subito
+  // quell'access point, altrimenti resterebbe acceso a smentirla.
+  expect(await bandOf('2.4')).toMatchObject({ enabled: true, toggle: false });
+  await mockCall('travel', 'toggle_set', { action: 'ap24' });
+  expect(await bandOf('2.4')).toMatchObject({ enabled: false, toggle: true });
+  // Le due bande sono opzioni indipendenti: l'altra non la tocca nessuno.
+  expect(await bandOf('5')).toMatchObject({ enabled: true, toggle: false });
+
+  await mockCall('travel', 'toggle_set', { action: 'none' });
+  expect(await bandOf('2.4')).toMatchObject({ toggle: false });
+});
+
 /** Il file .conf che il simulatore accetta: gli bastano le due righe. */
 const CONF = 'PrivateKey = x\nEndpoint = vpn.example:51820';
 
@@ -35,11 +58,11 @@ async function importWg(name: string): Promise<string> {
 it('offers each saved WireGuard configuration by name, and none before there are any', async () => {
   await mockCall('travel', 'toggle_set', { action: 'none' });
   // Le voci fisse ci sono sempre; quelle nominate le crea chi salva un tunnel.
-  expect(await mockCall('travel', 'toggle_get', {})).toMatchObject({ actions: ['none', 'led'] });
+  expect(await mockCall('travel', 'toggle_get', {})).toMatchObject({ actions: ['none', 'led', 'ap24', 'ap5'] });
   const casa = await importWg('Casa');
   const ufficio = await importWg('Ufficio');
   expect(await mockCall('travel', 'toggle_get', {})).toMatchObject({
-    actions: ['none', 'led', `wg:${casa}`, `wg:${ufficio}`],
+    actions: ['none', 'led', 'ap24', 'ap5', `wg:${casa}`, `wg:${ufficio}`],
     names: { [`wg:${casa}`]: 'Casa', [`wg:${ufficio}`]: 'Ufficio' },
   });
 });

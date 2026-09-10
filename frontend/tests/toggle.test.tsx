@@ -303,7 +303,12 @@ describe('interruttore fisico', () => {
 
 describe('forma canonica della configurazione', () => {
   it('fills in what an older package leaves out', () => {
-    const bare = { action: 'none', actions: ['none', 'led'], position: 'unknown', names: {} };
+    const bare = {
+      action: 'none',
+      actions: ['none', 'led', 'ap24', 'ap5'],
+      position: 'unknown',
+      names: {},
+    };
     expect(normalizeToggle({})).toEqual(bare);
     expect(normalizeToggle(undefined)).toEqual(bare);
   });
@@ -349,7 +354,9 @@ describe('forma canonica della configurazione', () => {
   // Senza elenco si mostrano le fisse: un tunnel WireGuard non si puo'
   // indovinare, e proporne uno che non esiste sarebbe peggio che tacere.
   it('never invents WireGuard entries when the router sends no list', () => {
-    expect(normalizeToggle({ action: 'led' } as never).actions).toEqual(['none', 'led']);
+    expect(normalizeToggle({ action: 'led' } as never).actions).toEqual([
+      'none', 'led', 'ap24', 'ap5',
+    ]);
   });
 });
 

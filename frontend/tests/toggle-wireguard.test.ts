@@ -143,7 +143,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     // Non esiste un "accendi WireGuard": ne porta il traffico una alla volta,
     // quindi si sceglie quale.
     expect(result.stdout.trim().split(/\s+/)).toEqual([
-      'none', 'led', 'wg:travel_wg1', 'wg:travel_wg2',
+      'none', 'led', 'ap24', 'ap5', 'wg:travel_wg1', 'wg:travel_wg2',
     ]);
   });
 

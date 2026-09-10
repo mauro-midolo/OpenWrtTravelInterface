@@ -36,6 +36,11 @@ export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }
   const reference = active[0] ?? aps[0];
   const clients = active.reduce((sum, ap) => sum + (ap.clients ?? 0), 0);
 
+  // Quelli che segue la levetta: non si accendono e non si spengono da qui, e
+  // dirlo su questa scheda evita di andarlo a scoprire premendo un pulsante
+  // spento sulla scheda della radio.
+  const byToggle = aps.filter((ap) => ap.toggle);
+
   // Le sezioni devono restare identiche fra le radio, altrimenti lo spostamento
   // automatico cambierebbe rete a chi e' collegato.
   const diverging = aps.some(
@@ -69,7 +74,16 @@ export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }
       ) : (
         <p class="muted">
           Configurato su {aps.map((ap) => `${ap.band} GHz`).join(' e ')}, ma spento su
-          entrambe. Riaccendilo dalla scheda della radio.
+          entrambe.{' '}
+          {byToggle.length < aps.length && 'Riaccendilo dalla scheda della radio.'}
+        </p>
+      )}
+
+      {byToggle.length > 0 && (
+        <p class="alert alert--info">
+          {byToggle.map((ap) => `${ap.band} GHz`).join(' e ')}: lo comanda l’interruttore
+          fisico, e si accende o si spegne muovendo la levetta. Per tornare a deciderlo
+          dall’interfaccia, cambia la funzione dell’interruttore in Sistema.
         </p>
       )}
 

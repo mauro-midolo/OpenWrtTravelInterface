@@ -31,6 +31,17 @@ export interface Radio {
   apSsid: string | null;
   /** L'access point e' configurato ma puo' essere spento. */
   apEnabled: boolean;
+  /**
+   * L'access point di questa radio lo accende e lo spegne l'interruttore
+   * fisico, e da qui si guarda e basta.
+   *
+   * Arriva gia' risolto dal router, come per WireGuard: qui non si sa come sono
+   * fatti gli id delle azioni della levetta, e chiederglieli con una seconda
+   * chiamata darebbe una risposta che arriva dopo questa. Falso con un
+   * pacchetto piu' vecchio di questa interfaccia, che quelle azioni non le ha:
+   * niente da comandare, quindi niente da bloccare.
+   */
+  apToggle: boolean;
   /** Sezione uci della STA su questa radio, se c'e'. */
   staSection: string | null;
   staEnabled: boolean;
@@ -123,6 +134,7 @@ interface RadioRow {
   ap_section?: string;
   ap_ssid?: string;
   ap_enabled?: boolean;
+  ap_toggle?: boolean;
   sta_section?: string;
   sta_enabled?: boolean;
 }
@@ -153,6 +165,10 @@ export async function listRadios(): Promise<Radio[]> {
       apSection: r.ap_section ? r.ap_section : null,
       apSsid: r.ap_ssid ? r.ap_ssid : null,
       apEnabled: r.ap_enabled === true,
+      // Un pacchetto piu' vecchio di questa interfaccia non manda il campo: la
+      // levetta non sa ancora comandare un access point, quindi non ne comanda
+      // nessuno. La forma canonica si impone qui, al confine, non nelle schede.
+      apToggle: r.ap_toggle === true,
       staSection: r.sta_section ? r.sta_section : null,
       staEnabled: r.sta_enabled === true,
     };
@@ -525,6 +541,14 @@ export interface ApSection {
   encryption: string;
   /** La chiave non esce mai dal router: si sa solo se esiste. */
   has_key: boolean;
+  /**
+   * Questo access point lo accende e lo spegne l'interruttore fisico.
+   *
+   * Come `Radio.apToggle`, e per la stessa ragione: la risposta la da' il
+   * router, che sa quale banda e' associata alla levetta. Qui serve a spiegare
+   * perche' un access point spento non si riaccende dalla scheda della radio.
+   */
+  toggle: boolean;
   device?: string;
   bssid?: string;
   channel?: number;
@@ -611,8 +635,24 @@ export function encryptionLabel(value: string): string {
 }
 
 export async function getAp(): Promise<ApSection[]> {
-  const response = await call<{ aps?: ApSection[] }>('travel', 'ap');
-  return response.aps ?? [];
+  const response = await call<{ aps?: Partial<ApSection>[] }>('travel', 'ap');
+  // Forma canonica al confine: `toggle` non c'e' con un pacchetto piu' vecchio
+  // di questa interfaccia, e "non lo sappiamo" non e' un valore che le schede
+  // debbano maneggiare - li' la domanda e' solo "chi lo comanda".
+  return (response.aps ?? []).map((ap) => ({
+    section: ap.section ?? '',
+    radio: ap.radio ?? '',
+    band: ap.band ?? '',
+    enabled: ap.enabled === true,
+    ssid: ap.ssid ?? '',
+    encryption: ap.encryption ?? '',
+    has_key: ap.has_key === true,
+    toggle: ap.toggle === true,
+    device: ap.device,
+    bssid: ap.bssid,
+    channel: ap.channel,
+    clients: ap.clients,
+  }));
 }
 
 /**

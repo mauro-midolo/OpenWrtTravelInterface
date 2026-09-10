@@ -15,6 +15,12 @@
 # sorgerlo non fa niente.
 . /usr/share/travel/wg.sh
 
+# Dove sta l'access point e come si accende o si spegne: stessa storia, e lo
+# stesso motivo per caricarlo in cima - lo leggono `radios` e `ap`, che sono fra
+# i metodi piu' chiamati, e anche qui sono solo definizioni. Porta con se'
+# `band_label`, che traduce i valori `band` di uci e serve a tutti e due.
+. /usr/share/travel/ap.sh
+
 VERSION_FILE=/usr/share/travel/version
 
 # Legge la prima riga di un file, stringa vuota se assente o illeggibile.
@@ -175,14 +181,6 @@ method_system() {
 	json_dump
 }
 
-band_label() {
-	case "$1" in
-		2g) printf '2.4' ;;
-		5g) printf '5' ;;
-		*)  printf '' ;;
-	esac
-}
-
 wireless_status() {
 	local status
 	status=$(ubus call network.wireless status 2>/dev/null)
@@ -233,8 +231,8 @@ live_device_of() {
 #     `ubus_rpc_session` alla chiamata: da HTTP fallisce con "invalid argument".
 #     Chiamandolo da qui, in locale, il problema non si pone.
 method_radios() {
-	local status radio up failed band channel device section dev mode disabled
-	local ap_section ap_ssid ap_disabled sta_section sta_disabled ifaces
+	local status radio up failed band channel device section dev disabled
+	local ap_section sta_section sta_disabled ifaces toggle_band
 
 	status=$(wireless_status)
 
@@ -243,43 +241,35 @@ method_radios() {
 	# ci sarebbe piu' modo di riaccenderlo.
 	ifaces=$(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p')
 
+	# Quale access point lo comanda l'interruttore fisico, se ne comanda uno.
+	# Si chiede una volta per tutte le radio: la risposta non cambia dentro il
+	# giro, ed e' una lettura di `uci` che non ha senso rifare per ciascuna.
+	toggle_band=$(ap_toggle_band) || toggle_band=""
+
 	json_init
 	json_add_array radios
 
-	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
+	for radio in $(ap_radios); do
 		up=$(printf '%s' "$status" | jsonfilter -e "@.$radio.up")
 		# netifd lo alza quando hostapd o wpa_supplicant rifiutano la
 		# configurazione: e' l'unico modo per accorgersi che una modifica ha
 		# lasciato la radio giu' invece di funzionare.
 		failed=$(printf '%s' "$status" | jsonfilter -e "@.$radio.retry_setup_failed")
-		band=$(uci -q get "wireless.$radio.band")
+		band=$(band_label "$(uci -q get "wireless.$radio.band")")
 
-		ap_section=""; ap_ssid=""; ap_disabled=1
+		# Quale sia l'access point di questa radio lo dice `ap.sh`, che e' anche
+		# quello che poi lo accende per conto della levetta: la regola di quale
+		# sezione vale quando ce n'e' piu' d'una sta scritta la', una volta sola.
+		ap_section=$(ap_section_of_radio "$radio") || ap_section=""
+
 		sta_section=""; sta_disabled=1
-
 		for section in $ifaces; do
 			dev=$(uci -q get "wireless.$section.device")
 			[ "$dev" = "$radio" ] || continue
-			mode=$(uci -q get "wireless.$section.mode")
+			[ "$(uci -q get "wireless.$section.mode")" = "sta" ] || continue
 			disabled=$(uci -q get "wireless.$section.disabled")
-			disabled="${disabled:-0}"
-
-			case "$mode" in
-				ap)
-					# Fra piu' access point sulla stessa radio vince quello
-					# acceso: le sezioni di default di OpenWrt restano li',
-					# spente, e non devono rubare il posto alla nostra.
-					if [ -z "$ap_section" ] || [ "$disabled" = "0" ]; then
-						ap_section="$section"
-						ap_ssid=$(uci -q get "wireless.$section.ssid")
-						ap_disabled="$disabled"
-					fi
-					;;
-				sta)
-					sta_section="$section"
-					sta_disabled="$disabled"
-					;;
-			esac
+			sta_section="$section"
+			sta_disabled="${disabled:-0}"
 		done
 
 		device=$(live_device_of "$status" "$radio")
@@ -294,14 +284,20 @@ method_radios() {
 
 		json_add_object
 		json_add_string  name         "$radio"
-		json_add_string  band         "$(band_label "$band")"
+		json_add_string  band         "$band"
 		json_add_string  device       "$device"
 		json_add_boolean up           "$([ "$up" = "true" ] && echo 1 || echo 0)"
 		json_add_boolean setup_failed "$([ "$failed" = "true" ] && echo 1 || echo 0)"
 		json_add_int     channel      "$channel"
 		json_add_string  ap_section   "$ap_section"
-		json_add_string  ap_ssid      "$ap_ssid"
-		json_add_boolean ap_enabled   "$([ -n "$ap_section" ] && [ "$ap_disabled" = "0" ] && echo 1 || echo 0)"
+		json_add_string  ap_ssid      "$([ -n "$ap_section" ] && uci -q get "wireless.$ap_section.ssid")"
+		json_add_boolean ap_enabled   "$([ -n "$ap_section" ] && ap_section_enabled "$ap_section" && echo 1 || echo 0)"
+		# L'access point di questa radio segue la levetta: l'interfaccia lo
+		# mostra ma non lo accende e non lo spegne piu', altrimenti schermo,
+		# access point e levetta direbbero tre cose diverse. Arriva gia' risolto
+		# da qui, come per WireGuard: la SPA non sa come sono fatti gli id delle
+		# azioni della levetta, e non deve chiederli con una seconda chiamata.
+		json_add_boolean ap_toggle    "$([ -n "$band" ] && [ "$band" = "$toggle_band" ] && echo 1 || echo 0)"
 		json_add_string  sta_section  "$sta_section"
 		json_add_boolean sta_enabled  "$([ -n "$sta_section" ] && [ "$sta_disabled" = "0" ] && echo 1 || echo 0)"
 		json_close_object
@@ -575,32 +571,20 @@ method_uplinks() {
 # segreti (decisione D3), ed e' il motivo per cui il modulo di modifica lascia
 # il campo password vuoto invece di precompilarlo.
 method_ap() {
-	local status ifaces radio section dev disabled band ifname info clients
-	local ap_section ap_disabled
+	local status radio band ifname info clients ap_section toggle_band
 
 	status=$(wireless_status)
-	ifaces=$(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p')
+
+	# Come per `radios`: quale sia l'access point di una radio lo dice `ap.sh`,
+	# e chi lo comanda pure. Due letture che scegliessero una sezione diversa
+	# racconterebbero due access point diversi.
+	toggle_band=$(ap_toggle_band) || toggle_band=""
 
 	json_init
 	json_add_array aps
 
-	for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-device$/\1/p'); do
-		ap_section=""; ap_disabled=1
-
-		for section in $ifaces; do
-			dev=$(uci -q get "wireless.$section.device")
-			[ "$dev" = "$radio" ] || continue
-			[ "$(uci -q get "wireless.$section.mode")" = "ap" ] || continue
-			disabled=$(uci -q get "wireless.$section.disabled")
-			disabled="${disabled:-0}"
-			# Fra piu' access point sulla stessa radio vince quello acceso.
-			if [ -z "$ap_section" ] || [ "$disabled" = "0" ]; then
-				ap_section="$section"
-				ap_disabled="$disabled"
-			fi
-		done
-
-		[ -n "$ap_section" ] || continue
+	for radio in $(ap_radios); do
+		ap_section=$(ap_section_of_radio "$radio") || continue
 
 		band=$(band_label "$(uci -q get "wireless.$radio.band")")
 		ifname=$(ifname_of_section "$status" "$radio" "$ap_section")
@@ -617,7 +601,8 @@ method_ap() {
 		json_add_string  section    "$ap_section"
 		json_add_string  radio      "$radio"
 		json_add_string  band       "$band"
-		json_add_boolean enabled    "$([ "$ap_disabled" = "0" ] && echo 1 || echo 0)"
+		json_add_boolean enabled    "$(ap_section_enabled "$ap_section" && echo 1 || echo 0)"
+		json_add_boolean toggle     "$([ -n "$band" ] && [ "$band" = "$toggle_band" ] && echo 1 || echo 0)"
 		json_add_string  ssid       "$(uci -q get "wireless.$ap_section.ssid")"
 		json_add_string  encryption "$(uci -q get "wireless.$ap_section.encryption")"
 		json_add_boolean has_key    "$([ -n "$(uci -q get "wireless.$ap_section.key")" ] && echo 1 || echo 0)"

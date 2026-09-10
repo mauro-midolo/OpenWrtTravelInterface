@@ -64,7 +64,7 @@ toggle_unlock() { rmdir "$TOGGLE_LOCK" 2>/dev/null; }
 # non se ne inventa un secondo, e uno solo non puo' divergere dall'altro.
 # L'etichetta la sa solo il router, perche' e' il nome che le ha dato una
 # persona: `toggle_get` la manda insieme all'elenco.
-TOGGLE_ACTIONS='none led'
+TOGGLE_ACTIONS='none led ap24 ap5'
 
 # `wg.sh` si carica quando serve, non in cima: e' lui a chiedere a noi chi
 # comanda la levetta (`toggle_wg_id`), e due file che si sorgono a vicenda in
@@ -102,6 +102,31 @@ toggle_wg_id() {
 	esac
 }
 
+# La banda dell'access point che un'azione comanda, o niente.
+#
+# Le due voci sono fisse e non nominate - `ap24` e `ap5`, non `ap:<qualcosa>` -
+# perche' le bande non le crea chi usa il router: sono due, sono sempre quelle,
+# e la loro etichetta e' una traduzione che sta nella SPA come quella del LED.
+# La corrispondenza fra id e banda pero' serve in due punti, l'esecuzione e chi
+# deve sapere quale controllo virtuale spegnere: sta scritta qui una volta sola.
+toggle_ap_band_of() {
+	case "$1" in
+		ap24) printf '2.4' ;;
+		ap5)  printf '5' ;;
+		*) return 1 ;;
+	esac
+}
+
+# La banda comandata dalla levetta adesso, o niente.
+#
+# Legge la scelta salvata e non `$TOGGLE_ACTION`, come `toggle_wg_id` e per la
+# stessa ragione: chi la chiede - `ap.sh`, per dire all'interfaccia quale
+# controllo virtuale non e' piu' premibile - non ha nessun motivo di aver
+# caricato prima la configurazione.
+toggle_ap_band() {
+	toggle_ap_band_of "$(uci -q get travel_toggle.main.action)"
+}
+
 toggle_do_none() { :; }
 
 # Il LED ha gia' il suo controllo, con lock, rollback e persistenza: qui non si
@@ -114,6 +139,22 @@ toggle_do_led() {
 		off) led_set 0 ;;
 	esac
 }
+
+# L'access point della banda scelta segue la levetta.
+#
+# Come per il LED e per WireGuard, qui non si tocca `uci` e non si ricarica
+# niente: lo fa `ap_switch` di `ap.sh`, che e' l'unico posto in cui un access
+# point cambia stato. Ne segue da solo quale sezione vale quando su una radio
+# ce n'e' piu' d'una, che e' la regola che l'interfaccia legge dall'altro lato.
+toggle_do_ap() {
+	local band position="$2"
+	band=$(toggle_ap_band_of "$1") || { toggle_error 'Banda non valida.'; return 1; }
+	. /usr/share/travel/ap.sh || { toggle_error 'Access point non disponibile.'; return 1; }
+	ap_switch "$band" "$position"
+}
+
+toggle_do_ap24() { toggle_do_ap ap24 "$1"; }
+toggle_do_ap5() { toggle_do_ap ap5 "$1"; }
 
 # La configurazione WireGuard scelta segue la levetta.
 #

@@ -202,6 +202,23 @@ non `ap_*` già presenti e ricarica il wireless.
 
 La UI modifica le credenziali comuni e accende/spegne esplicitamente gli AP.
 Le cifrature offerte sono `sae-mixed`, `sae` e `psk2`.
+Quale sezione conta su una radio è scritto una volta sola in
+`usr/share/travel/ap.sh`, che `travel.radios`, `travel.ap` e l'interruttore
+fisico leggono tutti da lì: tre copie della regola sceglierebbero prima o poi
+sezioni diverse, cioè racconterebbero o accenderebbero access point diversi.
+Le regole sono due. **Vince quello acceso**, che è quello davvero in onda.
+**Fra quelli spenti vince il nostro**, `ap_<radio>`: finché il nostro è acceso
+la prima regola basta, ma la levetta lo spegne per mestiere, e a radio tutta
+spenta si sarebbe ripresa la prima sezione nell'ordine di `uci show` — cioè
+possibilmente la `wifi-iface` di default di OpenWrt, che è lì spenta, **aperta
+e senza password**. Come rete di sicurezza indipendente dal nome, `ap_switch`
+si rifiuta comunque di accendere una sezione senza cifratura: spegnere resta
+sempre lecito, il verso pericoloso è uno solo.
+Lo stesso file contiene `ap_switch`, l'unico punto in cui un AP cambia stato
+dal router.
+La UI invece scrive `disabled` con l'oggetto `uci` e passa da applica-e-conferma:
+spegnere l'AP da cui si è collegati chiude fuori chi lo sta facendo, e il ritorno
+indietro automatico è l'unica rete di sicurezza che ci sia.
 Una connessione client sceglie la radio dalla banda della rete e ricrea solo
 `sta_<radio>`, più l'hostname DHCP dell'interfaccia corrispondente.
 Non sposta gli AP né ne cambia l'abilitazione. Avere un AP anche sull'altra
@@ -860,6 +877,17 @@ veri con `uci`, `ubus` e netifd simulati: elenco delle voci nominate,
 accensione al momento della scelta, scambio, spegnimento di quello che restava
 acceso, blocco e sblocco dell'interfaccia, scelta non salvata quando non si
 puo' applicare, e profilo eliminato.
+`toggle-ap.test.ts` fa lo stesso con `toggle.sh` e `ap.sh`: elenco delle voci
+fisse, accensione al momento della scelta, la banda non associata lasciata
+dov'era, la sezione scelta quando sulla radio ce n'e' piu' d'una, nessun
+`network reload` per uno stato gia' giusto, banda senza access point rifiutata
+e levetta che smette di comandare quando l'AP sparisce. Due prove sono lì per
+la rete aperta: che a radio tutta spenta si torni al nostro AP e non alla
+sezione di default di OpenWrt, e che `ap_switch` rifiuti comunque di accendere
+un access point senza password.
+`toggle-ap-ui.test.tsx` guarda l'altro lato: il pulsante virtuale spento con lo
+stato ancora leggibile, l'altra banda intatta, e il ritorno alla normalita'
+appena l'associazione cambia.
 Su Windows i test shell richiedono Git Bash nel percorso di installazione
 standard. La verifica fisica del LED e del reboot resta da eseguire sul router.
 
@@ -867,10 +895,11 @@ standard. La verifica fisica del LED e del reboot resta da eseguire sul router.
 
 La levetta sul fianco del router e' configurabile: la riga sotto quella del LED
 sceglie che cosa deve fare. Le voci fisse sono `none` (non fare nulla, ed e'
-come parte un router appena installato) e `led` (accendere e spegnere il LED di
-stato). A queste si aggiunge una voce per ogni configurazione WireGuard
-salvata, con id `wg:<sezione>`. La scelta sta in `/etc/config/travel_toggle`,
-quindi resta dopo il riavvio.
+come parte un router appena installato), `led` (accendere e spegnere il LED di
+stato) e `ap24` / `ap5` (accendere e spegnere l'access point di quella banda).
+A queste si aggiunge una voce per ogni configurazione WireGuard salvata, con id
+`wg:<sezione>`. La scelta sta in `/etc/config/travel_toggle`, quindi resta dopo
+il riavvio.
 
 Le configurazioni WireGuard non hanno una voce generica: ne puo' portare il
 traffico una alla volta, quindi non esiste "attiva WireGuard" - esiste "attiva
@@ -911,6 +940,43 @@ piu' fermarla e un blocco che lascia un tunnel senza interruttore e' una
 trappola. Un profilo eliminato lascia una scelta che indica il vuoto:
 `toggle_get` la degrada a `none` e `wg_toggle_owner` non riconosce nessun
 padrone, invece di bloccare la riga che serve a cambiarla.
+
+Le due bande invece sono voci **fisse** e non nominate: sono due, sono sempre
+quelle, e non le crea chi usa il router - l'etichetta e' una traduzione da
+compilare nella SPA come quella del LED. Anche `ap24` e `ap5` non toccano `uci`
+per conto proprio: chiamano `ap_switch` di `ap.sh`, lo stesso punto da cui
+passa la scheda WiFi per sapere quale sezione conta - compreso il fatto che a
+radio tutta spenta si torna al nostro `ap_<radio>` e mai alla `wifi-iface` di
+default di OpenWrt, che e' aperta, e che una sezione senza cifratura non si
+accende comunque. Ne segue da solo che levetta e interfaccia agiscano sempre
+sullo stesso access point.
+
+Le due bande sono indipendenti e la levetta ne comanda una alla volta: quella
+non associata resta premibile dall'interfaccia, ed e' - se l'altra si spegne -
+il modo di rientrare nel router. Una banda su cui nessun access point e'
+configurato non e' associabile: `ap_switch` rifiuta, e `toggle_set` riporta
+indietro la scelta invece di lasciarne scritta una senza effetto.
+
+Finche' la levetta comanda un access point, il pulsante «Accendi/Spegni access
+point» di quella radio resta **visibile ma non premibile** - lo stato e' proprio
+cio' che serve leggere per sapere dov'e' la levetta - e torna utilizzabile da
+solo appena l'associazione cambia. Chi comanda arriva gia' risolto dal router,
+come per WireGuard: `travel.radios` manda `ap_toggle` per radio e `travel.ap`
+manda `toggle` per access point, perche' la SPA non sa come sono fatti gli id
+delle azioni e non deve chiederli con una seconda chiamata. Il divieto vive
+nell'interfaccia e non in `ap_switch`, a differenza di `wg_switch`: la UI
+accende e spegne l'AP con l'oggetto `uci` e applica-e-conferma, e portare quel
+percorso dentro `ap_switch` significherebbe perdere il conto alla rovescia
+proprio nell'operazione che puo' chiudere fuori chi la sta chiedendo. Un access
+point che sparisce da `wireless` lascia una levetta senza padrone:
+`ap_toggle_band` non lo riconosce piu' e il controllo torna premibile, come
+`wg_toggle_owner` con un profilo eliminato.
+
+A differenza della UI, la levetta non ha applica-e-conferma: spegnere l'access
+point da cui si e' collegati chiude fuori. E' il prezzo dell'interruttore
+fisico ed e' accettabile perche' il rimedio e' la levetta stessa, che sta li'
+e si rialza; per questo la riga mostra la posizione attuale accanto alla scelta,
+cosi' l'effetto di associare una banda si legge **prima** di associarla.
 
 Scegliere una funzione non sposta la levetta, e all'avvio nessuno la tocca: in
 tutti e due i casi `toggle_align` riallinea l'uscita alla posizione attuale,

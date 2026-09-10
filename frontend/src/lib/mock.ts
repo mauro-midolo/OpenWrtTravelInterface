@@ -340,7 +340,7 @@ const statusLedState = { supported: true, enabled: true };
  * configurazione WireGuard salvata - che qui, come sul router, non si possono
  * elencare in anticipo perche' le crea chi usa l'interfaccia.
  */
-const TOGGLE_FIXED = ['none', 'led'];
+const TOGGLE_FIXED = ['none', 'led', 'ap24', 'ap5'];
 const physicalToggleState = { action: 'none', position: 'off' };
 
 const toggleActions = (): string[] => [
@@ -356,6 +356,18 @@ function toggleWgMock(): MockWgProfile | undefined {
   const action = physicalToggleState.action;
   if (!action.startsWith('wg:')) return undefined;
   return wgState.profiles.find((p) => p.id === action.slice(3));
+}
+
+/**
+ * La banda dell'access point comandato dalla levetta, o niente.
+ *
+ * La corrispondenza fra id e banda e' la stessa di `toggle.sh`: due voci fisse,
+ * perche' le bande non le crea chi usa il router.
+ */
+function toggleApMock(): '2.4' | '5' | '' {
+  if (physicalToggleState.action === 'ap24') return '2.4';
+  if (physicalToggleState.action === 'ap5') return '5';
+  return '';
 }
 
 /**
@@ -908,6 +920,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       ap_section: `ap_${name}`,
       ap_ssid: ap.ssid,
       ap_enabled: r.apEnabled,
+      ap_toggle: toggleApMock() === r.band,
       sta_section: r.sta ? `sta_${name}` : '',
       sta_enabled: r.sta !== null,
     })),
@@ -968,6 +981,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       radio: name,
       band: r.band,
       enabled: r.apEnabled,
+      toggle: toggleApMock() === r.band,
       ssid: ap.ssid,
       encryption: ap.encryption,
       has_key: ap.hasKey,
@@ -1881,6 +1895,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     if (physicalToggleState.position !== 'unknown') {
       const on = physicalToggleState.position === 'on';
       if (args.action === 'led') statusLedState.enabled = on;
+      // L'access point della banda scelta segue la levetta da subito: sul
+      // router lo fa `ap_switch`, che scrive `disabled` e ricarica le radio.
+      // Qui il pezzo di stato e' lo stesso che muove il pulsante virtuale, e
+      // infatti da adesso quel pulsante non si preme piu'.
+      const band = toggleApMock();
+      if (band) {
+        for (const radio of Object.values(radios)) {
+          if (radio.band === band) radio.apEnabled = on;
+        }
+      }
       const wanted = toggleWgMock();
       if (wanted) {
         // Non si duplica la logica di accensione: si chiede la stessa cosa che

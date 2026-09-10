@@ -11,6 +11,8 @@ import { call } from './ubus';
 export const TOGGLE_ACTIONS = [
   { id: 'none', label: 'Non fare nulla' },
   { id: 'led', label: 'Controllo LED di stato' },
+  { id: 'ap24', label: 'Controllo access point WiFi 2,4 GHz' },
+  { id: 'ap5', label: 'Controllo access point WiFi 5 GHz' },
 ] as const;
 
 /** Le azioni scritte nel registro: quelle che esistono su ogni router. */
@@ -74,6 +76,24 @@ export const controlsLed = (action: ToggleAction | null): boolean => action === 
  */
 export const controlsWg = (action: ToggleAction | null): string =>
   isWgAction(action) ? action.slice(WG.length) : '';
+
+/**
+ * La banda dell'access point comandato dalla levetta, o stringa vuota.
+ *
+ * Stessa idea di `controlsLed` e `controlsWg`. Serve al caso in cui la scheda
+ * WiFi non abbia ancora letto le radio - il modulo delle impostazioni sa gia'
+ * quale funzione e' associata, e non deve rileggerne il significato altrove.
+ * Quando le radio ci sono, chi comanda lo dice gia' il router riga per riga
+ * (`Radio.apToggle`): li' la risposta e' migliore, perche' tiene conto anche di
+ * una banda su cui l'access point non e' configurato.
+ *
+ * Il registro della corrispondenza fra id e banda sta qui e in `toggle.sh`,
+ * come per le etichette: due voci fisse, non una famiglia di id da comporre.
+ */
+const AP_BANDS: Record<string, string> = { ap24: '2.4', ap5: '5' };
+
+export const controlsAp = (action: ToggleAction | null): string =>
+  (action === null ? '' : AP_BANDS[action]) ?? '';
 
 /**
  * Come si chiama un'azione in elenco.
