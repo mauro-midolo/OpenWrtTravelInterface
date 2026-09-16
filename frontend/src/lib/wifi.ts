@@ -7,6 +7,7 @@
  */
 
 import { call } from './ubus';
+import { maskToPrefix, prefixToMask } from './ip';
 import { stageWanHostname } from './hostname';
 import type { HostnameChoice } from './hostname';
 
@@ -92,14 +93,79 @@ export interface Uplink {
   signal?: number;
   /** MAC realmente in uso: se e' stato clonato, e' quello clonato. */
   mac?: string;
-  /** L'interfaccia di rete e' su, cioe' ha preso un indirizzo. */
+  /**
+   * Almeno una delle due famiglie e' su.
+   *
+   * Non e' solo la v4: su una rete v6-only l'interfaccia v4 non prende nessun
+   * lease e resta giu' mentre il gemello v6 funziona, e guardare solo lei
+   * direbbe "senza indirizzo" di una WAN che sta portando il traffico. Chi lo
+   * riempie e' l'rpcd, che vede entrambe le interfacce logiche.
+   */
   up?: boolean;
   /** Nome inviato nel DHCP, grezzo da uci: `*` nessuno, vuoto quello del router. */
   hostname?: string;
   ipv4?: string;
+  /** Sempre in forma puntata: la normalizza `withUplinkDefaults`. */
   netmask?: string;
   gateway?: string;
   dns?: string[];
+  /**
+   * Indirizzi IPv6, col prefisso attaccato ("2001:db8::1/64").
+   *
+   * Obbligatorio, non facoltativo: leggerlo non deve mai richiedere una
+   * guardia. Ce lo mette `withUplinkDefaults` all'ingresso, perche' un router
+   * con il pacchetto vecchio questo campo non lo manda affatto.
+   */
+  ipv6: string[];
+  gateway6: string;
+  /** Prefisso delegato dal provider ("2001:db8:1::/56"), vuoto se non c'e'. */
+  prefix6: string;
+  dns6: string[];
+}
+
+/**
+ * L'uplink come arriva dall'rpcd, dove i campi nuovi possono mancare.
+ *
+ * Esiste per non mentire al confine: fra il deploy della SPA e quello del
+ * pacchetto il router e' a meta' aggiornamento, e dichiarare obbligatorio
+ * qualcosa che non arriva sposterebbe l'errore dentro le schermate.
+ */
+type RawUplink = Omit<Uplink, 'ipv6' | 'gateway6' | 'prefix6' | 'dns6'> &
+  Partial<Pick<Uplink, 'ipv6' | 'gateway6' | 'prefix6' | 'dns6'>>;
+
+/**
+ * Maschera di rete in forma puntata, sempre.
+ *
+ * ubus riporta `ipv4-address[0].mask` come NUMERO di bit ("24"), non come la
+ * maschera puntata che il nome fa pensare, e l'rpcd lo passa cosi' com'e'. Chi
+ * la legge - findConflicts - si aspetta "255.255.255.0" e su "24" risponde
+ * null: il conflitto con la rete dell'albergo non veniva quindi mai segnalato
+ * su un router vero, mentre nel simulatore, che scrive la forma puntata,
+ * funzionava. Le due forme si riconciliano qui, che e' l'unico posto a vederle
+ * entrambe.
+ */
+function canonicalNetmask(raw: string | undefined): string {
+  const text = (raw ?? '').trim();
+  if (text === '') return '';
+  if (/^\d{1,3}$/.test(text)) {
+    const bits = Number(text);
+    return bits <= 32 ? prefixToMask(bits) : '';
+  }
+  // Gia' puntata: si tiene solo se e' una maschera vera, altrimenti vuota, che
+  // significa "non si sa" e fa ricadere chi legge sul suo valore predefinito.
+  return maskToPrefix(text) !== null ? text : '';
+}
+
+/** Riempie i campi che un pacchetto vecchio non manda e da' una forma sola alla netmask. */
+export function withUplinkDefaults(raw: RawUplink): Uplink {
+  return {
+    ...raw,
+    netmask: canonicalNetmask(raw.netmask),
+    ipv6: raw.ipv6 ?? [],
+    gateway6: raw.gateway6 ?? '',
+    prefix6: raw.prefix6 ?? '',
+    dns6: raw.dns6 ?? [],
+  };
 }
 
 /**
@@ -112,10 +178,41 @@ export interface Uplink {
  */
 export type UplinkState = 'disabled' | 'unassociated' | 'no-address' | 'addressed';
 
+/** Fin dove arriva IPv6 su un uplink. */
+export type Ipv6Reach = 'none' | 'local' | 'internet';
+
+/**
+ * IPv6 c'e', e porta da qualche parte?
+ *
+ * Avere un indirizzo non basta: e' la stessa distinzione fra "collegato" e
+ * "funzionante" che regge tutta l'interfaccia, applicata alla seconda famiglia.
+ *
+ * Il caso da riconoscere e' comune e sembra un guasto senza esserlo: un router
+ * a monte che annuncia un prefisso ULA ma NESSUNA rotta predefinita - cioe' un
+ * Router Advertisement con router lifetime a zero. E' quello che fa una
+ * FRITZ!Box quando il provider non le da' un prefisso globale, ed e' corretto:
+ * serve a far parlare in IPv6 i dispositivi della rete locale. L'indirizzo c'e'
+ * ed e' valido, ma il gateway non esiste e non deve esistere.
+ *
+ * Il segnale e' il gateway, non la forma dell'indirizzo: senza rotta
+ * predefinita non si esce, per quanti indirizzi ci siano.
+ *
+ * `local` dice dove NON arriva IPv6, e non promette niente su IPv4: qui non si
+ * sa se l'uplink un indirizzo v4 ce l'abbia, ne' - se ce l'ha - se da li' si
+ * esca davvero, che e' la domanda a cui risponde la verifica dell'uscita.
+ */
+export function ipv6Reach(u: { ipv6: string[]; gateway6: string }): Ipv6Reach {
+  if (u.ipv6.length === 0) return 'none';
+  return u.gateway6 ? 'internet' : 'local';
+}
+
 export function uplinkState(u: Uplink): UplinkState {
   if (u.enabled === false) return 'disabled';
   if (!u.ssid) return 'unassociated';
-  if (!u.up || !u.ipv4) return 'no-address';
+  // Un indirizzo di una qualunque delle due famiglie basta: una rete mobile
+  // v6-only (464XLAT e' comune) resterebbe altrimenti "senza indirizzo" per
+  // sempre, mentre funziona benissimo.
+  if (!u.up || (!u.ipv4 && u.ipv6.length === 0)) return 'no-address';
   return 'addressed';
 }
 
@@ -178,8 +275,8 @@ export async function listRadios(): Promise<Radio[]> {
 }
 
 export async function getUplinks(): Promise<Uplink[]> {
-  const response = await call<{ uplinks?: Uplink[] }>('travel', 'uplinks');
-  return response.uplinks ?? [];
+  const response = await call<{ uplinks?: RawUplink[] }>('travel', 'uplinks');
+  return (response.uplinks ?? []).map(withUplinkDefaults);
 }
 
 interface IwinfoScanEntry {

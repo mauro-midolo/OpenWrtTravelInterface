@@ -25,15 +25,34 @@
 # piu' di un indirizzo perche' uno solo che ha una brutta giornata direbbe
 # "niente Internet" a un router che ce l'ha.
 travel_online() {
-	local host
+	local host bare
 
-	for host in 1.1.1.1 8.8.8.8 9.9.9.9; do
+	# Le due famiglie insieme, e non per completezza: su una rete mobile v6-only
+	# - 464XLAT e' comune - i soli indirizzi IPv4 non risponderebbero mai, e
+	# questa funzione direbbe "niente Internet" a un router che ce l'ha. Chi la
+	# chiama poi non installa i pacchetti, o rinuncia a un giro di configurazione
+	# che sarebbe riuscito.
+	#
+	# Gli IPv4 restano per primi: sono la maggioranza dei casi, e il primo che
+	# risponde chiude la funzione.
+	for host in 1.1.1.1 8.8.8.8 9.9.9.9 \
+		'[2606:4700:4700::1111]' '[2001:4860:4860::8888]' '[2620:fe::fe]'; do
+		# `nc` e `ping` vogliono l'indirizzo nudo; solo la URL vuole le
+		# parentesi, che sono li' per separare l'indirizzo dalla porta.
+		bare="${host#[}"; bare="${bare%]}"
+
 		if command -v nc >/dev/null 2>&1; then
-			printf '' | nc -w 3 "$host" 80 >/dev/null 2>&1 && return 0
+			printf '' | nc -w 3 "$bare" 80 >/dev/null 2>&1 && return 0
 		elif command -v uclient-fetch >/dev/null 2>&1; then
 			uclient-fetch -q -T 3 -O /dev/null "http://$host/" >/dev/null 2>&1 && return 0
 		else
-			ping -c 1 -W 3 "$host" >/dev/null 2>&1 && return 0
+			# `ping` di busybox sceglie la famiglia dall'indirizzo; dove non lo
+			# fa c'e' `ping6`, e provare l'uno o l'altro costa meno che
+			# indovinare quale build c'e'.
+			ping -c 1 -W 3 "$bare" >/dev/null 2>&1 && return 0
+			case "$bare" in
+				*:*) ping6 -c 1 -W 3 "$bare" >/dev/null 2>&1 && return 0 ;;
+			esac
 		fi
 	done
 

@@ -276,8 +276,21 @@ const lanState = {
   start: '100',
   limit: '150',
   dnsClient: [] as string[],
+  dnsClient6: [] as string[],
   dnsUpstream: [] as string[],
   dhcpOptions: [] as string[],
+  // La LAN ha il solo ULA, come un router senza upstream v6: e' lo stato in
+  // cui si trova davvero un router da viaggio in un albergo v4-only.
+  addresses6: ['fd66:67c3:698b::1/60'],
+  ula: 'fd66:67c3:698b::/48',
+  // La riga "Automatico" della tabella, con ra_slaac ASSENTE: e' esattamente
+  // come nasce un router OpenWrt, ed e' il caso che matchRaMode deve
+  // riconoscere invece di chiamare "Personalizzato".
+  ra: 'server',
+  dhcpv6: 'server',
+  raFlags: ['managed-config', 'other-config'],
+  raSlaac: '',
+  raDefault: '',
 };
 
 /**
@@ -574,12 +587,43 @@ const portalSsids = ['Hotel-Guest', 'Hotel-WiFi-Free'];
  * che farebbe davvero, cioe' lasciare quei dispositivi senza provenienza.
  */
 const lanClients = [
-  { mac: 'b8:27:eb:0a:1f:22', ip: '192.168.10.142', name: 'pixel-di-mauro', source: 'dhcp', on: 'radio1' },
-  { mac: '3c:22:fb:71:9c:04', ip: '192.168.10.108', name: 'macbook', source: 'dhcp', on: 'eth1' },
-  { mac: 'dc:a6:32:5e:11:80', ip: '192.168.10.201', name: '', source: 'arp', on: 'radio0' },
+  // Un telefono con le estensioni di privacy: tre indirizzi v6 sullo stesso
+  // dispositivo, che e' il motivo per cui l'elenco li conta invece di
+  // elencarli. Come sul router vero.
+  {
+    mac: 'b8:27:eb:0a:1f:22',
+    ip: '192.168.10.142',
+    name: 'pixel-di-mauro',
+    source: 'dhcp',
+    on: 'radio1',
+    ips6: [
+      'fd66:67c3:698b:0:c8:188e:f90e:be6c',
+      'fd66:67c3:698b:0:58ae:fb70:6821:9805',
+      'fd66:67c3:698b:0:c5e4:5c6c:4e69:5684',
+    ],
+  },
+  {
+    mac: '3c:22:fb:71:9c:04',
+    ip: '192.168.10.108',
+    name: 'macbook',
+    source: 'dhcp',
+    on: 'eth1',
+    ips6: ['fd66:67c3:698b:0:8810:e311:c4ce:a9ab'],
+  },
+  { mac: 'dc:a6:32:5e:11:80', ip: '192.168.10.201', name: '', source: 'arp', on: 'radio0', ips6: [] },
+  // Solo IPv6: nessun lease DHCPv4, nessuna voce ARP. Senza la lettura dei
+  // vicini v6 questo dispositivo sparirebbe dall'elenco pur essendo in rete.
+  {
+    mac: '2e:9f:04:b1:77:31',
+    ip: '',
+    name: 'stampante',
+    source: 'neigh6',
+    on: 'eth1',
+    ips6: ['fd66:67c3:698b:0:2c9f:4ff:feb1:7731'],
+  },
   // Associato e senza indirizzo: i primi secondi di ogni collegamento, e lo
   // stato in cui si resta quando il DHCP non risponde.
-  { mac: '9a:11:4f:20:c3:7d', ip: '', name: '', source: 'wifi', on: 'radio0' },
+  { mac: '9a:11:4f:20:c3:7d', ip: '', name: '', source: 'wifi', on: 'radio0', ips6: [] },
 ];
 
 /** I MAC che il portale finto considera gia' autenticati. */
@@ -966,9 +1010,22 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           mac: sta.mac || `94:83:c4:d6:c7:4${r.index}`,
           up: hasIp,
           ipv4: hasIp ? `192.168.0.${octet}` : '',
-          netmask: hasIp ? '255.255.255.0' : '',
+          // Il numero di bit e non la maschera puntata: e' quello che ubus
+          // riporta davvero, e il simulatore serve a poco se semplifica proprio
+          // la forma che il confine deve normalizzare.
+          netmask: hasIp ? '24' : '',
           gateway: hasIp ? '192.168.0.1' : '',
           dns: hasIp ? ['192.168.0.1', '1.1.1.1'] : [],
+          // Solo la STA a 5 GHz (index 1) e' dual-stack: quella a 2.4 resta
+          // v4-only, cosi' le due righe si possono confrontare a colpo d'occhio.
+          ...(hasIp && r.index === 1
+            ? {
+                ipv6: ['2001:db8:c0ca:1::b1c/64', 'fd42:1:2::b1c/64'],
+                gateway6: 'fe80::1',
+                prefix6: '2001:db8:c0ca:1::/64',
+                dns6: ['2001:4860:4860::8888'],
+              }
+            : { ipv6: [], gateway6: '', prefix6: '', dns6: [] }),
         };
       }),
   }),
@@ -1044,6 +1101,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         ipv4: `192.168.0.${r.index === 0 ? 76 : 43}`,
         gateway: '192.168.0.1',
         dns: ['192.168.0.1', '1.1.1.1'],
+        // Dual-stack solo a 5 GHz, come in travel.uplinks: le due risposte
+        // descrivono lo stesso router e non devono raccontarlo in due modi.
+        ipv6: r.index === 1 ? ['2001:db8:c0ca:1::b1c/64', 'fd42:1:2::b1c/64'] : [],
+        gateway6: r.index === 1 ? 'fe80::1' : '',
+        prefix6: r.index === 1 ? '2001:db8:c0ca:1::/64' : '',
+        dns6: r.index === 1 ? ['2001:4860:4860::8888'] : [],
         mac: `94:83:c4:d6:c7:4${r.index}`,
         metric: r.index === 0 ? 20 : 10,
         rx_rate: jitter(240000, 180000),
@@ -1073,9 +1136,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       channel: 0,
       signal: 0,
       bitrate: 0,
+      // La WAN via cavo resta v4-only anche quando un cavo c'e': e' il caso
+      // dell'albergo, e serve a vedere che una riga senza IPv6 non cambia
+      // aspetto rispetto a prima.
       ipv4: '',
       gateway: '',
       dns: [],
+      ipv6: [],
+      gateway6: '',
+      prefix6: '',
+      dns6: [],
       mac: '94:83:c4:d6:c7:4f',
       metric: 30,
       rx_rate: 0,
@@ -1105,9 +1175,17 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       channel: 0,
       signal: 0,
       bitrate: 0,
-      ipv4: '192.168.42.129',
-      gateway: '192.168.42.129',
-      dns: ['192.168.42.129'],
+      // Tethering v6-only: e' il caso 464XLAT, comune sulle reti mobili, ed e'
+      // l'unico modo di vedere davvero il passaggio no-address -> addressed.
+      // Senza una riga cosi' nel simulatore, la regola "basta una delle due
+      // famiglie" resterebbe una riga di codice che nessuno guarda.
+      ipv4: '',
+      gateway: '',
+      dns: [],
+      ipv6: ['2a00:1450:4001:80f::200e/64'],
+      gateway6: 'fe80::dead:beef',
+      prefix6: '2a00:1450:4001:80f::/60',
+      dns6: ['2606:4700:4700::1111'],
       mac: '9a:2c:11:04:8e:21',
       metric: 40,
       rx_rate: jitter(90000, 60000),
@@ -1208,6 +1286,9 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         advertise_lan: vpnState.advertiseLan,
         advertise_exit: vpnState.advertiseExit,
         lan_cidr: `${lanState.addresses[0].split('/')[0].replace(/\.\d+$/, '.0')}/24`,
+        // L'ULA e non la GUA, come sul router: e' la sola sottorete v6 che si
+        // annuncia, perche' il prefisso delegato cambia a ogni albergo.
+        lan_cidr6: lanState.ula.replace(/\/\d+$/, '/60'),
       },
       policy: mockPolicy(),
       killswitch: {
@@ -1688,10 +1769,18 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     addresses: [...lanState.addresses],
     netmask: lanState.netmask,
     dhcp: { start: lanState.start, limit: lanState.limit, leasetime: '12h', ignore: false },
+    addresses6: [...lanState.addresses6],
+    ula: lanState.ula,
     dns_client: [...lanState.dnsClient],
+    dns_client6: [...lanState.dnsClient6],
     dns_upstream: [...lanState.dnsUpstream],
     dnsmasq_section: 'cfg01411c',
     dhcp_options: [...lanState.dhcpOptions],
+    ra: lanState.ra,
+    dhcpv6: lanState.dhcpv6,
+    ra_flags: [...lanState.raFlags],
+    ra_slaac: lanState.raSlaac,
+    ra_default: lanState.raDefault,
   }),
 
   // Multi-WAN: la 5 GHz online e preferita, la 2.4 online di riserva, la porta
@@ -2017,8 +2106,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     if (args.config === 'dhcp' && args.option) {
       const option = String(args.option);
       pending.push(() => {
-        if (option === 'dhcp_option') lanState.dhcpOptions = [];
+        if (option === 'dhcp_option') {
+          lanState.dhcpOptions = [];
+          lanState.dnsClient = [];
+        }
         if (option === 'server') lanState.dnsUpstream = [];
+        if (option === 'dns') lanState.dnsClient6 = [];
+        // "Spento" cancella i flag invece di scriverli vuoti, ed e' la stessa
+        // distinzione di tutte le altre liste qui sopra.
+        if (option === 'ra_flags') lanState.raFlags = [];
+        if (option === 'ra_slaac') lanState.raSlaac = '';
       });
       return {};
     }
@@ -2264,6 +2361,14 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           lanState.dnsClient = six ? six.slice(2).split(',') : [];
         }
         if (Array.isArray(raw.server)) lanState.dnsUpstream = raw.server.map(String);
+        // `dhcp.lan.dns` e' la lista dei DNS v6, quella che legge odhcpd: e'
+        // un'opzione diversa da `dhcp_option`, e qui restano diverse.
+        if (Array.isArray(raw.dns)) lanState.dnsClient6 = raw.dns.map(String);
+        if (typeof raw.ra === 'string') lanState.ra = raw.ra;
+        if (typeof raw.dhcpv6 === 'string') lanState.dhcpv6 = raw.dhcpv6;
+        if (typeof raw.ra_default === 'string') lanState.raDefault = raw.ra_default;
+        if (Array.isArray(raw.ra_flags)) lanState.raFlags = raw.ra_flags.map(String);
+        if (typeof raw.ra_slaac === 'string') lanState.raSlaac = raw.ra_slaac;
       });
       return {};
     }

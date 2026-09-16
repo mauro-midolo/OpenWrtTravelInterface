@@ -589,7 +589,11 @@ function Outcome({
       {state === 'addressed' && (
         <p class={portal?.state === 'online' ? 'alert alert--ok' : 'alert alert--info'}>
           Collegato a <strong>{uplink?.ssid}</strong>.<br />
-          IP {uplink?.ipv4} · gateway {uplink?.gateway || '—'}
+          {/* Su una rete v6-only non c'e' nessun IPv4 da mostrare: scrivere
+              "IP" seguito dal vuoto farebbe sembrare rotta una connessione che
+              funziona. Si mostra il primo indirizzo v6 al suo posto. */}
+          IP {uplink?.ipv4 || uplink?.ipv6[0] || '—'} · gateway{' '}
+          {uplink?.ipv4 ? uplink.gateway || '—' : uplink?.gateway6 || '—'}
           {typeof uplink?.signal === 'number' ? ` · ${uplink.signal} dBm` : ''}
           {portal?.state === 'online' && (
             <>

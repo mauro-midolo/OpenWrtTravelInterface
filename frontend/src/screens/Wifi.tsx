@@ -108,9 +108,39 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
       {state === 'addressed' || state === 'no-address' ? (
         <>
           <Row label="Rete" value={uplink.ssid ?? '—'} />
-          <Row label="Indirizzo" value={uplink.ipv4 || 'nessuno'} />
+          {/* "nessuno" accanto a un IPv6 che funziona direbbe una cosa falsa:
+              su un uplink v6-only la riga si qualifica e mostra un trattino. */}
+          <Row
+            label={uplink.ipv6.length > 0 ? 'Indirizzo IPv4' : 'Indirizzo'}
+            value={uplink.ipv4 || (uplink.ipv6.length > 0 ? '—' : 'nessuno')}
+          />
           <Row label="Gateway" value={uplink.gateway || '—'} />
           <Row label="DNS" value={uplink.dns?.length ? uplink.dns.join('  ') : '—'} />
+          {/* Le righe IPv6 compaiono solo dove IPv6 c'e': su una rete v4-only
+              quattro righe con un trattino direbbero che manca qualcosa. */}
+          {uplink.ipv6.length > 0 && (
+            <>
+              <Row label="Indirizzo IPv6" value={uplink.ipv6.join('  ')} />
+              {/* Un trattino accanto a un indirizzo valido fa sospettare un
+                  guasto che non c'e': senza rotta predefinita IPv6 non esce
+                  dalla rete locale, e la riga lo dice invece di lasciarlo
+                  dedurre.
+
+                  Quello che NON dice e' come vada IPv4: questa riga non lo sa.
+                  Un uplink puo' non avere affatto un indirizzo IPv4, e anche
+                  averlo non basta - dietro un captive portal non si esce lo
+                  stesso. A quella domanda risponde la verifica dell'uscita,
+                  che e' un'altra cosa e sta apposta altrove. */}
+              <Row
+                label="Gateway IPv6"
+                value={uplink.gateway6 || 'nessuno · IPv6 non esce dalla rete locale'}
+              />
+              {uplink.dns6.length > 0 && (
+                <Row label="DNS IPv6" value={uplink.dns6.join('  ')} />
+              )}
+              {uplink.prefix6 && <Row label="Prefisso delegato" value={uplink.prefix6} />}
+            </>
+          )}
           <Row label="MAC in uso" value={uplink.mac || '—'} />
           {typeof uplink.signal === 'number' && (
             <Row label="Segnale" value={`${uplink.signal} dBm`} />

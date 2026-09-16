@@ -115,10 +115,19 @@ done
 # stesso indirizzo e quello avesse un problema, tutte le WAN sembrerebbero
 # morte insieme. Si ruota su una rosa di resolver pubblici.
 pool="1.1.1.1 8.8.8.8 9.9.9.9 208.67.222.222 1.0.0.1 8.8.4.4 149.112.112.112 208.67.220.220"
+
+# Lo stesso in IPv6. Deve essere un pool a se': un ping IPv6 verso 1.1.1.1 non
+# esiste, e mwan3 dichiarerebbe la WAN v6 morta per sempre.
+pool6="2606:4700:4700::1111 2001:4860:4860::8888 2620:fe::fe 2a0d:2a00:1:: 2606:4700:4700::1001 2001:4860:4860::8844 2620:fe::9 2a0d:2a00:2::"
+
+# $1 = indice della WAN, $2 = il pool. Ne prende due sfalsate.
+#
+# Il pool e' un parametro e non una variabile globale: le due famiglie ruotano
+# con la stessa regola, e averne due copie sarebbe il modo in cui una delle due
+# smette di ruotare senza che nessuno se ne accorga.
 pick_track_ips() {
-	# $1 = indice della WAN; ne prende due sfalsate.
 	local i="$1" n=0 a="" b=""
-	for ip in $pool; do
+	for ip in $2; do
 		[ "$n" = "$((i * 2 % 8))" ] && a="$ip"
 		[ "$n" = "$(((i * 2 + 1) % 8))" ] && b="$ip"
 		n=$((n + 1))
@@ -133,7 +142,7 @@ for net in $wans; do
 		say "mwan3: interfaccia $net"
 		uci set "mwan3.$net=interface"
 		uci set "mwan3.$net.enabled=1"
-		for ip in $(pick_track_ips "$idx"); do
+		for ip in $(pick_track_ips "$idx" "$pool"); do
 			uci add_list "mwan3.$net.track_ip=$ip"
 		done
 		uci set "mwan3.$net.track_method=ping"
@@ -165,6 +174,51 @@ for net in $wans; do
 		uci set "mwan3.${net}_b.weight=1"
 		NEED_MWAN=1
 	fi
+
+	# --- La gemella IPv6 ---------------------------------------------------
+	#
+	# `mwan3.<sezione>` e' MONO-FAMIGLIA, e il nome della sezione deve essere
+	# quello di un'interfaccia netifd vera: e' il motivo per cui questo blocco
+	# non poteva esistere prima della Fase 4, che le sezioni `<net>6` le crea.
+	# Se manca, si salta: un profilo a meta' e' peggio di nessun profilo.
+	if [ -n "$(uci -q get "network.${net}6")" ]; then
+		if [ -z "$(uci -q get "mwan3.${net}6")" ]; then
+			say "mwan3: interfaccia ${net}6"
+			uci set "mwan3.${net}6=interface"
+			uci set "mwan3.${net}6.enabled=$(uci -q get "mwan3.$net.enabled" || echo 1)"
+			for ip in $(pick_track_ips "$idx" "$pool6"); do
+				uci add_list "mwan3.${net}6.track_ip=$ip"
+			done
+			uci set "mwan3.${net}6.track_method=ping"
+			uci set "mwan3.${net}6.reliability=1"
+			uci set "mwan3.${net}6.count=1"
+			uci set "mwan3.${net}6.timeout=2"
+			uci set "mwan3.${net}6.interval=5"
+			uci set "mwan3.${net}6.down=3"
+			uci set "mwan3.${net}6.up=3"
+			uci set "mwan3.${net}6.family=ipv6"
+			NEED_MWAN=1
+		fi
+
+		# Le metriche partono da quelle della sorella v4: se le due famiglie
+		# preferissero WAN diverse, meta' del web caricherebbe - un guasto molto
+		# piu' difficile da diagnosticare di uno pulito.
+		if [ -z "$(uci -q get "mwan3.${net}6_f")" ]; then
+			uci set "mwan3.${net}6_f=member"
+			uci set "mwan3.${net}6_f.interface=${net}6"
+			uci set "mwan3.${net}6_f.metric=$(uci -q get "mwan3.${net}_f.metric" || uci -q get "network.$net.metric")"
+			uci set "mwan3.${net}6_f.weight=1"
+			NEED_MWAN=1
+		fi
+		if [ -z "$(uci -q get "mwan3.${net}6_b")" ]; then
+			uci set "mwan3.${net}6_b=member"
+			uci set "mwan3.${net}6_b.interface=${net}6"
+			uci set "mwan3.${net}6_b.metric=1"
+			uci set "mwan3.${net}6_b.weight=$(uci -q get "mwan3.${net}_b.weight" || echo 1)"
+			NEED_MWAN=1
+		fi
+	fi
+
 	idx=$((idx + 1))
 done
 
@@ -226,6 +280,33 @@ for net in $wans; do
 		uci add_list "mwan3.p_$net.use_member=${net}_f"
 		NEED_MWAN=1
 	fi
+
+	# Le gemelle IPv6 delle politiche per WAN.
+	#
+	# Il `6` va in TESTA - `o6_<net>` e non `o_<net>6` - perche' e' l'unica
+	# forma che si puo' rileggere senza ambiguita': una porta ethernet chiamata
+	# `lan6` produce l'interfaccia `wan_lan6`, e `o_wan_lan6` non direbbe piu' se
+	# la WAN e' `wan_lan` in IPv6 o `wan_lan6` in IPv4.
+	#
+	# Il prefisso e' di tre caratteri invece di due, quindi il limite qui e' 12.
+	[ -n "$(uci -q get "network.${net}6")" ] || continue
+	if [ ${#net} -gt 12 ]; then
+		say "ATTENZIONE: $net e' troppo lungo per una politica mwan3 IPv6 (max"
+		say "12 caratteri): le regole IPv6 dedicate a questa WAN non funzioneranno"
+		continue
+	fi
+	if [ -z "$(uci -q get "mwan3.o6_$net")" ]; then
+		uci set "mwan3.o6_$net=policy"
+		uci set "mwan3.o6_$net.last_resort=unreachable"
+		uci add_list "mwan3.o6_$net.use_member=${net}6_f"
+		NEED_MWAN=1
+	fi
+	if [ -z "$(uci -q get "mwan3.p6_$net")" ]; then
+		uci set "mwan3.p6_$net=policy"
+		uci set "mwan3.p6_$net.last_resort=default"
+		uci add_list "mwan3.p6_$net.use_member=${net}6_f"
+		NEED_MWAN=1
+	fi
 done
 
 # Le due politiche esistono sempre entrambe; la regola predefinita punta a
@@ -246,12 +327,51 @@ for pol in travel_failover travel_balance; do
 	NEED_MWAN=1
 done
 
+# Le gemelle IPv6 delle due politiche globali.
+#
+# **`travel_failover6` NON si puo' usare**: fa 16 caratteri, e mwan3 impone 15
+# ai nomi delle politiche - lo stesso limite che ha gia' morso una volta con
+# `only_wwan_radio0`, e allo stesso modo: la politica non viene applicata e le
+# regole che la usano non fanno niente, senza un errore che lo dica. Da qui
+# `travel_fail6` e `travel_bal6`, che di caratteri ne fanno 12 e 11.
+for pol in travel_fail6 travel_bal6; do
+	if [ -z "$(uci -q get "mwan3.$pol")" ]; then
+		say "mwan3: politica $pol"
+		uci set "mwan3.$pol=policy"
+		uci set "mwan3.$pol.last_resort=unreachable"
+		NEED_MWAN=1
+	fi
+	uci -q delete "mwan3.$pol.use_member"
+	suffix=$([ "$pol" = "travel_fail6" ] && echo f || echo b)
+	for net in $wans; do
+		[ -n "$(uci -q get "network.${net}6")" ] || continue
+		uci add_list "mwan3.$pol.use_member=${net}6_$suffix"
+	done
+	NEED_MWAN=1
+done
+
 if [ -z "$(uci -q get mwan3.travel_default)" ]; then
 	say "mwan3: regola predefinita in failover"
 	uci set "mwan3.travel_default=rule"
 	uci set "mwan3.travel_default.dest_ip=0.0.0.0/0"
 	uci set "mwan3.travel_default.family=ipv4"
 	uci set "mwan3.travel_default.use_policy=travel_failover"
+	NEED_MWAN=1
+fi
+
+# La regola predefinita IPv6: una regola VERA con `dest_ip='::/0'`, non
+# l'assenza di una regola.
+#
+# Senza, il traffico v6 non entra in nessuna politica mwan3 e segue le rotte
+# normali: continuerebbe a funzionare, ma uscirebbe da una WAN scelta dal
+# kernel invece che da quella che l'utente ha messo per prima - cioe' v4 e v6
+# uscirebbero da due WAN diverse senza che niente lo dica.
+if [ -z "$(uci -q get mwan3.travel_default6)" ]; then
+	say "mwan3: regola predefinita IPv6 in failover"
+	uci set "mwan3.travel_default6=rule"
+	uci set "mwan3.travel_default6.dest_ip=::/0"
+	uci set "mwan3.travel_default6.family=ipv6"
+	uci set "mwan3.travel_default6.use_policy=travel_fail6"
 	NEED_MWAN=1
 fi
 

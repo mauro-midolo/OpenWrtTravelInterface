@@ -33,13 +33,20 @@ enable_forwarding() {
 	# ogni avvio e a ogni cambio di impostazioni, e una scrittura in flash per
 	# rimettere lo stesso contenuto e' una scrittura buttata.
 	mkdir -p /etc/sysctl.d 2>/dev/null
-	grep -q '^net.ipv4.ip_forward=1$' "$FORWARD_CONF" 2>/dev/null || cat > "$FORWARD_CONF" <<'EOF'
-# Inoltro IPv4, richiesto da exit node e subnet router della VPN.
+	grep -q '^net.ipv6.conf.all.forwarding=1$' "$FORWARD_CONF" 2>/dev/null || cat > "$FORWARD_CONF" <<'EOF'
+# Inoltro IP, richiesto da exit node e subnet router della VPN.
 #
-# Su questo dispositivo era spento: netifd abilita l'inoltro interfaccia per
-# interfaccia, e le interfacce che nascono fuori da lui - tailscale0, e in
+# IPv4 su questo dispositivo era spento: netifd abilita l'inoltro interfaccia
+# per interfaccia, e le interfacce che nascono fuori da lui - tailscale0, e in
 # seguito wireguard - restano fuori. A decidere cosa passa resta il firewall.
+#
+# IPv6 lo accende gia' OpenWrt, in /etc/sysctl.d/10-default.conf: la riga qui
+# sotto NON e' quella che lo attiva, e ribadisce un valore che c'e' gia'. Si
+# scrive lo stesso, e per la stessa ragione della riga IPv4: le interfacce nate
+# fuori da netifd non ereditano niente, e questo file e' il posto che se ne
+# ricorda al riavvio.
 net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
 EOF
 
 	# I due nomi sono la stessa manopola, ma scriverli entrambi non costa
@@ -47,6 +54,15 @@ EOF
 	# che si propaga alle interfacce gia' esistenti - cioe' a `tailscale0`.
 	printf '1\n' > /proc/sys/net/ipv4/ip_forward 2>/dev/null
 	printf '1\n' > /proc/sys/net/ipv4/conf/all/forwarding 2>/dev/null
+
+	# L'inoltro IPv6 NON spegne l'autoconfigurazione delle WAN su questo
+	# sistema, e vale la pena scriverlo perche' la regola del kernel dice il
+	# contrario: `accept_ra=1` significa "accetta gli RA solo se non inoltro".
+	# Su OpenWrt le WAN v6 le gestisce `odhcp6c`, che gli RA se li legge da se'
+	# su socket raw e di `accept_ra` non ha bisogno - infatti sul dispositivo
+	# vale 0 su tutte le interfacce, con l'inoltro a 1 e IPv6 che funziona.
+	# Nessun controllo e nessun avviso, quindi: allarmerebbe su ogni router sano.
+	printf '1\n' > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null
 
 	after=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
 
@@ -142,14 +158,38 @@ ensure_ts_rule() {
 		say "Serve 'ip' completo (pacchetto ip-full): senza, le risposte ai nodi del tailnet"
 		say "escono dalla WAN e l'exit node non funziona."
 	fi
+
+	# La stessa regola in IPv6, e serve davvero: tailscaled da' al router un
+	# indirizzo del tailnet anche in v6 (`fd7a:115c:a1e0::/48`), quindi un peer
+	# puo' contattarlo di la'. Le regole v6 di mwan3 stanno a preferenze piu'
+	# basse di quella che tailscaled si scrive da solo, quindi senza questa le
+	# risposte marcate da mwan3 uscirebbero dalla WAN - lo stesso guasto
+	# documentato per IPv4 qui sopra, e altrettanto invisibile.
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$TS_RULE_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+	ip -6 rule add pref "$TS_RULE_PREF" not fwmark "$TS_BYPASS_MARK" lookup "$TS_TABLE" 2>/dev/null ||
+		say "ATTENZIONE: non sono riuscito a scrivere la regola IPv6 verso il tunnel"
 }
 
 # L'inoltro sull'interfaccia del tunnel, scritto esplicitamente se esiste.
 # Dovrebbe ereditare dal valore globale, ma `tailscale0` la crea tailscaled e
 # puo' comparire dopo: scriverlo qui toglie un "dovrebbe".
+#
+# Vale per entrambe le famiglie: `net.ipv6.conf.default.forwarding` si applica
+# alle interfacce create DOPO che il sysctl e' stato letto, e `tailscale0` nasce
+# quando le vuole tailscaled. Senza questa riga un client v6 uscirebbe dal
+# tunnel e non rientrerebbe, con il sintomo peggiore: "alcune cose funzionano".
 iface_forwarding() {
-	[ -e /proc/sys/net/ipv4/conf/tailscale0/forwarding ] || return 0
-	printf '1\n' > /proc/sys/net/ipv4/conf/tailscale0/forwarding 2>/dev/null
+	if [ -e /proc/sys/net/ipv4/conf/tailscale0/forwarding ]; then
+		printf '1\n' > /proc/sys/net/ipv4/conf/tailscale0/forwarding 2>/dev/null
+	fi
+	if [ -e /proc/sys/net/ipv6/conf/tailscale0/forwarding ]; then
+		printf '1\n' > /proc/sys/net/ipv6/conf/tailscale0/forwarding 2>/dev/null
+	fi
+	return 0
 }
 
 # La rotta verso il tailnet, nella tabella di Tailscale.
@@ -173,6 +213,20 @@ ensure_ts_route() {
 		say "rotta verso il tailnet (100.64.0.0/10) in tabella $TS_TABLE a posto"
 	else
 		say "ATTENZIONE: non sono riuscito a scrivere la rotta verso il tailnet in tabella $TS_TABLE"
+	fi
+
+	# E la gemella IPv6, sul range v6 del tailnet.
+	#
+	# Verificato sul dispositivo, e mancava esattamente come mancava quella v4:
+	# `tailscale0` aveva il suo `fd7a:115c:a1e0::.../128`, ma di rotta verso il
+	# /48 non ce n'era nessuna - ne' in tabella 52 ne' in main, e
+	# `ip -6 route get fd7a:115c:a1e0::1` rispondeva "Network unreachable".
+	# Senza, il router non raggiunge nessun peer in IPv6 e la regola firewall
+	# `travel_vpn_wg6` non ha niente da lasciar passare.
+	if ip -6 route replace fd7a:115c:a1e0::/48 dev tailscale0 table "$TS_TABLE" 2>/dev/null; then
+		say "rotta IPv6 verso il tailnet (fd7a:115c:a1e0::/48) in tabella $TS_TABLE a posto"
+	else
+		say "ATTENZIONE: non sono riuscito a scrivere la rotta IPv6 verso il tailnet"
 	fi
 }
 
@@ -200,6 +254,27 @@ lan_probe_addr() {
 	printf '%s.2' "${addr%.*}"
 }
 
+# La stessa cosa in IPv6, per la prova di sicurezza qui sotto.
+#
+# Si prende il prefisso assegnato alla LAN e ci si mette dentro `::2`: come per
+# l'IPv4, non deve esistere davvero - interessa da quale device USCIREBBE.
+lan_probe_addr6() {
+	local prefix
+
+	prefix=$(ubus call network.interface.lan status 2>/dev/null |
+		jsonfilter -e '@["ipv6-prefix-assignment"][0].address' 2>/dev/null)
+	[ -n "$prefix" ] || return 1
+
+	# Solo la forma che finisce con "::": comporre un indirizzo dentro un
+	# prefisso scritto in un altro modo vorrebbe dire fare aritmetica IPv6 in
+	# shell, ed e' meglio non provare la sicurezza che provarla su un indirizzo
+	# inventato male.
+	case "$prefix" in
+		*::) printf '%s2' "$prefix" ;;
+		*) return 1 ;;
+	esac
+}
+
 wg_routing_down() {
 	local n=0
 
@@ -212,6 +287,40 @@ wg_routing_down() {
 		ip rule del pref "$WG_LOCAL_PREF" 2>/dev/null || break
 		n=$((n + 1))
 	done
+
+	# Anche le regole IPv6: sono due famiglie e due elenchi separati, e una
+	# regola v6 lasciata in piedi dopo aver spento il tunnel manderebbe il
+	# traffico v6 in una tabella vuota - cioe' in un buco nero che il traffico
+	# v4, funzionante, nasconde.
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$WG_RULE_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+	n=0
+	while [ "$n" -lt 4 ]; do
+		ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null || break
+		n=$((n + 1))
+	done
+}
+
+# Vero se il profilo acceso instrada davvero qualcosa di IPv6.
+#
+# E' la condizione che decide se scrivere le regole v6, e non e' prudenza: una
+# rotta predefinita v6 dentro un tunnel che IPv6 non lo porta fa SPARIRE IPv6.
+# I client hanno un indirizzo, il router ha una rotta, e i pacchetti entrano in
+# un tunnel che non li fa uscire - mentre IPv4 continua a funzionare, quindi il
+# guasto sembra "certi siti non vanno".
+wg_has_v6_routes() {
+	local entry
+
+	for entry in $(uci -q get "network.${1}_peer.allowed_ips" 2>/dev/null); do
+		case "$entry" in
+			*:*) return 0 ;;
+		esac
+	done
+
+	return 1
 }
 
 # La configurazione WireGuard accesa, o niente.
@@ -295,6 +404,48 @@ ensure_wg_routing() {
 				;;
 		esac
 	}
+
+	# --- Le stesse due regole in IPv6, ma SOLO se il tunnel porta IPv6 -------
+	#
+	# La condizione e' la parte importante. Una `default` v6 in un tunnel senza
+	# AllowedIPs v6 non e' un di piu' inutile: fa sparire IPv6 del tutto, e lo
+	# fa in silenzio, perche' IPv4 continua a funzionare e il guasto sembra
+	# "certi siti non vanno".
+	if wg_has_v6_routes "$iface"; then
+		ip -6 route replace default dev "$iface" table "$WG_TABLE" 2>/dev/null
+
+		# Prima la salvaguardia, poi il dirottamento, esattamente come sopra.
+		if ! ip -6 rule add pref "$WG_LOCAL_PREF" lookup main suppress_prefixlength 0 2>/dev/null; then
+			say "ATTENZIONE: ip -6 non supporta suppress_prefixlength, non instrado IPv6 nel tunnel"
+			ip -6 route flush table "$WG_TABLE" 2>/dev/null
+		elif ! ip -6 rule add pref "$WG_RULE_PREF" not fwmark "$WG_BYPASS_MARK" lookup "$WG_TABLE" 2>/dev/null; then
+			say "ATTENZIONE: non sono riuscito a scrivere la regola IPv6 di WireGuard"
+			ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null
+			ip -6 route flush table "$WG_TABLE" 2>/dev/null
+		else
+			# La prova di sicurezza vale ANCORA DI PIU' in IPv6, ed e' il
+			# motivo per cui non si e' ripetuto il blocco a occhi chiusi: lo
+			# stesso errore in v6 lascia SSH-su-v4 funzionante, quindi il router
+			# sembra a posto mentre ogni browser che preferisce IPv6 - cioe'
+			# tutti - si pianta. In v4 ci si accorgeva subito perche' cadeva la
+			# sessione; qui no.
+			probe=$(lan_probe_addr6) && {
+				out=$(ip -6 route get "$probe" 2>/dev/null)
+				case "$out" in
+					*"$iface"*)
+						say "ATTENZIONE: l'instradamento IPv6 del tunnel cattura anche la LAN: lo tolgo"
+						ip -6 rule del pref "$WG_RULE_PREF" 2>/dev/null
+						ip -6 rule del pref "$WG_LOCAL_PREF" 2>/dev/null
+						ip -6 route flush table "$WG_TABLE" 2>/dev/null
+						;;
+				esac
+			}
+		fi
+	else
+		# Il tunnel non porta IPv6: la tabella v6 si svuota, cosi' un profilo
+		# cambiato da dual-stack a solo-v4 non si lascia dietro una rotta.
+		ip -6 route flush table "$WG_TABLE" 2>/dev/null
+	fi
 
 	say "instradamento WireGuard (pref $WG_RULE_PREF, tabella $WG_TABLE) a posto"
 }
@@ -393,8 +544,10 @@ ensure_ts_rule
 ensure_ts_route
 ensure_wg_routing
 
-# IPv6 non si tocca: e' disattivato per scelta sulle WAN (vedi architettura), e
-# accenderne l'inoltro attiverebbe un percorso che nessuno sta sorvegliando.
+# IPv6 passa dagli stessi meccanismi di IPv4, sezione per sezione: masquerade
+# sulla zona, regola d'uscita, inoltro sull'interfaccia. Non c'e' un
+# interruttore separato, e non deve essercene uno: una VPN che copre una sola
+# famiglia e' una VPN che perde traffico senza dirlo.
 
 # --- 3. La zona firewall del tunnel -------------------------------------------
 #
@@ -422,6 +575,19 @@ if [ -z "$(uci -q get firewall.travel_vpn)" ]; then
 	NEED_FW=1
 else
 	say "zona firewall 'vpn' gia' presente"
+fi
+
+# `masq` e' SOLO IPv4, e su una zona dual-stack questo non si vede: la sezione
+# c'e', sembra a posto, e il traffico v6 esce lo stesso - con l'indirizzo ULA
+# del client, che nel tailnet non e' instradabile all'indietro. Il sintomo e'
+# "alcune cose funzionano", che e' il modo peggiore di rompersi.
+#
+# Fuori dal blocco di creazione perche' deve arrivare anche sui router dove la
+# zona esiste da prima, ed e' idempotente: si scrive solo se manca.
+if [ "$(uci -q get firewall.travel_vpn.masq6)" != "1" ]; then
+	say "abilito il masquerade IPv6 sulla zona 'vpn'"
+	uci set firewall.travel_vpn.masq6='1'
+	NEED_FW=1
 fi
 
 if [ -z "$(uci -q get firewall.travel_vpn_fwd)" ]; then
@@ -493,10 +659,54 @@ if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
 	uci set firewall.travel_vpn_wg.dest='vpn'
 	uci set firewall.travel_vpn_wg.src_ip='100.64.0.0/10'
 	uci set firewall.travel_vpn_wg.family='ipv4'
+	uci set firewall.travel_vpn_wg.proto='all'
 	uci set firewall.travel_vpn_wg.target='ACCEPT'
 	uci set firewall.travel_vpn_wg.enabled="$TS_ADVERTISE"
 	NEED_FW=1
 fi
+
+# La gemella IPv6, con il range v6 del tailnet.
+#
+# Due sezioni esplicite e non una regola senza `family`: la disciplina di questo
+# file e' "una sezione per cosa, sempre presente, commutata da `enabled`", e
+# `src_ip` forzerebbe comunque la famiglia - una regola sola non puo' avere due
+# sorgenti di famiglie diverse. Vengono accese e spente insieme, dalla stessa
+# funzione, perche' sono la stessa decisione.
+if [ -z "$(uci -q get firewall.travel_vpn_wg6)" ]; then
+	TS_ADVERTISE=$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)
+	say "preparo l'uscita IPv6 del tailnet dentro WireGuard ($([ "$TS_ADVERTISE" = "1" ] && echo accesa || echo spenta))"
+	uci set firewall.travel_vpn_wg6=rule
+	uci set firewall.travel_vpn_wg6.name='travel-exit-via-wg6'
+	uci set firewall.travel_vpn_wg6.src='vpn'
+	uci set firewall.travel_vpn_wg6.dest='vpn'
+	uci set firewall.travel_vpn_wg6.src_ip='fd7a:115c:a1e0::/48'
+	uci set firewall.travel_vpn_wg6.family='ipv6'
+	uci set firewall.travel_vpn_wg6.proto='all'
+	uci set firewall.travel_vpn_wg6.target='ACCEPT'
+	uci set firewall.travel_vpn_wg6.enabled="$TS_ADVERTISE"
+	NEED_FW=1
+fi
+
+# `proto all` non e' ridondante: senza `proto`, fw4 NON accetta tutto, accetta
+# `tcp udp`. Verificato su questo dispositivo - la regola rende come due righe
+# `meta l4proto tcp` e `meta l4proto udp` - e quello che resta fuori e' ICMP.
+#
+# In IPv6 e' un guasto, non un fastidio. ICMPv6 porta il "Packet Too Big", e in
+# IPv6 i router NON frammentano: la scoperta della MTU del percorso e' l'unico
+# meccanismo che c'e', e senza quei messaggi i pacchetti grandi spariscono in
+# silenzio. E' lo stesso guasto contro cui la zona mette `mtu_fix`, che pero'
+# limita la MSS del solo TCP: UDP resterebbe scoperto.
+#
+# Fuori dai blocchi di creazione, come `masq6`, per arrivare anche sulle regole
+# gia' scritte senza `proto`. Non toglie niente alla protezione: a decidere chi
+# entra restano `src_ip` e la coppia di zone, che non cambiano.
+for _s in travel_vpn_wg travel_vpn_wg6; do
+	[ -n "$(uci -q get "firewall.$_s")" ] || continue
+	[ "$(uci -q get "firewall.$_s.proto")" = "all" ] && continue
+	say "$_s: accetto tutti i protocolli (senza, ICMP resterebbe fuori)"
+	uci set "firewall.$_s.proto=all"
+	NEED_FW=1
+done
 
 # --- 4. La regola del kill switch ---------------------------------------------
 #

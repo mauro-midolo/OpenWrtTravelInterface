@@ -8,6 +8,7 @@ import {
   wgAlive,
   wgCarrying,
   wgDelete,
+  wgEndpointProblem,
   wgImport,
   wgProfiles,
   wgRoutingSteps,
@@ -17,6 +18,7 @@ import {
   wgToggleProfile,
 } from '../lib/vpn';
 import type { WgFields, WgProfile, WgState } from '../lib/vpn';
+import { hostPortJoin } from '../lib/ip';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -30,7 +32,13 @@ function Row({ label, value }: { label: string; value: string }) {
 /** Endpoint e indirizzi in una riga: e' cio' che distingue due profili a colpo d'occhio. */
 function summary(profile: WgProfile): string {
   const { config } = profile;
-  const endpoint = config.endpoint ? `${config.endpoint}:${config.port || '51820'}` : 'senza endpoint';
+  // `hostPortJoin` e non una concatenazione: un endpoint IPv6 arriva gia' fra
+  // parentesi dal router, e unirlo alla porta a mano ne aggiungerebbe un
+  // secondo paio - oppure, su un indirizzo senza, produrrebbe un indirizzo
+  // diverso e valido. La funzione e' idempotente sulle parentesi apposta.
+  const endpoint = config.endpoint
+    ? hostPortJoin(config.endpoint, config.port || '51820')
+    : 'senza endpoint';
   return config.addresses ? `${endpoint} · ${config.addresses.trim()}` : endpoint;
 }
 
@@ -57,6 +65,11 @@ function FieldsForm({
     label: string,
     placeholder: string,
     hint?: string,
+    // Cosa non va nel valore scritto, stringa vuota se va bene. Prende il posto
+    // del suggerimento invece di aggiungersi: due righe sotto un campo, una che
+    // spiega e una che corregge, si leggono come una sola e si perde quella che
+    // conta.
+    problem?: string,
   ) => (
     <label class="field">
       <span>{label}</span>
@@ -69,7 +82,11 @@ function FieldsForm({
         spellcheck={false}
         onInput={(e) => onChange({ [key]: (e.target as HTMLInputElement).value } as Partial<WgFields>)}
       />
-      {hint && <span class="muted">{hint}</span>}
+      {problem ? (
+        <span class="alert alert--warn">{problem}</span>
+      ) : (
+        hint && <span class="muted">{hint}</span>
+      )}
     </label>
   );
 
@@ -83,7 +100,13 @@ function FieldsForm({
       )}
       {text('addresses', 'Indirizzi dell’interfaccia', '10.66.0.2/32', 'Il campo Address del file .conf. Più indirizzi separati da virgola.')}
       {text('peer_key', 'Chiave pubblica del peer', 'PublicKey del [Peer]')}
-      {text('endpoint', 'Endpoint', 'vpn.example.com')}
+      {text(
+        'endpoint',
+        'Endpoint',
+        'vpn.example.com',
+        'Un nome, un IPv4, o un IPv6 — anche senza parentesi: le mette il router.',
+        wgEndpointProblem(fields.endpoint),
+      )}
       {text('port', 'Porta', '51820')}
       {text('allowed_ips', 'Instradato nel tunnel', '0.0.0.0/0', 'AllowedIPs. Con 0.0.0.0/0 passa tutto di là.')}
       {text('dns', 'DNS', 'vuoto per non cambiarli')}

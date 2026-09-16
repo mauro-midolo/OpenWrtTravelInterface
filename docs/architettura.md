@@ -162,7 +162,7 @@ interrompere l'accesso:
 | Modifica di SSID, cifratura e password degli AP | 240 s | `wirelessCameUp` |
 | Clonazione MAC dal pannello portale | 150 s | `wirelessCameUp` |
 | MAC di una porta ethernet | 150 s | Rilettura del MAC in uso sulla porta |
-| LAN | 300 s | Nuovo indirizzo fra quelli attivi |
+| LAN | 300 s | Nuovo indirizzo fra quelli attivi **e** modalità di annuncio IPv6 applicata |
 | Ruolo di una porta ethernet | 90 s | Rilettura del ruolo richiesto |
 
 `wirelessCameUp` rifiuta `retry_setup_failed` e richiede radio attive con un
@@ -527,16 +527,25 @@ automatiche non usano apply con conferma.
 ## WAN, multi-WAN e tethering USB
 
 Gli uplink vengono individuati dalla zona firewall `wan`, escludendo
-interfacce IPv6, interfacce disabilitate e device usati come porte LAN.
+interfacce disabilitate e device usati come porte LAN. Le interfacce logiche
+IPv6 restano escluse **dall'elenco**, ma non dalla lettura: i loro indirizzi si
+uniscono alla riga della sorella IPv4 invece di aprire una voce nuova, perché
+dual-stack significa una porta sola con due famiglie. L'appaiamento si fa sul
+`l3_device` e non sul nome, che non è indovinabile.
+
 Il backend ricostruisce IP, gateway, DNS, metrica e stato runtime attraverso
 netifd, iwinfo e sysfs, distinguendo assenza di associazione WiFi, assenza di
-carrier ethernet e mancanza di indirizzo.
+carrier ethernet e mancanza di indirizzo. Un uplink conta come indirizzato
+quando ha un indirizzo di **una qualunque** delle due famiglie: una rete mobile
+v6-only (464XLAT) funziona, e segnalarla come priva di indirizzo manderebbe a
+cercare un guasto che non esiste.
 
 Il setup inizializza una volta `eth0` come WAN e `eth1` nel bridge `br-lan`,
 crea una DHCP `wwan_<radio>` per radio e `wan_usb`, inizialmente disabilitata.
-Le nuove WAN gestite nascono con `ipv6=0` e senza hostname DHCP.
-Il percorso multi-WAN del progetto è IPv4; non esiste una gestione completa
-IPv6 o un suo interruttore per WAN nella UI.
+Le nuove WAN nascono senza hostname DHCP e **senza l'opzione `ipv6`**: su
+OpenWrt 25.12 quell'opzione non viene letta da nessuno per una interfaccia
+`proto dhcp`, e IPv6 su una WAN si ottiene solo con una `config interface`
+dedicata. Vedi la sezione IPv6 più avanti.
 
 ### Configurazione mwan3
 
@@ -598,9 +607,22 @@ Il supporto dipende dall'attributo `disable` del kernel.
 
 La UI configura la LAN come IPv4 `/24`, valida indirizzo e pool DHCP e
 confronta le sottoreti degli uplink con quella locale. In caso di sovrapposizione
-può proporre un altro indirizzo. I DNS annunciati ai client sono scritti
-nell'opzione DHCP 6, conservando le altre opzioni; i DNS del router nella lista
-`server` della sezione dnsmasq. Liste vuote vengono rimosse tramite UCI.
+può proporre un altro indirizzo. L'indirizzo IPv4 resta un `/24` fisso: il
+controllo dei conflitti è IPv4-only di proposito, perché la collisione è un
+problema degli indirizzi privati IPv4 e il prefisso v6 della LAN non lo sceglie
+nessuno — arriva dalla delega, quindi non ci sarebbe niente da proporre.
+
+Gli indirizzi IPv6 della LAN e il prefisso ULA si **mostrano** e non si
+configurano, e la schermata offre la scelta della modalità di annuncio (RA e
+DHCPv6). Vedi la sezione IPv6.
+
+I DNS annunciati ai client sono scritti nell'opzione DHCP 6 per IPv4 e nella
+lista `dhcp.lan.dns` per IPv6 — **sono due meccanismi diversi**, e la distinzione
+è spiegata nella sezione IPv6. I DNS del router vanno nella lista `server` della
+sezione dnsmasq, che accetta entrambe le famiglie in un elenco solo. Liste vuote
+vengono rimosse tramite UCI. Un elenco scelto a mano più lungo di due voci non
+entra nei due campi della schermata: viene mostrato e **non riscritto**, invece
+di essere troncato in silenzio.
 
 Le porte fisiche sono enumerate dal backend; il ruolo è dedotto dalla
 configurazione reale. `stageEthPort` aggiunge o rimuove la porta da `br-lan`,
@@ -609,12 +631,245 @@ Nel ritorno a LAN disabilita la WAN senza cancellarla. Il pool DHCP resta
 quello del bridge. Il backend restituisce i nomi effettivi delle sezioni
 anonime per le scritture ubus.
 
-`travel.clients` combina lease DHCP, vicini IPv4, associazioni degli AP e
-FDB del bridge. Usa `bridge fdb` oppure `brctl showmacs`; se queste informazioni
-mancano lascia il punto d'ingresso sconosciuto. Mostra anche client associati
-senza IP e usa i nomi delle prenotazioni DHCP dove disponibili.
+`travel.clients` combina lease DHCP, vicini IPv4 **e IPv6**, associazioni degli
+AP e FDB del bridge. Usa `bridge fdb` oppure `brctl showmacs`; se queste
+informazioni mancano lascia il punto d'ingresso sconosciuto. Mostra anche client
+associati senza IP e usa i nomi delle prenotazioni DHCP dove disponibili.
+
+L'elenco ha **una riga per dispositivo, non per indirizzo**: con le estensioni
+di privacy un telefono ha tre o quattro indirizzi IPv6 insieme, e triplicare la
+riga renderebbe più difficile — non più facile — l'unica domanda a cui l'elenco
+serve, cioè chi c'è. Gli indirizzi oltre il primo si contano (`+2 IPv6`). I
+link-local `fe80::` non si mostrano — ce l'hanno tutti e non informano — ma
+servono a stabilire la **presenza** di un dispositivo che non ha un IPv6 globale
+e nemmeno un lease IPv4.
+
+Il lease file di odhcpd **non viene analizzato**, ed è una scelta con un motivo
+preciso: la sua seconda colonna è un DUID, e un DUID non è un MAC. Quelli di
+tipo `0001` (DUID-LLT) il MAC ce l'hanno in coda, quindi l'unione *sembra*
+funzionare sul primo dispositivo che si guarda; quelli di tipo `0004`
+(DUID-UUID) — il tipo che questo stesso router usa per sé — non ne contengono
+nessuno. Un'estrazione scritta su quella base funzionerebbe in laboratorio e
+fallirebbe altrove. Gli indirizzi v6 arrivano da `ip -6 neigh`, che dà la stessa
+chiave MAC su cui l'elenco è già costruito.
 L'elenco alimenta LAN e il selettore del MAC da clonare; non misura il traffico
 per dispositivo.
+
+## IPv6
+
+IPv6 è attivo su tutto il percorso: WAN, LAN, firewall, VPN, WireGuard e
+multi-WAN. Non c'è un interruttore globale, e non deve essercene uno: una
+funzione che copre una famiglia sola perde traffico senza dirlo.
+
+### Le WAN: una `config interface` per famiglia
+
+**`option ipv6` su una interfaccia `proto dhcp` non fa niente.** Verificato su
+OpenWrt 25.12: `/lib/netifd/proto/dhcp.sh` non nomina quell'opzione, e nessuno
+script in `/lib/netifd/proto/` crea alias `<net>_6` al volo. È un residuo che
+altre versioni leggevano, e scriverlo o toglierlo non cambia nulla.
+
+IPv6 su una WAN si ottiene in un modo solo: una **`config interface '<net>6'`
+esplicita** con `proto dhcpv6`. È il motivo per cui l'immagine di fabbrica porta
+già un `wan6` accanto a `wan`, e `setup.sh` fa lo stesso per le altre WAN:
+
+    config interface 'wwan_radio06'
+        option proto 'dhcpv6'
+        option device '@wwan_radio0'
+        option metric '30'
+
+`device '@<net>'` è un riferimento simbolico e non il nome di un device: per una
+STA WiFi il device in uci non esiste — glielo assegna la sezione wireless — e
+cambia a ogni riassociazione. La **metrica è copiata dalla sorella IPv4**: se le
+due famiglie preferissero WAN diverse, metà del web caricherebbe, che è molto
+più difficile da diagnosticare di un guasto pulito.
+
+Per spegnere IPv6 su una WAN si mette `disabled 1` sulla sua `<net>6`: quella
+sopravvive a un nuovo `setup.sh`, mentre cancellare la sezione la farebbe solo
+ricreare.
+
+#### «Indirizzo IPv6 sì, gateway IPv6 no»
+
+È il caso che sembra un guasto senza esserlo, e va saputo riconoscere. Un router
+a monte può annunciare un prefisso **ULA** (`fd00::/8`) e **nessuna rotta
+predefinita**, cioè un Router Advertisement con *router lifetime* a zero. Il
+nostro router prende un indirizzo valido, `ipv6-address` si popola, e il gateway
+resta vuoto: non è un errore di lettura, è il router a monte che dichiara di non
+essere un gateway IPv6.
+
+Succede quando quel router IPv6 dal provider non ce l'ha: distribuisce un ULA
+perché i dispositivi della rete locale si parlino fra loro, e non si annuncia
+come uscita. Osservato su una FRITZ!Box, dove la tabella di instradamento
+conteneva solo prefissi `fd…`, nessuna `default`, e `ping6` verso Internet
+rispondeva *Network unreachable*.
+
+`ipv6Reach()` distingue quindi tre casi — nessun IPv6, IPv6 solo locale, IPv6 che
+esce — e a deciderlo è **il gateway, non la forma dell'indirizzo**: un ULA
+instradato esce, una GUA senza rotta predefinita no. Le schede lo scrivono al
+posto di un trattino, che invita alla conclusione sbagliata.
+
+Quello che quelle righe **non** dicono è come vada IPv4, e l'omissione è
+voluta: un uplink può non avere affatto un indirizzo IPv4, e anche averlo non
+basta — dietro un captive portal non si esce lo stesso. «Si esce davvero» è una
+domanda separata, ed è quella a cui risponde la verifica dell'uscita.
+
+Una migrazione una tantum, sotto il marcatore `travel.globals.ipv6_init`,
+**cancella** i vecchi `ipv6 '0'` dalle WAN esistenti. Cancella e non scrive `1`:
+si torna al default della distribuzione invece di imporre un valore, ed è la
+stessa distinzione del `macaddr` in `stageEthMac`.
+
+### La LAN: modalità di annuncio, non sette manopole
+
+La LAN prende il proprio `/64` dalla delega DHCPv6-PD e dall'ULA di OpenWrt. Non
+c'è un campo per il prefisso, perché non lo sceglie nessuno.
+
+Come il router annuncia IPv6 ai dispositivi è **una scelta a tre**, non sette
+opzioni indipendenti:
+
+| Scelta | `ra` | `dhcpv6` | `ra_flags` | `ra_slaac` |
+|---|---|---|---|---|
+| **Automatico** (consigliato) | `server` | `server` | `managed-config`, `other-config` | `1` |
+| **Solo SLAAC** | `server` | `disabled` | `other-config` | `1` |
+| **Spento** | `disabled` | `disabled` | *(cancellata)* | *(cancellata)* |
+
+«Automatico» è il default di OpenWrt ed è l'unica combinazione in cui Android
+— che fa solo SLAAC — e Windows — che preferisce DHCPv6 — funzionano entrambi.
+«Spento» deve esistere: è la risposta a «IPv6 mi ha rotto la connessione in
+albergo», e senza si recupera solo da SSH.
+
+Una funzione sola (`raValues`) decide cosa scrive ogni modalità, e `matchRaMode`
+la rilegge: due copie della tabella sarebbero il modo in cui scrittura e
+rilettura si disallineano, mostrando «Personalizzato» subito dopo aver salvato.
+Quando la configurazione sul router non è nessuna delle tre, la schermata
+mostra i valori grezzi **in sola lettura** e si rifiuta di sovrascriverli.
+
+`ra_slaac` assente vale `1`: è come nasce un router OpenWrt, e pretendere il
+valore esplicito renderebbe «Personalizzato» la configurazione più comune che
+esista.
+
+`ra_default` resta fisso a `0` e non ha un interruttore. A `1` il router si
+annuncerebbe come gateway IPv6 predefinito **anche senza un upstream IPv6**: i
+client uscirebbero da una strada che non porta da nessuna parte, e IPv6
+sparirebbe in ogni rete v4-only.
+
+### `dhcp_option 6` non è `dhcp.lan.dns`
+
+Sono due meccanismi diversi, e confonderli è il modo classico di rompere la
+risoluzione dei nomi credendo di migliorarla.
+
+| | Chi la legge | Famiglia | Come arriva al client |
+|---|---|---|---|
+| `dhcp_option '6,<csv>'` | dnsmasq | **solo IPv4** | risposta DHCPv4 |
+| `dhcp.lan.dns` (lista) | odhcpd | **solo IPv6** | campo RDNSS dell'RA e risposta DHCPv6 |
+
+Un indirizzo IPv6 dentro `dhcp_option 6` non annuncia niente a nessuno, e non si
+limita a essere inutile: dnsmasq può rifiutare l'**intera** lista per una voce
+che non gli piace, quindi si romperebbero anche i DNS IPv4 mentre si crede di
+aggiungerne.
+
+La schermata divide quindi per famiglia quello che viene scritto nei due campi
+liberi, e le manda nelle due opzioni. Le voci dei fornitori noti portano sempre
+**entrambe** le metà, mai la sola IPv6: un resolver IPv6 è raggiungibile solo con
+una WAN IPv6, e offrirlo da solo darebbe una configurazione che smette di
+risolvere appena si cambia rete. `matchDnsProvider` confronta perciò la sola
+metà IPv4 e tratta quella IPv6 come derivata.
+
+Le due famiglie vivono in due opzioni uci ma sono **una scelta sola**
+nell'interfaccia: lo stato della schermata si costruisce su entrambe, perché la
+metà non letta verrebbe cancellata al primo salvataggio.
+
+### Firewall, VPN e WireGuard
+
+Il kill switch copre già entrambe le famiglie senza modifiche: `fw4` compone una
+tabella `inet`, e la regola non porta `family`. *(Nota: non avendo `proto`,
+ferma `tcp` e `udp` e lascia passare ICMP e ICMPv6 — un limite preesistente in
+IPv4 che IPv6 estende alla seconda famiglia, ancora da decidere.)*
+
+La zona `travel_vpn` ha `masq6` accanto a `masq`: `masq` è solo IPv4, e senza la
+gemella l'indirizzo ULA di un client uscirebbe nel tailnet senza via di ritorno,
+con il sintomo «alcune cose funzionano».
+
+L'uscita del tailnet dentro WireGuard è **due sezioni**, `travel_vpn_wg` e
+`travel_vpn_wg6` (range `fd7a:115c:a1e0::/48`), accese e spente insieme dalla
+stessa funzione: una accesa e una spenta darebbe «internet a tratti» invece di
+un guasto pulito. Entrambe hanno `proto 'all'`, e non è ridondante — senza
+`proto`, `fw4` accetta `tcp udp` e lascia fuori ICMPv6, cioè il *Packet Too Big*;
+e siccome i router IPv6 non frammentano, senza quei messaggi i pacchetti grandi
+spariscono in silenzio.
+
+Anche la rotta verso il tailnet ha la gemella IPv6 (`fd7a:115c:a1e0::/48` in
+tabella 52) e la sua regola di instradamento: tailscaled dà al router un
+indirizzo del tailnet anche in IPv6, e senza quella rotta il router non
+raggiunge nessun peer di là — con le risposte che escono dalla WAN invece che
+dal tunnel.
+
+A Tailscale si annuncia **solo l'ULA**, mai il prefisso globale delegato: quello
+cambia a ogni rete, e una rotta annunciata al tailnet gli sopravvivrebbe come
+buco nero.
+
+Per WireGuard, un endpoint IPv6 si scrive **fra parentesi quadre** in
+`endpoint_host`, e sembra sbagliato ma non lo è: netifd ricompone l'endpoint
+come `"$endpoint_host:$endpoint_port"`, con una giunzione ingenua. Senza
+parentesi, host `2001:db8::1` e porta `443` darebbero `2001:db8::1:443`, che è un
+indirizzo IPv6 valido e **diverso**. Il guasto dipende dalla porta — con `51820`,
+cinque cifre, esce una stringa invalida e l'errore si vede — ed è proprio per
+questo che le parentesi non sono facoltative: il caso silenzioso è quello che
+sembra innocuo.
+
+L'instradamento del tunnel in tabella 53 ha le gemelle `ip -6`, ma **solo quando
+gli AllowedIPs del profilo contengono davvero un range IPv6**: una rotta
+predefinita IPv6 dentro un tunnel che IPv6 non lo porta lo fa sparire, e in
+silenzio, perché IPv4 continua a funzionare. La stessa prova di sicurezza della
+versione IPv4 — che smonta l'instradamento se cattura anche la LAN — ha il suo
+gemello, e lì conta di più: lo stesso errore in IPv6 lascia SSH-su-IPv4
+funzionante, quindi il router *sembra* a posto mentre ogni browser si pianta.
+
+Le due righe IPv6 dell'elenco diagnostico del tunnel sono **informative**: dicono
+che una parte del traffico non passa dal tunnel, non che il tunnel non porta
+traffico, e non entrano nel giudizio su «WireGuard sta portando il traffico».
+
+### mwan3
+
+`mwan3.<sezione>` è **mono-famiglia**, e il nome della sezione deve coincidere
+con quello di un'interfaccia netifd reale: è il motivo per cui il failover IPv6
+è diventato possibile solo dopo che le `<net>6` sono esistite.
+
+Ogni WAN ha quindi una sezione, due membri e due politiche gemelle. La modalità,
+la priorità, il peso e l'esclusione si scrivono su **entrambe le famiglie**: le
+scritture restano in staging e `applyMwan()` è l'ultima cosa eseguita, quindi se
+una fallisce non prende effetto niente. Priorità disallineate manderebbero IPv4 e
+IPv6 su WAN diverse.
+
+**I nomi delle politiche IPv6 sono accorciati**, e non per gusto: mwan3 impone
+15 caratteri — è il limite dei nomi di catena di iptables — e `travel_failover`
+li usa già tutti. `travel_failover6` ne farebbe 16 e verrebbe rifiutata **in
+silenzio**. Da qui `travel_fail6` e `travel_bal6`. Per le politiche per WAN il
+`6` va in **testa** (`o6_<net>`, `p6_<net>`): in coda non si rileggerebbe, perché
+una porta chiamata `lan6` produce l'interfaccia `wan_lan6` e `o_wan_lan6` non
+direbbe più quale delle due cose sia.
+
+I tracking IP restano **IPv4 nel campo dell'interfaccia**: quel campo scrive in
+`mwan3.<net>`, che è `family=ipv4`, e un indirizzo IPv6 lì verrebbe interrogato
+con `ping` e terrebbe la WAN caduta per sempre. Le sonde IPv6 stanno nella
+gemella e le sceglie `mwan3-setup.sh` da un pool suo. I **tempi** invece sono
+condivisi: sono la stessa decisione, e tenerli diversi farebbe cadere le due
+famiglie in momenti diversi sulla stessa WAN.
+
+Una regola che mescola le famiglie viene rifiutata prima di essere scritta:
+`mwan3.<rule>.family` è un valore solo, e una regola scritta comunque avrebbe un
+criterio che non combacia mai.
+
+### Quello che resta IPv4-only, di proposito
+
+- **Il captive portal.** Rilevamento e aggiramento (`portal_resolve`, la tabella
+  di servizio 97) funzionano solo in IPv4. I captive portal sono un meccanismo
+  IPv4 quasi per definizione — DNS bugiardo più redirect HTTP — e le reti che li
+  usano distribuiscono IPv4. Se un giorno ne comparisse uno IPv6, il sintomo
+  sarebbe chiaro: il portale non viene rilevato.
+- **Il conflitto di sottorete della LAN**, e con lui `prefix24`, `lastOctet`,
+  `LAN_NETMASK` e gli indirizzi candidati.
+- **Il default `AllowedIPs = 0.0.0.0/0`** di un profilo WireGuard che non lo
+  dichiara: un file che non nomina IPv6 è un file che a IPv6 non ha pensato, e
+  indovinare `::/0` creerebbe un buco nero su ogni profilo del genere.
 
 ## Captive portal
 
@@ -725,8 +980,9 @@ esegue direttive shell del file. Il keepalive predefinito è 25 secondi e
 AllowedIPs, se assente, è `0.0.0.0/0`.
 
 Ogni tunnel usa `fwmark=0x1000000` e `route_allowed_ips=0`; il routing
-applicativo installa una default IPv4 in una tabella dedicata per il solo
-device attivo. `wg_toggle` rifiuta l'accensione quando un altro profilo è già
+applicativo installa una default in una tabella dedicata per il solo device
+attivo - IPv4 sempre, IPv6 solo se gli AllowedIPs del profilo contengono davvero
+un range IPv6 (vedi la sezione IPv6). `wg_toggle` rifiuta l'accensione quando un altro profilo è già
 attivo, nominandolo, e `wg_delete` rifiuta di eliminare quello attivo: lo
 scambio fra due profili richiede una disattivazione esplicita. L'accensione
 attende fino a 15 secondi la comparsa del device prima di riapplicare il
@@ -753,7 +1009,8 @@ scrive e non ricarica niente, così un allineamento non fa cadere il traffico.
 
 ### Tabelle, regole e firewall
 
-`vpn-setup.sh runtime` riapplica inoltro IPv4, rotte e regole. Lo invocano
+`vpn-setup.sh runtime` riapplica inoltro, rotte e regole per entrambe le
+famiglie. Lo invocano
 l'init di travel, i comandi VPN pertinenti e l'hotplug
 `/etc/hotplug.d/net/40-travel-vpn` quando compare `tailscale0` o un device
 `travel_wg*`.
@@ -771,17 +1028,20 @@ anche `100.64.0.0/10 dev tailscale0` nella tabella 52 quando il device esiste.
 Prima di mantenere il routing WireGuard prova una destinazione LAN con
 `ip route get` e rimuove le proprie regole se la risposta punta al tunnel.
 
-L'inoltro IPv4 viene impostato a runtime e persistito in
-`/etc/sysctl.d/30-travel-forwarding.conf`. Il firewall usa:
+L'inoltro viene impostato a runtime e persistito in
+`/etc/sysctl.d/30-travel-forwarding.conf` per entrambe le famiglie. La riga
+IPv6 ribadisce un valore che OpenWrt imposta gia' di suo: si scrive per le
+interfacce nate fuori da netifd, come `tailscale0`. Il firewall usa:
 
 | Sezione | Effetto |
 |---|---|
-| `travel_vpn` | Zona vpn: `tailscale0` e le reti `travel_wg*` di tutti i profili salvati, anche spenti; input/forward REJECT, output ACCEPT, masquerade e MSS clamping |
+| `travel_vpn` | Zona vpn: `tailscale0` e le reti `travel_wg*` di tutti i profili salvati, anche spenti; input/forward REJECT, output ACCEPT, masquerade **IPv4 e IPv6** e MSS clamping |
 | `travel_vpn_fwd` | Inoltro LAN → VPN |
 | `travel_vpn_out` | Inoltro VPN → WAN, legato all'annuncio exit node |
 | `travel_vpn_lan` | Inoltro VPN → LAN, legato all'annuncio della LAN |
 | `travel_vpn_wg` | Regola IPv4 VPN → VPN per sorgenti `100.64.0.0/10`, legata all'annuncio exit node |
-| `travel_killswitch` | REJECT LAN → WAN quando abilitata |
+| `travel_vpn_wg6` | La gemella IPv6, per sorgenti `fd7a:115c:a1e0::/48`; accesa e spenta insieme alla precedente |
+| `travel_killswitch` | REJECT LAN → WAN quando abilitata, in entrambe le famiglie |
 
 Il kill switch nasce spento. `travel.vpn.killswitch` conserva la scelta
 dell'utente, `firewall.travel_killswitch.enabled` lo stato configurato della
@@ -1128,7 +1388,8 @@ fare.
 ### Backup, orologio e riavvio
 
 Il backup è l'archivio OpenWrt di `sysupgrade -b`, restituito in base64 tramite
-ubus e scaricato come `.tar.gz`. L'esportazione rifiuta archivi oltre 512 KiB.
+ubus e scaricato (la codifica la fa ucode: il busybox di OpenWrt 25.12 non ha
+l'applet `base64`) come `.tar.gz`. L'esportazione rifiuta archivi oltre 512 KiB.
 Il ripristino invia blocchi di 24 KiB di testo base64, con flag `first` e
 `last`; il router li decodifica in `/tmp/travel-restore.tar.gz`.
 Prima di `sysupgrade -r` controlla che il tar sia leggibile e contenga voci
@@ -1220,7 +1481,7 @@ le funzioni opzionali siano operative.
 | Multi-WAN | `mwan3`, `ip-full`, richiesti dal setup se mwan3 manca |
 | Tethering installato | `kmod-usb-net`, `kmod-usb-net-cdc-ncm`, `kmod-usb-net-rndis`, `kmod-usb-net-cdc-ether` |
 | VPN | `tailscale`, `wireguard-tools`, `luci-proto-wireguard`, con le rispettive dipendenze |
-| Portali e sistema | `nc` o `uclient-fetch`, `nslookup`, `base64`, `tar`, `sysupgrade`, `sysntpd`, `cron` |
+| Portali e sistema | `nc` o `uclient-fetch`, `nslookup`, `tar`, `sysupgrade`, `sysntpd`, `cron` |
 | Terminale web opzionale | `luci-app-ttyd`, richiesto da `-WithTtyd` |
 
 Gli AP usano il wpad del firmware; il setup non installa automaticamente una
@@ -1244,9 +1505,13 @@ né una roadmap approvata.
 - **Recupero persistente da apply interrotto:** mancano snapshot dell'ultima
   configurazione confermata e ripristino al boot. Il rollback implementato
   è quello di rpcd durante la sessione di apply.
-- **IPv6 gestito dall'app:** mancano configurazione per WAN, routing multi-WAN,
-  probe e integrazione VPN coerenti per IPv6. Le impostazioni attuali non
-  equivalgono a una disabilitazione globale di IPv6 nel firmware.
+- **Captive portal in IPv6:** rilevamento e aggiramento del portale funzionano
+  solo in IPv4. È una scelta e non una svista — i captive portal sono un
+  meccanismo IPv4 quasi per definizione — ma resta un limite: su una rete
+  v6-only con portale, quel portale non verrebbe rilevato. Vedi la sezione IPv6.
+- **ICMP nel kill switch:** la regola non dichiara `proto`, quindi `fw4` la
+  rende come `tcp` e `udp` e lascia passare ICMP e ICMPv6. Limite preesistente
+  in IPv4, che ora vale per due famiglie invece di una.
 - **Gestione avanzata dei client:** l'elenco è in lettura; non offre blocco
   dei dispositivi, creazione di prenotazioni DHCP o traffico per client.
 

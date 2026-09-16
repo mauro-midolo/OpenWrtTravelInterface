@@ -310,19 +310,125 @@ method_radios() {
 # Gateway predefinito di un'interfaccia, dal suo stato ubus.
 #
 # Non basta prendere route[0]: l'elenco puo' contenere prima le rotte della
-# sottorete locale. Si cerca quella con destinazione 0.0.0.0.
+# sottorete locale. Si cerca quella con la destinazione chiesta in $2, che e'
+# "0.0.0.0" per IPv4 e "::" per IPv6.
+#
+# La destinazione e' un parametro e NON un "una delle due": accettando
+# entrambe, la prima rotta predefinita trovata vincerebbe qualunque famiglia
+# avesse, e un nexthop IPv4 finirebbe dentro gateway6. Sarebbe scritto, non
+# segnalato, e sbagliato.
 default_gateway() {
-	local routes route target
+	local routes route target want
 
-	routes=$(printf '%s' "$1" | jsonfilter -e '@.route[*]')
+	want="$2"
+	# Uno stato vuoto - interfaccia giu', o gemello v6 inesistente - non e' un
+	# errore: senza questa uscita jsonfilter si lamenterebbe su stderr a ogni
+	# WAN scollegata, e il log del router diventerebbe illeggibile.
+	[ -n "$1" ] || return 0
+
+	routes=$(printf '%s' "$1" | jsonfilter -e '@.route[*]' 2>/dev/null)
 	printf '%s\n' "$routes" | while read -r route; do
 		[ -n "$route" ] || continue
 		target=$(printf '%s' "$route" | jsonfilter -e '@.target')
-		if [ "$target" = "0.0.0.0" ]; then
+		if [ "$target" = "$want" ]; then
 			printf '%s' "$route" | jsonfilter -e '@.nexthop'
 			break
 		fi
 	done
+}
+
+# Stato dell'interfaccia logica IPv6 gemella di una WAN, cercato nel dump.
+#
+# netifd tiene IPv6 in un'interfaccia logica a se', e quale sia non si puo'
+# indovinare dal nome della WAN: `wan` ha una `config interface 'wan6'` scritta
+# nell'immagine, e le altre WAN ne vogliono una uguale.
+#
+# Verificato su OpenWrt 25.12: nessuno script in /lib/netifd/proto/ crea alias
+# `<net>_6` al volo, e il proto `dhcp` l'opzione `ipv6` non la legge nemmeno.
+# Una sezione esplicita e' quindi l'UNICO modo di avere IPv6 su una WAN. Il
+# ripiego su `${net}_6` qui sotto resta per le versioni che quegli alias li
+# creano, e su questa non combaciera' mai.
+#
+# L'appaiamento e' sul l3_device: il gemello sta per forza sopra lo stesso
+# device del fratello v4. Solo a interfaccia giu', dove il device non esiste da
+# nessuna delle due parti, si ripiega sui nomi. Mai sul `device` di uci, che e'
+# un riferimento simbolico (`@wan`) e non il nome di niente.
+ipv6_sibling() {
+	local dump="$1" net="$2" l3="$3"
+	local entry name
+
+	printf '%s\n' "$dump" | while read -r entry; do
+		[ -n "$entry" ] || continue
+		case "$(printf '%s' "$entry" | jsonfilter -e '@.proto')" in
+			dhcpv6|6in4|6to4|6rd|464xlat) ;;
+			*) continue ;;
+		esac
+
+		name=$(printf '%s' "$entry" | jsonfilter -e '@.interface')
+		[ "$name" = "$net" ] && continue
+
+		if [ -n "$l3" ]; then
+			[ "$(printf '%s' "$entry" | jsonfilter -e '@.l3_device')" = "$l3" ] || continue
+		else
+			[ "$name" = "${net}6" ] || [ "$name" = "${net}_6" ] || continue
+		fi
+
+		printf '%s' "$entry"
+		break
+	done
+}
+
+# Indirizzi IPv6 di uno stato ubus, come "indirizzo/prefisso".
+#
+# Il prefisso resta attaccato, al contrario degli indirizzi v4 che escono nudi:
+# quelli alimentano un campo di input, questi una riga di sola lettura, e li' il
+# prefisso e' la meta' informativa.
+ipv6_addresses() {
+	local entry addr mask
+
+	printf '%s' "$1" | jsonfilter -e '@["ipv6-address"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@.address')
+		[ -n "$addr" ] || continue
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@.mask')
+		printf '%s/%s\n' "$addr" "${mask:-128}"
+	done
+}
+
+# Indirizzi del router dentro i prefissi assegnati a un'interfaccia.
+#
+# E' `ipv6-prefix-assignment` e non `ipv6-address` a contenere il prefisso che
+# la LAN usa davvero: il primo e' cio' che le e' stato assegnato - dalla delega
+# DHCPv6-PD del provider o dall'ULA del router - e `local-address` e'
+# l'indirizzo che il router ci tiene dentro.
+#
+# Guardare solo `ipv6-address` non basta e non e' un caso limite: su un router
+# senza upstream v6 quello e' VUOTO mentre questo no, quindi la LAN
+# sembrerebbe senza IPv6 mentre i client ne hanno uno e comunicano.
+ipv6_prefix_addresses() {
+	local entry addr mask
+
+	printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix-assignment"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@["local-address"].address' 2>/dev/null)
+		[ -n "$addr" ] || continue
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@["local-address"].mask' 2>/dev/null)
+		printf '%s/%s\n' "$addr" "${mask:-64}"
+	done
+}
+
+# Prefisso delegato dal provider, come "prefisso/lunghezza", vuoto se non c'e'.
+#
+# E' quello da cui la LAN ricava il proprio /64: vederlo sulla riga della WAN
+# dice se la delega e' arrivata davvero, che e' la prima cosa da guardare quando
+# i dispositivi non prendono un indirizzo v6.
+ipv6_prefix() {
+	local addr mask
+
+	addr=$(printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix"][0].address' 2>/dev/null)
+	[ -n "$addr" ] || return 0
+	mask=$(printf '%s' "$1" | jsonfilter -e '@["ipv6-prefix"][0].mask' 2>/dev/null)
+	printf '%s/%s' "$addr" "${mask:-64}"
 }
 
 # Interfacce logiche che sono WAN, cioe' quelle nella zona firewall "wan".
@@ -418,6 +524,16 @@ active_l3_device() {
 		| awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
 }
 
+# La stessa cosa per IPv6, che ha una tabella di instradamento tutta sua.
+#
+# Serve perche' una rete v6-only - 464XLAT sul cellulare e' il caso comune - non
+# ha nessuna rotta predefinita v4: senza questa, la WAN che sta davvero portando
+# il traffico risulterebbe inattiva.
+active_l3_device6() {
+	ip -6 route show default 2>/dev/null \
+		| awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
 # Sezione uci della STA agganciata a una certa interfaccia logica, se c'e'.
 sta_section_of_network() {
 	local want="$1" section
@@ -442,24 +558,43 @@ sta_section_of_network() {
 # fuori da quella WAN.
 method_uplinks() {
 	local status network section radio band ifname info netstat up signal
-	local active l3 kind usb_driver
+	local active active6 l3 kind usb_driver
+	local dump v6stat is_active
 
 	status=$(wireless_status)
 	active=$(active_l3_device)
+	active6=$(active_l3_device6)
+
+	# Il dump di tutte le interfacce, una volta sola e fuori dal ciclo: costa
+	# meno di N chiamate `status` in piu', ed e' l'unico modo di vedere una
+	# `<net>_6` dinamica, il cui nome non compare da nessuna parte in uci.
+	dump=$(ubus call network.interface dump 2>/dev/null | jsonfilter -e '@.interface[*]')
 
 	json_init
 	json_add_array uplinks
 
 	for network in $(wan_networks); do
-		# Le interfacce IPv6 si saltano: IPv6 e' disattivato per scelta, e
-		# `wan6` accanto a `wan` comparirebbe come una seconda Ethernet che non
-		# esiste. Un giorno, se IPv6 tornera', avra' una sua rappresentazione.
+		# Le interfacce IPv6 si saltano, e il salto RESTA anche adesso che IPv6
+		# e' acceso: `wan6` accanto a `wan` comparirebbe come una seconda porta
+		# ethernet che non esiste. Dual-stack qui significa una porta sola con
+		# due famiglie, quindi gli indirizzi v6 si uniscono alla riga del
+		# fratello v4 invece di aprirne una nuova - lo fa `ipv6_sibling` piu'
+		# sotto.
 		case "$(uci -q get "network.$network.proto")" in
 			dhcpv6|6in4|6to4|6rd|464xlat) continue ;;
 		esac
 
 		netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
 		l3=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
+		v6stat=$(ipv6_sibling "$dump" "$network" "$l3")
+
+		# Su una rete v6-only l'interfaccia v4 non prende nessun lease e resta
+		# giu', senza device: il device vero ce l'ha solo il gemello. Senza
+		# questo ripiego una WAN v6-only non risulterebbe MAI quella attiva,
+		# perche' il confronto con la rotta predefinita si fa sul device.
+		if [ -z "$l3" ] && [ -n "$v6stat" ]; then
+			l3=$(printf '%s' "$v6stat" | jsonfilter -e '@.l3_device' 2>/dev/null)
+		fi
 
 		section=$(sta_section_of_network "$network")
 		radio=""
@@ -505,6 +640,11 @@ method_uplinks() {
 		fi
 
 		up=$(printf '%s' "$netstat" | jsonfilter -e '@.up')
+		# Stessa ragione del device: la v4 di una rete v6-only e' giu' mentre il
+		# gemello v6 e' su e sta funzionando. `up` significa quindi "almeno una
+		# delle due famiglie e' su", ed e' cosi' che lo leggono uplinkState in
+		# lib/wifi.ts e in traveld.uc.
+		[ "$up" = "true" ] || up=$(printf '%s' "$v6stat" | jsonfilter -e '@.up' 2>/dev/null)
 		signal=$(printf '%s' "$info" | jsonfilter -e '@.signal')
 
 		json_add_object
@@ -528,7 +668,17 @@ method_uplinks() {
 		# -1 significa "non si sa", per esempio se l'interfaccia non esiste.
 		json_add_int     carrier  "$(carrier_of "$ifname")"
 		# Vero per la sola WAN che sta portando il traffico adesso.
-		json_add_boolean active   "$([ -n "$l3" ] && [ "$l3" = "$active" ] && echo 1 || echo 0)"
+		#
+		# Si preferisce la risposta v4 e si ripiega su v6 soltanto quando una
+		# rotta predefinita v4 non c'e' affatto: su una rete v6-only e' l'unica
+		# che esiste, mentre su una dual-stack chiedere a v6 potrebbe indicare
+		# una WAN diversa da quella che porta il traffico vero.
+		if [ -n "$active" ]; then
+			is_active=$([ -n "$l3" ] && [ "$l3" = "$active" ] && echo 1 || echo 0)
+		else
+			is_active=$([ -n "$l3" ] && [ "$l3" = "$active6" ] && echo 1 || echo 0)
+		fi
+		json_add_boolean active   "$is_active"
 		if [ -n "$section" ]; then
 			json_add_boolean enabled "$([ "$(uci -q get "wireless.$section.disabled")" = "1" ] && echo 0 || echo 1)"
 		else
@@ -549,12 +699,40 @@ method_uplinks() {
 
 		json_add_boolean up       "$([ "$up" = "true" ] && echo 1 || echo 0)"
 		json_add_string  ipv4     "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')"
+		# Attenzione: qui ubus riporta il NUMERO di bit ("24"), non la maschera
+		# puntata che il nome fa pensare. Si passa cosi' com'e' e a dargli una
+		# forma sola ci pensa il confine in lib/wifi.ts, che e' l'unico posto a
+		# vedere anche i pacchetti vecchi.
 		json_add_string  netmask  "$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].mask')"
-		json_add_string  gateway  "$(default_gateway "$netstat")"
+		json_add_string  gateway  "$(default_gateway "$netstat" "0.0.0.0")"
 
 		json_add_array dns
-		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]'); do
+		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null); do
+			# Un resolver v6 in questo elenco sarebbe mostrato nella riga dei
+			# DNS v4: le due famiglie restano separate anche quando arrivano
+			# dalla stessa interfaccia.
+			case "$_dns" in *:*) continue ;; esac
 			json_add_string "" "$_dns"
+		done
+		json_close_array
+
+		# --- IPv6, unito alla riga del fratello v4 -------------------------
+		#
+		# Gli indirizzi si prendono da entrambi gli stati: quasi sempre stanno
+		# sul gemello (proto dhcpv6), ma una WAN `proto static` configurata a
+		# mano puo' averli sulla propria interfaccia, senza nessun gemello.
+		json_add_array ipv6
+		for _addr in $(ipv6_addresses "$netstat"; ipv6_addresses "$v6stat"); do
+			json_add_string "" "$_addr"
+		done
+		json_close_array
+
+		json_add_string  gateway6 "$(default_gateway "${v6stat:-$netstat}" "::")"
+		json_add_string  prefix6  "$(ipv6_prefix "${v6stat:-$netstat}")"
+
+		json_add_array dns6
+		for _dns in $(printf '%s' "$netstat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null; printf '%s' "$v6stat" | jsonfilter -e '@["dns-server"][*]' 2>/dev/null); do
+			case "$_dns" in *:*) json_add_string "" "$_dns" ;; esac
 		done
 		json_close_array
 
@@ -1086,6 +1264,36 @@ method_lan() {
 
 	json_add_string  netmask    "$(uci -q get network.lan.netmask || echo 255.255.255.0)"
 
+	# Indirizzi IPv6 COL PREFISSO ATTACCATO, al contrario di quelli v4 che
+	# escono nudi: quelli alimentano un campo di input e la maschera li' non ci
+	# deve stare, questi una riga di sola lettura in cui il prefisso e' la meta'
+	# informativa. Unione deduplicata delle due letture, che su un router senza
+	# upstream v6 danno risultati diversi.
+	json_add_array addresses6
+	for entry in $({ ipv6_addresses "$netstat"; ipv6_prefix_addresses "$netstat"; } | awk '!seen[$0]++'); do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
+	# Il prefisso ULA del router: non lo genera questo pacchetto - lo fa OpenWrt
+	# alla prima accensione - e puo' mancare, quindi chi lo legge non deve darlo
+	# per scontato.
+	json_add_string  ula        "$(uci -q get network.globals.ula_prefix)"
+
+	# RA e DHCPv6 escono GREZZI, uno per uno, e non come una "modalita'".
+	# Ridurli qui a tre nomi vorrebbe dire decidere sul router cosa mostrare, e
+	# perdere il caso in cui la configurazione non e' nessuna delle tre: quello
+	# va visto e non sovrascritto, ed e' `matchRaMode` in lan.ts a riconoscerlo.
+	json_add_string  ra         "$(uci -q get dhcp.lan.ra)"
+	json_add_string  dhcpv6     "$(uci -q get dhcp.lan.dhcpv6)"
+	json_add_string  ra_slaac   "$(uci -q get dhcp.lan.ra_slaac)"
+	json_add_string  ra_default "$(uci -q get dhcp.lan.ra_default)"
+	json_add_array ra_flags
+	for entry in $(uci -q get dhcp.lan.ra_flags); do
+		json_add_string "" "$entry"
+	done
+	json_close_array
+
 	json_add_object dhcp
 	json_add_string  start      "$(uci -q get dhcp.lan.start || echo 100)"
 	json_add_string  limit      "$(uci -q get dhcp.lan.limit || echo 150)"
@@ -1099,6 +1307,17 @@ method_lan() {
 	json_add_array dns_client
 	for entry in $(printf '%s' "$dns_client" | tr ',' ' '); do
 		[ -n "$entry" ] && json_add_string "" "$entry"
+	done
+	json_close_array
+
+	# I DNS v6 annunciati ai client NON stanno in `dhcp_option`: quella e'
+	# un'opzione DHCPv4 e un indirizzo v6 li' dentro non arriverebbe a nessuno.
+	# Vivono in `dhcp.lan.dns`, una lista che legge odhcpd e che finisce sia nel
+	# campo RDNSS dell'RA sia nella risposta DHCPv6. Sono due elenchi separati
+	# perche' sono due meccanismi separati.
+	json_add_array dns_client6
+	for entry in $(uci -q get dhcp.lan.dns); do
+		json_add_string "" "$entry"
 	done
 	json_close_array
 
@@ -1415,9 +1634,40 @@ client_link() {
 	fi
 }
 
+# Vicini IPv6 della LAN, come righe "mac indirizzo", lette una volta sola.
+#
+# Due comandi e due sed, non uno solo allargato: il sed IPv4 ancora l'indirizzo
+# a inizio riga con la classe [0-9.], e allargarla a [0-9a-f:] per farci entrare
+# anche IPv6 gliela farebbe combaciare pure con il MAC, che di quei caratteri e'
+# fatto. Qui la forma v6 si distingue pretendendo almeno un ':' nell'indirizzo.
+#
+# FAILED e INCOMPLETE si scartano: sono vicini che il kernel ha provato a
+# risolvere senza riuscirci, cioe' l'opposto di una presenza.
+NEIGH6=""
+load_neigh6() {
+	NEIGH6=$(ip -6 neigh show dev "$1" 2>/dev/null \
+		| grep -v -E '(FAILED|INCOMPLETE)' \
+		| sed -n 's/^\([0-9a-f:]*:[0-9a-f:]*\) .*lladdr \([0-9a-f:]\{17\}\).*/\2 \1/p')
+}
+
+# Gli indirizzi IPv6 di un MAC, i link-local esclusi.
+#
+# I `fe80::` non si mostrano: ce l'hanno tutti, non dicono niente su come il
+# dispositivo sta in rete, e quattro indirizzi per riga rendono l'elenco
+# illeggibile invece che piu' informativo. Servono pero' a stabilire la
+# PRESENZA di un dispositivo che IPv6 globale non ce l'ha, ed e' per questo che
+# restano dentro NEIGH6 e vengono scartati qui e non durante la lettura.
+ipv6_of_mac() {
+	printf '%s\n' "$NEIGH6" | awk -v m="$1" '$1 == m && $2 !~ /^fe80:/ { print $2 }'
+}
+
 # Una riga dell'elenco, con l'attribuzione gia' risolta.
+#
+# Una riga per MAC, non per indirizzo: un dispositivo e' un dispositivo, e
+# triplicarlo perche' ha tre indirizzi rende piu' difficile - non piu' facile -
+# l'unica domanda a cui questo elenco serve a rispondere, cioe' chi c'e'.
 client_object() {
-	local mac="$1" ip="$2" name="$3" source="$4"
+	local mac="$1" ip="$2" name="$3" source="$4" addr
 
 	client_link "$mac"
 	[ -n "$name" ] || name=$(static_host_name "$mac")
@@ -1430,6 +1680,11 @@ client_object() {
 	json_add_string via    "$LINK_VIA"
 	json_add_string iface  "$LINK_IFACE"
 	json_add_string band   "$LINK_BAND"
+	json_add_array ips6
+	for addr in $(ipv6_of_mac "$mac"); do
+		json_add_string "" "$addr"
+	done
+	json_close_array
 	json_close_object
 }
 
@@ -1450,6 +1705,9 @@ method_clients() {
 
 	STATIONS_WIFI=$(wifi_stations)
 	STATIONS_FDB=$(bridge_stations "$lan_device")
+	# Una lettura sola per tutto l'elenco: `client_object` la interroga per ogni
+	# riga, e rifarla ogni volta costerebbe un processo per dispositivo.
+	load_neigh6 "$lan_device"
 
 	STATIONS_ONLY_PORT=""
 	if [ -z "$STATIONS_FDB" ]; then
@@ -1476,6 +1734,19 @@ method_clients() {
 			# quelli IPv6 ci mettono un IAID, e piu' avanti un DUID che
 			# di colonne ne ha anche piu' di sei. Si accetta la forma
 			# esatta, non "qualcosa con dentro dei due punti".
+			#
+			# Le righe DHCPv6 non sono soltanto da saltare: come chiave
+			# di unione sono INUTILIZZABILI, ed e' il motivo per cui il
+			# lease file di odhcpd non viene analizzato affatto. Un DUID
+			# non e' un MAC. Quelli di tipo 0001 (DUID-LLT) il MAC ce
+			# l'hanno in coda, quindi l'estrazione sembra funzionare sul
+			# primo dispositivo che si guarda; ma il tipo 0004
+			# (DUID-UUID) - quello che questo stesso router usa per se',
+			# vedi network.globals.dhcp_default_duid - di MAC non ne
+			# contiene nessuno. Chi scrivesse quell'unione la vedrebbe
+			# funzionare in laboratorio e fallire in albergo. Gli
+			# indirizzi v6 arrivano da `ip -6 neigh`, che da' la stessa
+			# chiave su cui questo elenco e' gia' costruito.
 			case "$mac" in
 				[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
 				*) continue ;;
@@ -1489,13 +1760,31 @@ method_clients() {
 
 	# Poi i vicini che il kernel conosce senza avere un lease: indirizzi statici,
 	# e dispositivi arrivati prima dell'ultimo riavvio di dnsmasq.
-	for entry in $(ip neigh show dev "$lan_device" 2>/dev/null | sed -n 's/^\([0-9.]\{1,\}\) .*lladdr \([0-9a-f:]\{17\}\).*/\1|\2/p'); do
+	#
+	# `ip -4` esplicito: la forma senza famiglia elenca anche i vicini v6, e a
+	# non farli entrare era solo la classe [0-9.] del sed. Dirlo al comando
+	# invece di lasciarlo dedurre al sed rende chiaro che le due letture sono
+	# due, e che questa e' quella v4.
+	for entry in $(ip -4 neigh show dev "$lan_device" 2>/dev/null | sed -n 's/^\([0-9.]\{1,\}\) .*lladdr \([0-9a-f:]\{17\}\).*/\1|\2/p'); do
 		ip="${entry%%|*}"
 		mac="${entry##*|}"
 		case "$seen" in *" $mac "*) continue ;; esac
 		seen="$seen$mac "
 
 		client_object "$mac" "$ip" "" arp
+	done
+
+	# Poi chi si conosce SOLO da IPv6. Un dispositivo v6-only non ha un lease
+	# DHCPv4 ne' una voce ARP: senza questo passaggio sparirebbe dall'elenco pur
+	# essendo in rete e raggiungibile. Qui conta anche il link-local, che e' il
+	# solo indirizzo che alcuni dispositivi si prendono: come indirizzo da
+	# mostrare non vale niente, come prova di presenza vale tutto.
+	for mac in $(printf '%s\n' "$NEIGH6" | awk '{ print $1 }' | sort -u); do
+		[ -n "$mac" ] || continue
+		case "$seen" in *" $mac "*) continue ;; esac
+		seen="$seen$mac "
+
+		client_object "$mac" "" "" neigh6
 	done
 
 	# Infine chi e' associato a un access point e non ha ancora un indirizzo.
@@ -1616,7 +1905,11 @@ method_mwan() {
 	# questo la regola predefinita va sempre tenuta per ultima.
 	json_add_array rules
 	for rule in $(uci show mwan3 2>/dev/null | sed -n 's/^mwan3\.\([^.]*\)=rule$/\1/p'); do
-		[ "$rule" = "travel_default" ] && continue
+		# Le DUE regole predefinite restano fuori dall'elenco: non sono regole
+		# dell'utente, sono la modalita' multi-WAN vista da sotto. Mostrarle
+		# vorrebbe dire poterle cancellare, e cancellare `travel_default6`
+		# toglierebbe IPv6 dal failover senza che niente lo dica.
+		[ "$rule" = "travel_default" ] || [ "$rule" = "travel_default6" ] && continue
 		json_add_object
 		json_add_string  section    "$rule"
 		json_add_string  src_ip     "$(uci -q get "mwan3.$rule.src_ip")"
@@ -1879,6 +2172,32 @@ method_usb_reset() {
 #
 # Il ricaricamento della rete rinnova gli indirizzi ma non tocca le
 # associazioni WiFi, che vivono un livello piu' sotto.
+# La modalita' multi-WAN, scritta su ENTRAMBE le regole predefinite.
+#
+# Lasciarne una su una politica e l'altra su un'altra manderebbe IPv4 e IPv6 su
+# WAN diverse: meta' del web che carica, che e' molto piu' difficile da
+# diagnosticare di un guasto pulito. Sono la stessa decisione, quindi si
+# scrivono nello stesso posto.
+#
+# `travel_default6` puo' mancare su un router non ancora aggiornato: si salta,
+# invece di crearla qui puntando a una politica che `mwan3-setup.sh` non ha
+# ancora scritto.
+mwan_set_mode() {
+	if [ "$1" = "balance" ]; then
+		uci set mwan3.travel_default.use_policy=travel_balance
+	else
+		uci set mwan3.travel_default.use_policy=travel_failover
+	fi
+
+	if [ -n "$(uci -q get mwan3.travel_default6)" ]; then
+		if [ "$1" = "balance" ]; then
+			uci set mwan3.travel_default6.use_policy=travel_bal6
+		else
+			uci set mwan3.travel_default6.use_policy=travel_fail6
+		fi
+	fi
+}
+
 method_mwan_apply() {
 	local holder
 
@@ -1896,7 +2215,7 @@ method_mwan_apply() {
 	# un'altra, ed e' esattamente lo stato che questo progetto rifiuta altrove.
 	if policy_balance; then
 		holder=$(policy_holder balance) && {
-			uci set mwan3.travel_default.use_policy=travel_failover
+			mwan_set_mode failover
 			uci commit mwan3
 			/etc/init.d/mwan3 restart >/dev/null 2>&1
 			fail_json "non posso passare al bilanciamento: $(policy_reason "$holder")"
@@ -2200,7 +2519,7 @@ method_portal_probe() {
 	netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
 	device=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
 	address=$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')
-	gateway=$(default_gateway "$netstat")
+	gateway=$(default_gateway "$netstat" "0.0.0.0")
 
 	if ! portal_split "$url"; then
 		reason="url-non-http"
@@ -2411,7 +2730,7 @@ ts_running() {
 # piedi scelte che dall'interfaccia risultano tolte. Quello che si vede deve
 # essere quello che c'e'.
 ts_flags() {
-	local exit_node accept_routes accept_dns advertise_lan advertise_exit cidr
+	local exit_node accept_routes accept_dns advertise_lan advertise_exit cidr cidr6
 
 	exit_node=$(uci -q get travel.tailscale.exit_node)
 	accept_routes=$(uci -q get travel.tailscale.accept_routes)
@@ -2456,7 +2775,12 @@ ts_flags() {
 	fi
 
 	if [ "$advertise_lan" = "1" ]; then
+		# Le due famiglie in un elenco solo separato da virgole: e' la forma che
+		# vuole tailscale, e mandarne una per volta cancellerebbe l'altra -
+		# `--advertise-routes` sostituisce, non aggiunge.
 		cidr=$(lan_cidr)
+		cidr6=$(lan_cidr6)
+		[ -n "$cidr6" ] && cidr="${cidr:+$cidr,}$cidr6"
 		[ -n "$cidr" ] && printf ' --advertise-routes=%s' "$cidr"
 	else
 		printf ' --advertise-routes='
@@ -2517,6 +2841,40 @@ lan_cidr() {
 	network=$(printf '%s\n' "$out" | sed -n 's/^NETWORK=//p')
 	bits=$(printf '%s\n' "$out" | sed -n 's/^PREFIX=//p')
 	[ -n "$network" ] && [ -n "$bits" ] && printf '%s/%s' "$network" "$bits"
+}
+
+# La sottorete IPv6 della LAN da annunciare al tailnet: SOLO l'ULA.
+#
+# Mai la GUA che deriva dalla delega del provider, ed e' la riga portante di
+# questa funzione. Un prefisso delegato cambia a ogni albergo: una rotta GUA
+# annunciata al tailnet diventa stantia appena ci si sposta, e resta li' - un
+# buco nero che sopravvive alla riconnessione, perche' il tailnet continua a
+# mandare quel prefisso a questo nodo mentre il nodo non lo ha piu'. L'ULA
+# invece e' del router e non cambia mai.
+#
+# Si legge da `ipv6-prefix-assignment` e non da `network.globals.ula_prefix`:
+# quello e' il /48 da cui il router pesca, questo e' il prefisso davvero
+# assegnato a br-lan, e annunciare piu' di quello che si instrada sarebbe un
+# altro modo di creare un buco nero.
+lan_cidr6() {
+	local netstat entry addr mask
+
+	netstat=$(ubus call network.interface.lan status 2>/dev/null)
+	[ -n "$netstat" ] || return 0
+
+	printf '%s' "$netstat" | jsonfilter -e '@["ipv6-prefix-assignment"][*]' 2>/dev/null | while read -r entry; do
+		[ -n "$entry" ] || continue
+		addr=$(printf '%s' "$entry" | jsonfilter -e '@.address' 2>/dev/null)
+		[ -n "$addr" ] || continue
+		# fc00::/7, cioe' i primi due caratteri "fc" o "fd".
+		case "$addr" in
+			[fF][cCdD]*) ;;
+			*) continue ;;
+		esac
+		mask=$(printf '%s' "$entry" | jsonfilter -e '@.mask' 2>/dev/null)
+		printf '%s/%s' "$addr" "${mask:-64}"
+		break
+	done
 }
 
 # Stato della VPN: cosa c'e', cosa sta facendo, e cosa abbiamo chiesto noi.
@@ -2687,6 +3045,9 @@ method_vpn() {
 	json_add_boolean advertise_lan  "$([ "$(uci -q get travel.tailscale.advertise_lan)" = "1" ] && echo 1 || echo 0)"
 	json_add_boolean advertise_exit "$([ "$(uci -q get travel.tailscale.advertise_exit)" = "1" ] && echo 1 || echo 0)"
 	json_add_string  lan_cidr       "$(lan_cidr)"
+	# Solo l'ULA: la GUA cambia a ogni albergo e diventerebbe una rotta
+	# stantia nel tailnet. Il perche' per esteso sta in lan_cidr6.
+	json_add_string  lan_cidr6      "$(lan_cidr6)"
 	json_close_object
 
 	policy_json
@@ -2871,26 +3232,53 @@ ts_runtime() {
 #
 # Torna 0 se ha cambiato qualcosa, come `ts_forwarding`: chi chiama decide se
 # ricaricare il firewall.
-ts_exit_wg_rule() {
-	local want="$1"
+# Una delle due sezioni gemelle. Torna 0 se ha cambiato qualcosa.
+ts_exit_wg_one() {
+	local section="$1" family="$2" src_ip="$3" name="$4" want="$5"
 
 	# Puo' mancare su un router configurato prima che questa regola esistesse:
 	# si crea qui invece di pretendere un altro deploy.
-	if [ -z "$(uci -q get firewall.travel_vpn_wg)" ]; then
-		uci set firewall.travel_vpn_wg=rule
-		uci set firewall.travel_vpn_wg.name='travel-exit-via-wg'
-		uci set firewall.travel_vpn_wg.src='vpn'
-		uci set firewall.travel_vpn_wg.dest='vpn'
-		uci set firewall.travel_vpn_wg.src_ip='100.64.0.0/10'
-		uci set firewall.travel_vpn_wg.family='ipv4'
-		uci set firewall.travel_vpn_wg.target='ACCEPT'
-		uci set firewall.travel_vpn_wg.enabled="$want"
+	if [ -z "$(uci -q get "firewall.$section")" ]; then
+		uci set "firewall.$section=rule"
+		uci set "firewall.$section.name=$name"
+		uci set "firewall.$section.src=vpn"
+		uci set "firewall.$section.dest=vpn"
+		uci set "firewall.$section.src_ip=$src_ip"
+		uci set "firewall.$section.family=$family"
+		# Senza `proto`, fw4 non accetta tutto: accetta `tcp udp`, e ICMP resta
+		# fuori. In IPv6 quello significa niente "Packet Too Big", e siccome i
+		# router v6 non frammentano, i pacchetti grandi spariscono in silenzio.
+		uci set "firewall.$section.proto=all"
+		uci set "firewall.$section.target=ACCEPT"
+		uci set "firewall.$section.enabled=$want"
 		return 0
 	fi
 
-	[ "$(uci -q get firewall.travel_vpn_wg.enabled)" = "$want" ] && return 1
-	uci set firewall.travel_vpn_wg.enabled="$want"
+	# La regola puo' essere nata prima che `proto` ci fosse: si allinea qui, e
+	# conta come cambiamento perche' il firewall va ricaricato.
+	if [ "$(uci -q get "firewall.$section.proto")" != "all" ]; then
+		uci set "firewall.$section.proto=all"
+		uci set "firewall.$section.enabled=$want"
+		return 0
+	fi
+
+	[ "$(uci -q get "firewall.$section.enabled")" = "$want" ] && return 1
+	uci set "firewall.$section.enabled=$want"
 	return 0
+}
+
+# Le due famiglie si commutano INSIEME, in una chiamata sola.
+#
+# Lasciarne accesa una e spenta l'altra e' lo stato peggiore possibile: meta'
+# del traffico esce dal tunnel e meta' viene rifiutata, e chi guarda vede
+# "internet a tratti" invece di un guasto pulito. Sono la stessa decisione,
+# quindi si scrivono insieme e non hanno due interruttori.
+ts_exit_wg_rule() {
+	local want="$1" changed=1
+
+	ts_exit_wg_one travel_vpn_wg  ipv4 '100.64.0.0/10'       travel-exit-via-wg  "$want" && changed=0
+	ts_exit_wg_one travel_vpn_wg6 ipv6 'fd7a:115c:a1e0::/48' travel-exit-via-wg6 "$want" && changed=0
+	return "$changed"
 }
 
 ts_forwarding() {
@@ -3109,18 +3497,179 @@ valid_wg_key() {
 	printf '%s' "$1" | grep -qE '^[A-Za-z0-9+/]{43}=$'
 }
 
+# La forma di un IPv6, senza prefisso.
+#
+# Non la semantica: quanti gruppi servano lo decide netifd. Qui si scartano le
+# forme che indirizzo non sono affatto, e la vecchia classe di caratteri sola
+# non ne scartava nessuna - `::::::` sono tutti caratteri leciti.
+wg_v6_form() {
+	local addr="$1" group
+
+	printf '%s' "$addr" | grep -qE '^[0-9a-fA-F:]+$' || return 1
+	# Un solo "::", e mai ":::": due abbreviazioni renderebbero l'indirizzo
+	# ambiguo, e nessuno saprebbe quanti gruppi di zeri stanno da che parte.
+	printf '%s' "$addr" | grep -q ':::' && return 1
+	[ "$(printf '%s' "$addr" | grep -o '::' | wc -l)" -le 1 ] || return 1
+
+	for group in $(printf '%s' "$addr" | tr ':' ' '); do
+		printf '%s' "$group" | grep -qE '^[0-9a-fA-F]{1,4}$' || return 1
+	done
+
+	# Un ':' singolo a un estremo e' un troncamento: "1:2:3:" o ":1:2". I due
+	# estremi si guardano SEPARATAMENTE: con un `case` solo, "::1:" passerebbe
+	# perche' l'inizio combacia con "::*" e la fine non verrebbe piu' guardata.
+	case "$addr" in
+		::*) ;;
+		:*) return 1 ;;
+	esac
+	case "$addr" in
+		*::) ;;
+		*:) return 1 ;;
+	esac
+
+	return 0
+}
+
 # Un elenco di indirizzi separati da virgole o spazi. Non si convalida la
 # semantica - a quella pensa netifd - ma la forma: uno spazio di troppo in un
 # campo incollato finirebbe in `uci add_list` come indirizzo a se'.
+#
+# Le due famiglie si convalidano separate, e non con una classe di caratteri
+# sola. Quella di prima - `[0-9a-fA-F:.]+(/[0-9]{1,3})?` - accettava `::::::` e
+# `10.0.0.0/999`: tutti caratteri leciti, in un ordine che indirizzo non e'.
+# Soprattutto, il prefisso va confrontato con il massimo della SUA famiglia:
+# /64 su un IPv4 e /129 su un IPv6 sono errori tanto quanto /999.
 valid_wg_addrs() {
-	local entry
+	local entry addr prefix
 
 	[ -n "$1" ] || return 1
 	for entry in $(printf '%s' "$1" | tr ',' ' '); do
-		printf '%s' "$entry" | grep -qE '^[0-9a-fA-F:.]+(/[0-9]{1,3})?$' || return 1
+		addr="${entry%%/*}"
+		prefix=""
+		case "$entry" in
+			*/*) prefix="${entry#*/}" ;;
+		esac
+
+		# Un prefisso c'e' o non c'e': "10.0.0.0/" non e' ne' l'uno ne' l'altro.
+		if [ "$entry" != "$addr" ]; then
+			printf '%s' "$prefix" | grep -qE '^[0-9]{1,3}$' || return 1
+		fi
+
+		case "$addr" in
+			*:*)
+				wg_v6_form "$addr" || return 1
+				[ -z "$prefix" ] || [ "$prefix" -le 128 ] || return 1
+				;;
+			*)
+				printf '%s' "$addr" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+				[ -z "$prefix" ] || [ "$prefix" -le 32 ] || return 1
+				;;
+		esac
 	done
 
 	return 0
+}
+
+# L'host di un endpoint: un nome, un IPv4, oppure un IPv6 fra parentesi.
+#
+# Oggi non veniva controllato affatto, e un endpoint sbagliato si scopriva solo
+# dal log di netifd - che dice soltanto che l'handshake non arriva.
+#
+# Le parentesi sono ammesse e ATTESE per IPv6: e' la forma in cui
+# `wg_split_endpoint` lo lascia, ed e' quella che netifd deve poter ricomporre.
+valid_wg_host() {
+	local host="$1"
+
+	[ -n "$host" ] || return 1
+
+	case "$host" in
+		\[*\])
+			# IPv6 fra parentesi: si convalida quello che c'e' dentro, senza.
+			host="${host#\[}"
+			wg_v6_form "${host%\]}" && return 0
+			return 1
+			;;
+		*:*)
+			# Due punti fuori dalle parentesi: un IPv6 nudo, che qui non deve
+			# arrivare - `wg_split_endpoint` lo mette sempre fra parentesi.
+			return 1
+			;;
+	esac
+
+	# Un nome di host, o un IPv4. La forma dei nomi e' quella di RFC 1123:
+	# etichette di lettere, cifre e trattini, non piu' di 63 caratteri, e il
+	# trattino mai agli estremi.
+	printf '%s' "$host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+}
+
+# Separa `Endpoint` in host e porta, nelle quattro forme che esistono davvero.
+#
+# Il caso che rompeva tutto era l'IPv6 nudo: spezzando sull'ultimo ':',
+# `2001:db8::1` diventava host `2001:db8:` e porta `1`. Due valori plausibili e
+# sbagliati, scritti in uci senza che niente protestasse - il tunnel si crea,
+# netifd non si lamenta, l'handshake non arriva mai e nessuno sa dire perche'.
+#
+# Un IPv6 nudo si riconosce dal numero di ':': due o piu'. Nessun nome di host e
+# nessun IPv4 puo' contenerne due, quindi la regola non ha casi ambigui.
+#
+# LE PARENTESI RESTANO DENTRO `endpoint_host`, e sembra sbagliato ma non lo e':
+# netifd ricompone l'endpoint come "$endpoint_host:$endpoint_port", cioe' con
+# una giunzione ingenua. Senza parentesi, host `2001:db8::1` e porta `443`
+# darebbero `2001:db8::1:443`, che e' un indirizzo IPv6 VALIDO e diverso: il
+# tunnel punterebbe altrove e nessuno se ne accorgerebbe. Il guasto dipende
+# dalla porta - con 51820, cinque cifre, la stringa e' invalida e l'errore si
+# vede - ed e' proprio per questo che le parentesi non sono facoltative: il
+# caso silenzioso e' quello che sembra innocuo.
+# Un host scritto a mano nel modulo, portato nella forma in cui si salva.
+#
+# Qui non si spezza niente - il modulo ha due campi separati - si mettono solo
+# le parentesi a un IPv6 nudo. Serve perche' quel percorso NON passa da
+# `wg_split_endpoint`: i campi arrivano gia' divisi dal browser.
+#
+# Senza, due guasti insieme. `valid_wg_host` rifiuterebbe un IPv6 nudo, cioe'
+# proprio la forma che il campo dichiara di accettare; e se anche lo accettasse,
+# finirebbe in uci SENZA parentesi - che e' esattamente il bug che questa fase
+# esiste per chiudere, perche' netifd lo ricomporrebbe come "2001:db8::1:443".
+wg_normalize_host() {
+	case "$1" in
+		# Gia' fra parentesi, o un nome, o un IPv4: si lascia com'e'.
+		\[*\]) printf '%s' "$1" ;;
+		# Due o piu' ':': un IPv6 nudo. Nessun nome e nessun IPv4 ne ha due.
+		*:*:*) printf '[%s]' "$1" ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+
+wg_split_endpoint() {
+	local raw="$1" rest
+
+	case "$raw" in
+		\[*\]:*)
+			# [v6]:porta
+			WGF_HOST="${raw%%]*}]"
+			rest="${raw#*]:}"
+			WGF_PORT="$rest"
+			;;
+		\[*\])
+			# [v6] senza porta
+			WGF_HOST="$raw"
+			WGF_PORT=51820
+			;;
+		*:*:*)
+			# Due o piu' ':' e nessuna parentesi: IPv6 nudo, porta assente.
+			WGF_HOST="[$raw]"
+			WGF_PORT=51820
+			;;
+		*:*)
+			# host:porta, con un ':' solo.
+			WGF_PORT="${raw##*:}"
+			WGF_HOST="${raw%:*}"
+			;;
+		*)
+			WGF_HOST="$raw"
+			WGF_PORT=51820
+			;;
+	esac
 }
 
 wg_number_in() {
@@ -3163,6 +3712,7 @@ wg_validate() {
 	valid_wg_addrs "$WGF_ALLOWED" || { WG_ERR="AllowedIPs malformati"; return 1; }
 	[ -z "$WGF_DNS" ] || valid_wg_addrs "$WGF_DNS" || { WG_ERR="i DNS non sono indirizzi validi"; return 1; }
 	[ -n "$WGF_HOST" ] || { WG_ERR="manca l'endpoint del peer (Endpoint nella sezione [Peer])"; return 1; }
+	valid_wg_host "$WGF_HOST" || { WG_ERR="l'endpoint del peer non e' un nome ne' un indirizzo valido"; return 1; }
 	wg_number_in "$WGF_PORT" 1 65535 || { WG_ERR="la porta dell'endpoint non e' valida"; return 1; }
 	[ -z "$WGF_MTU" ] || wg_number_in "$WGF_MTU" 576 9200 || { WG_ERR="MTU fuori intervallo (576-9200)"; return 1; }
 	[ -z "$WGF_KEEPALIVE" ] || wg_number_in "$WGF_KEEPALIVE" 0 65535 || { WG_ERR="keepalive fuori intervallo"; return 1; }
@@ -3175,6 +3725,24 @@ wg_validate() {
 # i profili, anche quelli spenti - una zona che nomina un'interfaccia che non
 # esiste non fa niente, e aggiungerla al momento dell'accensione vorrebbe dire
 # un reload del firewall proprio mentre il traffico si sposta.
+# Vero se il profilo instrada davvero qualcosa di IPv6.
+#
+# Stessa lettura che fa `wg_has_v6_routes` in vpn-setup.sh, e per forza: se le
+# due dessero risposte diverse, l'interfaccia segnerebbe come mancante una
+# regola che nessuno ha motivo di scrivere - o peggio, tacerebbe su una che
+# manca davvero.
+wg_profile_has_v6() {
+	local entry
+
+	for entry in $(uci -q get "network.${1}_peer.allowed_ips" 2>/dev/null); do
+		case "$entry" in
+			*:*) return 0 ;;
+		esac
+	done
+
+	return 1
+}
+
 wg_join_zone() {
 	local section="$1"
 
@@ -3344,6 +3912,12 @@ method_wg_get() {
 	# Nella zona del tunnel: senza, il firewall scarta il traffico inoltrato
 	# anche quando l'instradamento e' perfetto.
 	json_add_boolean in_zone "$([ -n "$active" ] && uci -q get firewall.travel_vpn.network | tr ' ' '\n' | grep -qx "$active" && echo 1 || echo 0)"
+	# Le gemelle IPv6, e soprattutto SE hanno motivo di esistere: un tunnel
+	# senza AllowedIPs v6 non deve instradare IPv6, quindi la loro assenza non e'
+	# un guasto ed e' `has_v6` a dirlo a chi mostra l'elenco.
+	json_add_boolean has_v6 "$([ -n "$active" ] && wg_profile_has_v6 "$active" && echo 1 || echo 0)"
+	json_add_boolean rule6 "$([ -n "$active" ] && ip -6 rule 2>/dev/null | grep -q '^901:' && echo 1 || echo 0)"
+	json_add_boolean route6 "$([ -n "$active" ] && ip -6 route show table 53 2>/dev/null | grep -q '^default ' && echo 1 || echo 0)"
 	json_close_object
 
 	# La configurazione comandata dall'interruttore fisico, stringa vuota se la
@@ -3452,11 +4026,7 @@ EOF
 
 	# `Endpoint` e' host e porta insieme: si separano qui, perche' da qui in
 	# poi sono due campi distinti anche nel modulo di modifica.
-	if [ -n "$WGF_HOST" ]; then
-		WGF_PORT="${WGF_HOST##*:}"
-		WGF_HOST="${WGF_HOST%:*}"
-		[ "$WGF_HOST" = "$WGF_PORT" ] && WGF_PORT=51820
-	fi
+	[ -n "$WGF_HOST" ] && wg_split_endpoint "$WGF_HOST"
 
 	# Il valore che usano tutti quando il file non lo dice: senza keepalive un
 	# tunnel dietro NAT si addormenta e il ritorno non passa piu'.
@@ -3569,6 +4139,11 @@ method_wg_save() {
 	json_get_var WGF_ALLOWED   allowed_ips
 	json_get_var WGF_KEEPALIVE keepalive
 	json_get_var drop_psk      drop_preshared
+
+	# L'endpoint arriva gia' diviso dal modulo, quindi qui non si spezza: si
+	# normalizza soltanto, mettendo le parentesi a un IPv6 nudo. Prima di
+	# convalidare, o si rifiuterebbe la forma che il campo dichiara di accettare.
+	WGF_HOST=$(wg_normalize_host "$WGF_HOST")
 
 	# I segreti che il browser non ha: restano quelli scritti sul router.
 	[ -n "$WGF_PRIV" ] || WGF_PRIV="$(uci -q get "network.$id.private_key")"
@@ -3939,7 +4514,7 @@ method_profile_apply() {
 	uci commit travel
 
 	if [ -n "$(uci -q get mwan3.travel_default)" ]; then
-		uci set mwan3.travel_default.use_policy="$([ "$P_MODE" = "balance" ] && echo travel_balance || echo travel_failover)"
+		mwan_set_mode "$P_MODE"
 		uci set mwan3.travel_default.sticky="$P_STICKY"
 		uci set mwan3.travel_default.timeout="$P_TIMEOUT"
 	fi
@@ -4002,17 +4577,28 @@ BACKUP_RESTORE=/tmp/travel-restore.tar.gz
 # aspettando.
 BACKUP_MAX_KB=512
 
-# base64 e' un'applet di busybox e c'e' quasi sempre, ma "quasi" non basta per
-# una cosa che senza di lei produrrebbe un file scaricato e illeggibile.
+# Il base64 lo fa ucode, non l'applet `base64`: il busybox di OpenWrt 25.12
+# esce senza, mentre ucode con `fs` e' gia' nella base richiesta (lo usa LuCI).
+# Andata e ritorno passano dallo stesso codificatore, quello che c'e' sempre.
 have_base64() {
-	command -v base64 >/dev/null 2>&1
+	command -v ucode >/dev/null 2>&1
+}
+
+# Il file in $1, in base64 su una riga sola.
+b64_encode_file() {
+	ucode -e 'import { readfile } from "fs"; let d = readfile(ARGV[0]); if (d == null) exit(1); print(b64enc(d));' "$1"
+}
+
+# stdin in base64, decodificato su stdout; esce con errore se non si decodifica.
+b64_decode() {
+	ucode -e 'import { stdin } from "fs"; let d = b64dec(stdin.read("all")); if (d == null) exit(1); print(d);'
 }
 
 method_backup_export() {
-	local size
+	local size data
 
 	if ! have_base64; then
-		fail_json "manca il comando base64: scarica il backup da LuCI"
+		fail_json "manca ucode: scarica il backup da LuCI"
 		return
 	fi
 
@@ -4040,7 +4626,12 @@ method_backup_export() {
 	# cartella dei download sei mesi dopo.
 	json_add_string  name "backup-$(first_line /proc/sys/kernel/hostname)-$(date +%Y%m%d-%H%M).tar.gz"
 	json_add_int     size "$size"
-	json_add_string  data "$(base64 < "$BACKUP_FILE" | tr -d '\n')"
+	if ! data=$(b64_encode_file "$BACKUP_FILE"); then
+		rm -f "$BACKUP_FILE"
+		fail_json "codifica del backup fallita"
+		return
+	fi
+	json_add_string  data "$data"
 	json_dump
 
 	rm -f "$BACKUP_FILE"
@@ -4063,7 +4654,7 @@ method_backup_import() {
 	json_get_var first first
 	json_get_var last last
 
-	have_base64 || { fail_json "manca il comando base64: ripristina il backup da LuCI"; return; }
+	have_base64 || { fail_json "manca ucode: ripristina il backup da LuCI"; return; }
 	[ -n "$chunk" ] || { fail_json "pezzo vuoto"; return; }
 
 	# Solo l'alfabeto del base64: quello che arriva dalla rete non entra in un
@@ -4079,7 +4670,7 @@ method_backup_import() {
 
 	[ "$first" = "1" ] && rm -f "$BACKUP_RESTORE"
 
-	if ! printf '%s' "$chunk" | base64 -d >> "$BACKUP_RESTORE" 2>/dev/null; then
+	if ! printf '%s' "$chunk" | b64_decode >> "$BACKUP_RESTORE" 2>/dev/null; then
 		rm -f "$BACKUP_RESTORE"
 		fail_json "decodifica del pezzo fallita"
 		return

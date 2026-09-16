@@ -9,15 +9,19 @@ import {
   clientDetail,
   clientLink,
   clientTitle,
+  clientDns,
+  dnsEditable,
+  dnsFieldsOk,
   dnsProvider,
   findConflicts,
   getEthPorts,
   getLan,
   isHostAddress,
-  isValidIp,
   listClients,
   matchDnsProvider,
+  matchRaMode,
   prefix24,
+  RA_OPTIONS,
   stageEthMac,
   stageEthPort,
   stripPrefix,
@@ -34,8 +38,10 @@ import type {
   LanSettings,
   PortMode,
   PortRole,
+  RaMode,
   WanSubnet,
 } from '../lib/lan';
+import { isValidIp } from '../lib/ip';
 import { getUplinks, isValidMac, normalizeMac } from '../lib/wifi';
 import type { MacChoice } from '../lib/wifi';
 import { ApplyStatus } from '../components/ApplyStatus';
@@ -183,6 +189,13 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
           </header>
           <Row label="Indirizzo del router" value={primary || '—'} />
           <Row label="Rete" value={`${prefix24(primary)}.0 · 254 indirizzi`} />
+          {/* Solo dove IPv6 c'e': su una LAN senza, righe con un trattino
+              direbbero che manca qualcosa invece che "qui non c'e'". */}
+          {lan.addresses6.length > 0 && (
+            <Row label="Indirizzo IPv6" value={lan.addresses6.join('  ')} />
+          )}
+          {lan.ula && <Row label="Prefisso ULA" value={lan.ula} />}
+          <Row label="Annunci IPv6" value={raModeLabel(matchRaMode(lan))} />
           <Row label="Interfaccia" value={lan.device || '—'} />
           <Row
             label="Pool DHCP"
@@ -196,6 +209,9 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
             label="DNS dati ai client"
             value={lan.dns_client.length > 0 ? lan.dns_client.join('  ') : 'il router stesso'}
           />
+          {lan.dns_client6.length > 0 && (
+            <Row label="DNS IPv6 dati ai client" value={lan.dns_client6.join('  ')} />
+          )}
           <Row
             label="Resolver del router"
             value={
@@ -646,15 +662,59 @@ function ClientsCard() {
 }
 
 /** Indirizzi da scrivere per una scelta della tendina. */
+/**
+ * Un elenco di DNS che questa schermata non sa modificare.
+ *
+ * Piu' di due indirizzi scelti a mano non entrano nei due campi: mostrarne solo
+ * i primi due e poi salvare cancellerebbe gli altri senza dirlo. Si mostrano
+ * tutti e si lasciano stare - stessa regola della modalita' RA che non si
+ * riconosce.
+ */
+function DnsUntouched({ title, servers }: { title: string; servers: string[] }) {
+  return (
+    <div class="field">
+      <span>{title}</span>
+      <span class="row__value">{servers.join('  ')}</span>
+      <span class="muted">
+        Sono più di due e scelti a mano: da qui non si modificano, e il salvataggio li
+        lascia com’erano. Per cambiarli, riducili a due da LuCI.
+      </span>
+    </div>
+  );
+}
+
+/** Etichetta della modalita' RA, compreso lo stato che non si puo' scegliere. */
+function raModeLabel(mode: RaMode): string {
+  if (mode === 'custom') return 'Personalizzati (configurati fuori da qui)';
+  return RA_OPTIONS.find((o) => o.id === mode)?.label ?? mode;
+}
+
+/**
+ * I DNS scelti, divisi per famiglia.
+ *
+ * Divisi e non in un elenco solo perche' finiscono in due posti diversi: i v4
+ * in `dhcp_option 6`, i v6 in `dhcp.lan.dns`. Mescolarli e' esattamente
+ * l'errore che rompe anche i DNS v4 (vedi il commento in `stageLan`).
+ *
+ * Un fornitore porta con se' entrambe le meta'; nei campi liberi si guarda cosa
+ * e' stato scritto, cosi' due caselle bastano per una coppia mista.
+ */
 function resolveDns(
   mode: string,
   options: DnsProvider[],
   one: string,
   two: string,
-): string[] {
-  if (mode === 'auto') return [];
-  if (mode === 'custom') return [one, two].map((s) => s.trim()).filter((s) => s.length > 0);
-  return dnsProvider(mode, options)?.servers ?? [];
+): { v4: string[]; v6: string[] } {
+  if (mode === 'auto') return { v4: [], v6: [] };
+  if (mode === 'custom') {
+    const typed = [one, two].map((s) => s.trim()).filter((s) => s.length > 0);
+    return {
+      v4: typed.filter((s) => isValidIp(s, 4)),
+      v6: typed.filter((s) => isValidIp(s, 6)),
+    };
+  }
+  const provider = dnsProvider(mode, options);
+  return { v4: provider?.servers ?? [], v6: provider?.servers6 ?? [] };
 }
 
 /**
@@ -674,6 +734,7 @@ function DnsChoice({
   onOne,
   onTwo,
   autoHint,
+  ipv6,
 }: {
   title: string;
   options: DnsProvider[];
@@ -684,8 +745,13 @@ function DnsChoice({
   onOne: (value: string) => void;
   onTwo: (value: string) => void;
   autoHint: string;
+  /** Se questa lista accetta anche indirizzi IPv6. Cambia tastiera e avviso. */
+  ipv6: boolean;
 }) {
   const chosen = dnsProvider(mode, options);
+  // Un tastierino numerico non ha i due punti ne' le lettere: su un telefono
+  // renderebbe impossibile scrivere un indirizzo v6 nel campo che lo accetta.
+  const keyboard = ipv6 ? 'text' : 'decimal';
 
   return (
     <div class="field">
@@ -710,7 +776,7 @@ function DnsChoice({
             <input
               type="text"
               value={one}
-              inputMode="decimal"
+              inputMode={keyboard}
               autocomplete="off"
               spellcheck={false}
               onInput={(e) => onOne((e.target as HTMLInputElement).value)}
@@ -721,12 +787,17 @@ function DnsChoice({
             <input
               type="text"
               value={two}
-              inputMode="decimal"
+              inputMode={keyboard}
               autocomplete="off"
               spellcheck={false}
               onInput={(e) => onTwo((e.target as HTMLInputElement).value)}
             />
           </label>
+          <span class="muted">
+            {ipv6
+              ? 'Indirizzi IPv4 o IPv6, anche uno per tipo: vanno al posto giusto da soli.'
+              : 'Solo indirizzi IPv4.'}
+          </span>
         </>
       )}
     </div>
@@ -751,17 +822,32 @@ function LanSheet({
     String((Number(lan.dhcp.start) || 100) + (Number(lan.dhcp.limit) || 150) - 1),
   );
 
+  // Tutte e due le famiglie, non la sola v4: quello che non finisce qui dentro
+  // non esiste per la schermata, e il salvataggio lo cancellerebbe.
+  const clientCurrent = clientDns(lan);
   const [clientMode, setClientMode] = useState(
-    matchDnsProvider(lan.dns_client, CLIENT_DNS_OPTIONS),
+    matchDnsProvider(clientCurrent, CLIENT_DNS_OPTIONS),
   );
-  const [clientOne, setClientOne] = useState(lan.dns_client[0] ?? '');
-  const [clientTwo, setClientTwo] = useState(lan.dns_client[1] ?? '');
+  const [clientOne, setClientOne] = useState(clientCurrent[0] ?? '');
+  const [clientTwo, setClientTwo] = useState(clientCurrent[1] ?? '');
+
+  // Piu' di due indirizzi scelti a mano non entrano in due campi. Mostrarne
+  // solo i primi due e poi salvare butterebbe via il resto in silenzio: si
+  // guarda e basta, come per la modalita' RA che non si riconosce.
+  const clientEditable = dnsEditable(clientCurrent, CLIENT_DNS_OPTIONS);
+  const routerEditable = dnsEditable(lan.dns_upstream, ROUTER_DNS_OPTIONS);
 
   const [routerMode, setRouterMode] = useState(
     matchDnsProvider(lan.dns_upstream, ROUTER_DNS_OPTIONS),
   );
   const [routerOne, setRouterOne] = useState(lan.dns_upstream[0] ?? '');
   const [routerTwo, setRouterTwo] = useState(lan.dns_upstream[1] ?? '');
+
+  // `custom` non e' fra le scelte offerte: e' lo stato in cui il router si
+  // trova quando la sua configurazione non e' nessuna delle tre. In quel caso
+  // la schermata mostra i valori grezzi e non li sovrascrive.
+  const currentRa = matchRaMode(lan);
+  const [raMode, setRaMode] = useState<RaMode>(currentRa);
 
   const [done, setDone] = useState(false);
 
@@ -778,9 +864,17 @@ function LanSheet({
   const clientServers = resolveDns(clientMode, CLIENT_DNS_OPTIONS, clientOne, clientTwo);
   const routerServers = resolveDns(routerMode, ROUTER_DNS_OPTIONS, routerOne, routerTwo);
 
+  // Entrambe le liste accettano ora tutte e due le famiglie: quelle annunciate
+  // ai dispositivi non finiscono piu' tutte in `dhcp_option 6` - i v6 vanno in
+  // `dhcp.lan.dns`, che li annuncia davvero - e quelle del router in
+  // `dhcp.<sezione>.server`, che dnsmasq accetta senza sintassi speciale.
+  // Solo gli elenchi che si possono davvero modificare entrano nel controllo.
+  // Uno che la schermata mostra e non tocca non deve poter bloccare il
+  // salvataggio del resto: i suoi valori non vengono scritti, e non c'e'
+  // nemmeno un campo dove correggerli.
   const dnsOk =
-    (clientMode !== 'custom' || (isValidIp(clientOne) && (clientTwo === '' || isValidIp(clientTwo)))) &&
-    (routerMode !== 'custom' || (isValidIp(routerOne) && (routerTwo === '' || isValidIp(routerTwo))));
+    dnsFieldsOk(clientEditable, clientMode, clientOne, clientTwo) &&
+    dnsFieldsOk(routerEditable, routerMode, routerOne, routerTwo);
 
   const save = async (event: Event) => {
     event.preventDefault();
@@ -789,8 +883,15 @@ function LanSheet({
       address,
       poolFrom: fromN,
       poolTo: toN,
-      dnsClient: clientServers,
-      dnsUpstream: routerServers,
+      // `null` dove la schermata non ha saputo rappresentare la lista: si
+      // lascia com'e' invece di riscriverne una versione troncata.
+      dnsClient: clientEditable ? clientServers.v4 : null,
+      dnsClient6: clientEditable ? clientServers.v6 : null,
+      // I resolver del router stanno in una lista sola: dnsmasq le mescola
+      // senza problemi, ed e' `matchDnsProvider` a guardare la sola meta' v4
+      // quando la rilegge.
+      dnsUpstream: routerEditable ? [...routerServers.v4, ...routerServers.v6] : null,
+      raMode,
     };
 
     const ok = await apply.run(() => stageLan(settings, moves ? current : null, lan), {
@@ -800,7 +901,11 @@ function LanSheet({
       // accettato quello nuovo.
       verify: async () => {
         const fresh = await getLan();
-        return fresh.addresses.includes(address);
+        // Anche la modalita' RA: e' una scrittura su `dhcp` e non su `network`,
+        // quindi puo' fallire per conto suo mentre l'indirizzo prende. Senza
+        // questo controllo la conferma direbbe di si' a una meta' del lavoro.
+        const raOk = raMode === 'custom' || matchRaMode(fresh) === raMode;
+        return fresh.addresses.includes(address) && raOk;
       },
     });
 
@@ -875,29 +980,74 @@ function LanSheet({
               {poolProblem && <span class="alert alert--error">{poolProblem.message}</span>}
             </div>
 
-            <DnsChoice
-              title="DNS per i dispositivi della rete"
-              options={CLIENT_DNS_OPTIONS}
-              mode={clientMode}
-              onMode={setClientMode}
-              one={clientOne}
-              two={clientTwo}
-              onOne={setClientOne}
-              onTwo={setClientTwo}
-              autoHint="I dispositivi useranno il router come DNS."
-            />
+            <div class="field">
+              <span>Annunci IPv6 ai dispositivi</span>
+              {currentRa === 'custom' ? (
+                <>
+                  {/* Il router e' in una configurazione che non e' nessuna
+                      delle tre. Mostrarla come una delle tre sarebbe dire una
+                      cosa falsa, e salvarla la butterebbe via: si guarda e
+                      basta, come fa la scelta dei DNS con un fornitore che non
+                      riconosce. */}
+                  <span class="muted">
+                    Configurati fuori da questa schermata: ra <strong>{lan.ra || '—'}</strong>,
+                    dhcpv6 <strong>{lan.dhcpv6 || '—'}</strong>
+                    {lan.ra_flags.length > 0 && <> , flag <strong>{lan.ra_flags.join(' ')}</strong></>}
+                    . Restano com’è: da qui non vengono modificati.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <select
+                    value={raMode}
+                    onChange={(e) => setRaMode((e.target as HTMLSelectElement).value as RaMode)}
+                  >
+                    {RA_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span class="muted">
+                    {RA_OPTIONS.find((o) => o.id === raMode)?.hint}
+                  </span>
+                </>
+              )}
+            </div>
 
-            <DnsChoice
-              title="DNS usati dal router"
-              options={ROUTER_DNS_OPTIONS}
-              mode={routerMode}
-              onMode={setRouterMode}
-              one={routerOne}
-              two={routerTwo}
-              onOne={setRouterOne}
-              onTwo={setRouterTwo}
-              autoHint="Il router userà i DNS che gli dà la rete a cui è collegato."
-            />
+            {clientEditable ? (
+              <DnsChoice
+                title="DNS per i dispositivi della rete"
+                options={CLIENT_DNS_OPTIONS}
+                mode={clientMode}
+                onMode={setClientMode}
+                one={clientOne}
+                two={clientTwo}
+                onOne={setClientOne}
+                onTwo={setClientTwo}
+                autoHint="I dispositivi useranno il router come DNS."
+                ipv6
+              />
+            ) : (
+              <DnsUntouched title="DNS per i dispositivi della rete" servers={clientCurrent} />
+            )}
+
+            {routerEditable ? (
+              <DnsChoice
+                title="DNS usati dal router"
+                options={ROUTER_DNS_OPTIONS}
+                mode={routerMode}
+                onMode={setRouterMode}
+                one={routerOne}
+                two={routerTwo}
+                onOne={setRouterOne}
+                onTwo={setRouterTwo}
+                autoHint="Il router userà i DNS che gli dà la rete a cui è collegato."
+                ipv6
+              />
+            ) : (
+              <DnsUntouched title="DNS usati dal router" servers={lan.dns_upstream} />
+            )}
 
             {routerMode !== 'auto' && (
               <p class="alert alert--warn">

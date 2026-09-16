@@ -16,7 +16,7 @@ import {
 } from '../lib/mwan';
 import type { Mwan, MwanInterface, MwanMode, MwanRule } from '../lib/mwan';
 import { blockReason, blocked } from '../lib/vpn';
-import { isValidIp } from '../lib/lan';
+import { isValidIp, parseCidr } from '../lib/ip';
 
 /**
  * Etichetta di una WAN.
@@ -358,12 +358,20 @@ export function MwanSheet({
   );
 }
 
-/** Accetta un indirizzo o una sottorete: "192.168.1.5" oppure "10.0.0.0/8". */
+/**
+ * Accetta un indirizzo o una sottorete, in entrambe le famiglie:
+ * "192.168.1.5", "10.0.0.0/8", "2001:db8::1", "fd00::/64".
+ *
+ * Passa da parseCidr e non da una regex sul prefisso: /33 non e' accettato, e
+ * il prefisso viene convalidato sulla famiglia dell'indirizzo invece che su un
+ * massimo scritto a mano - una regex non saprebbe esprimere /128.
+ *
+ * Il vincolo a IPv4 e' caduto ora che mwan3 ha le sezioni gemelle: `ruleValues`
+ * deduce la famiglia dai criteri invece di scrivere sempre `ipv4`. Quello che
+ * resta rifiutato e' una regola che le MESCOLA, e lo rifiuta `ruleFamily`.
+ */
 function isValidTarget(value: string): boolean {
-  const [address, prefix] = value.split('/');
-  if (!isValidIp(address)) return false;
-  if (prefix === undefined) return true;
-  return /^\d{1,2}$/.test(prefix) && Number(prefix) <= 32;
+  return parseCidr(value) !== null;
 }
 
 /** Accetta "443" oppure "5000-5100". */
@@ -670,7 +678,18 @@ export function HealthSheet({
   const [error, setError] = useState<string | null>(null);
 
   const ips = [one, two].map((s) => s.trim()).filter((s) => s.length > 0);
-  const ipsOk = ips.length >= 1 && ips.every(isValidIp);
+  // La lambda non e' rumore: `ips.every(isValidIp)` passerebbe a isValidIp
+  // l'INDICE come secondo argomento, cioe' convaliderebbe il primo indirizzo
+  // contro la "famiglia 0" e il secondo contro la "famiglia 1", rifiutandoli
+  // entrambi.
+  //
+  // E la famiglia resta IPv4 anche ora che mwan3 e' dual-stack, perche' questi
+  // indirizzi finiscono in `mwan3.<net>`, che e' la sezione `family=ipv4`: un
+  // indirizzo v6 li' dentro verrebbe pingato con `ping` e la WAN risulterebbe
+  // caduta per sempre. Le sonde v6 stanno nella gemella `<net>6` e le sceglie
+  // `mwan3-setup.sh` da un pool suo, perche' devono restare diverse fra le WAN
+  // e non c'e' niente da chiedere a chi guarda.
+  const ipsOk = ips.length >= 1 && ips.every((ip) => isValidIp(ip, 4));
   const numsOk = [interval, timeout, down, up].every((v) => /^\d+$/.test(v) && Number(v) >= 1);
 
   const save = async (event: Event) => {

@@ -232,7 +232,12 @@ function uplinkState(u) {
 		return 'no-carrier';
 	}
 
-	if (!u.up || !u.ipv4 || u.ipv4 === "") return 'no-address';
+	// Un indirizzo di una qualunque delle due famiglie basta. Deve cambiare
+	// insieme a uplinkState() in lib/wifi.ts: se lo fa solo una delle due, una
+	// rete v6-only viene mostrata in due modi diversi nella stessa app.
+	let noV4 = !u.ipv4 || u.ipv4 === "";
+	let noV6 = !u.ipv6 || length(u.ipv6) == 0;
+	if (!u.up || (noV4 && noV6)) return 'no-address';
 	return 'addressed';
 }
 
@@ -258,6 +263,66 @@ function macFor(net, radio) {
 		return { mode: net['mac_mode' + suffix], value: net['mac_value' + suffix] };
 
 	return { mode: net.mac_mode, value: net.mac_value };
+}
+
+
+// Nome da mandare nella richiesta DHCP su questa interfaccia.
+//
+// L'opzione cancellata non e' l'opzione vuota: senza `hostname` netifd manda il
+// nome del router, che e' il default di OpenWrt ma non il nostro. Il default
+// del progetto e' `*`, cioe' non mandare niente.
+//
+// Si scrive solo se cambia: ogni scrittura costa un reload di netifd, e farlo
+// a ogni riconnessione butterebbe giu' le altre WAN per niente.
+function applyHostname(network, net) {
+	let want = '*';
+	if (net.hostname_mode == 'device')
+		want = null;
+	else if (net.hostname_mode == 'custom' && net.hostname_value != "")
+		want = net.hostname_value;
+
+	try {
+		let ctx = uci.cursor();
+		ctx.load('network');
+
+		let now = ctx.get('network', network, 'hostname');
+		if (!now) now = null;
+		if (now == want)
+			return;
+
+		if (want == null)
+			ctx.delete('network', network, 'hostname');
+		else
+			ctx.set('network', network, 'hostname', want);
+
+		ctx.commit('network');
+	}
+	catch (e) {
+		lastError = "scrittura del nome DHCP fallita: " + e;
+		return;
+	}
+
+	// netifd tiene la configurazione in memoria: senza reload il nome nuovo
+	// non arriverebbe nella richiesta DHCP che sta per partire.
+	try {
+		system(["ubus", "call", "network", "reload"]);
+	}
+	catch (e) {
+		system("ubus call network reload");
+	}
+}
+
+// La chiave con cui si contano i fallimenti: la rete E la banda su cui si e'
+// provata.
+//
+// Una rete salvata vale su tutte e due le bande, ma "non si aggancia" e' un
+// fatto della radio: a 5 GHz puo' essere fuori portata e a 2.4 funzionare
+// benissimo. Con una chiave sola, tre tentativi falliti di la' avrebbero messo
+// da parte anche la banda che andava - ed e' esattamente la regressione che il
+// passaggio all'elenco unico rischiava di introdurre. Prima le due bande erano
+// due sezioni, quindi due contatori: qui restano due.
+function penaltyKey(section, radio) {
+	return section + "@" + (radio.band ? radio.band : radio.name);
 }
 
 function applyConnection(radio, net) {
@@ -323,66 +388,9 @@ function applyConnection(radio, net) {
 	return true;
 }
 
-// Nome da mandare nella richiesta DHCP su questa interfaccia.
-//
-// L'opzione cancellata non e' l'opzione vuota: senza `hostname` netifd manda il
-// nome del router, che e' il default di OpenWrt ma non il nostro. Il default
-// del progetto e' `*`, cioe' non mandare niente.
-//
-// Si scrive solo se cambia: ogni scrittura costa un reload di netifd, e farlo
-// a ogni riconnessione butterebbe giu' le altre WAN per niente.
-function applyHostname(network, net) {
-	let want = '*';
-	if (net.hostname_mode == 'device')
-		want = null;
-	else if (net.hostname_mode == 'custom' && net.hostname_value != "")
-		want = net.hostname_value;
-
-	try {
-		let ctx = uci.cursor();
-		ctx.load('network');
-
-		let now = ctx.get('network', network, 'hostname');
-		if (!now) now = null;
-		if (now == want)
-			return;
-
-		if (want == null)
-			ctx.delete('network', network, 'hostname');
-		else
-			ctx.set('network', network, 'hostname', want);
-
-		ctx.commit('network');
-	}
-	catch (e) {
-		lastError = "scrittura del nome DHCP fallita: " + e;
-		return;
-	}
-
-	// netifd tiene la configurazione in memoria: senza reload il nome nuovo
-	// non arriverebbe nella richiesta DHCP che sta per partire.
-	try {
-		system(["ubus", "call", "network", "reload"]);
-	}
-	catch (e) {
-		system("ubus call network reload");
-	}
-}
 
 // --- Scelta della rete -------------------------------------------------------
 
-// La chiave con cui si contano i fallimenti: la rete E la banda su cui si e'
-// provata.
-//
-// Una rete salvata vale su tutte e due le bande, ma "non si aggancia" e' un
-// fatto della radio: a 5 GHz puo' essere fuori portata e a 2.4 funzionare
-// benissimo. Con una chiave sola, tre tentativi falliti di la' avrebbero messo
-// da parte anche la banda che andava - ed e' esattamente la regressione che il
-// passaggio all'elenco unico rischiava di introdurre. Prima le due bande erano
-// due sezioni, quindi due contatori: qui restano due.
-function penaltyKey(section, radio) {
-	return section + "@" + (radio.band ? radio.band : radio.name);
-}
 
 function isBlocked(key, now) {
 	if (blacklist[key] && blacklist[key] > now)
@@ -1073,6 +1081,13 @@ conn.publish('traveld', {
 					ipv4: u.ipv4,
 					gateway: u.gateway,
 					dns: u.dns,
+					// Si ripassano cosi' come arrivano da travel.uplinks: qui
+					// non si decide niente su IPv6, si evita solo che la
+					// dashboard debba fare una seconda chiamata per averlo.
+					ipv6: u.ipv6 ? u.ipv6 : [],
+					gateway6: u.gateway6 ? u.gateway6 : "",
+					prefix6: u.prefix6 ? u.prefix6 : "",
+					dns6: u.dns6 ? u.dns6 : [],
 					mac: u.mac,
 					metric: u.metric,
 					hostname: u.hostname,

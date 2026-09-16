@@ -67,7 +67,7 @@ patch release o build del firmware.
 | **WiFi** | Cercare e collegare reti — una già salvata si riapre dalla scansione con la sua configurazione e senza ridigitare la password —, aggiungere a mano una rete nascosta, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate hanno una pagina dedicata, con una lista sola in cui ogni rete dice su quali bande vale — 2,4 GHz, 5 GHz o entrambe — più ricerca, priorità e condivisione tramite QR e password visibile su richiesta, anche quando non sono connesse. |
 | **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
 | **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
-| **Rete locale** | Configurare IPv4, DHCP e DNS, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
+| **Rete locale** | Configurare indirizzo IPv4, DHCP e DNS, scegliere come annunciare IPv6 ai dispositivi, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
 | **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
 | **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, accendere e spegnere il LED di stato, scegliere cosa fa la levetta fisica, gestire USB, orologio e riavvio pianificato. |
 
@@ -81,8 +81,11 @@ quando quella principale non è più disponibile.
 Le funzioni elencate sono implementate; il progetto è in sviluppo e richiede
 verifiche sul dispositivo per i diversi scenari di rete.
 
-- La gestione di LAN, multi-WAN e routing VPN è centrata su **IPv4**;
-  l'integrazione completa di IPv6 resta da realizzare.
+- **IPv6** è gestito su tutto il percorso: WAN dual-stack, annunci RA/DHCPv6
+  sulla LAN, firewall, VPN, WireGuard e failover multi-WAN. Non c'è un
+  interruttore globale, e la scelta si fa per WAN. Il **captive portal** resta
+  l'unica parte solo IPv4, per scelta: i portali sono un meccanismo IPv4.
+  Dettagli e tabelle nell'architettura.
 - Bilanciamento multi-WAN, uso di un exit node Tailscale remoto e WireGuard
   attivo sono modalità alternative fra loro. La UI applica questi vincoli.
 - WireGuard salva più configurazioni, ognuna con un peer, e ne tiene attiva

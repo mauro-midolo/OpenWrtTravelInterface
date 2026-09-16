@@ -156,8 +156,10 @@ if [ "$(uci -q get travel.globals.eth_roles_init)" != "1" ]; then
 			uci set network.wan.proto=dhcp
 		fi
 		uci set network.wan.device=eth0
-		# IPv6 disattivato e nessun nome nel DHCP, per coerenza con le altre WAN.
-		uci set network.wan.ipv6=0
+		# Nessun nome nel DHCP, per coerenza con le altre WAN. IPv6 non si
+		# scrive affatto: l'assenza dell'opzione e' il dual-stack predefinito
+		# di OpenWrt, ed e' anche lo stato in cui la migrazione piu' sotto
+		# porta le WAN gia' esistenti.
 		uci set network.wan.hostname='*'
 		uci commit network
 		NEED_NETWORK_RELOAD=1
@@ -189,9 +191,6 @@ for radio in $(uci show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wi
 		say "creo l'interfaccia di rete $net (DHCP)"
 		uci set "network.$net=interface"
 		uci set "network.$net.proto=dhcp"
-		# IPv6 disattivato sulle WAN per scelta esplicita: mwan3 lo gestisce a
-		# meta', i captive portal peggio, ed e' traffico che sfugge al failover.
-		uci set "network.$net.ipv6=0"
 		# Nessun nome nella richiesta DHCP: `*` e' il modo in cui netifd dice
 		# "non mandarlo". Senza l'opzione manderebbe il nome del router, che
 		# resterebbe scritto nella lista dei client di ogni rete a cui ci si
@@ -227,7 +226,6 @@ if [ -z "$(uci -q get network.wan_usb)" ]; then
 	say "creo l'interfaccia di rete wan_usb (tethering, disattivata)"
 	uci set network.wan_usb=interface
 	uci set network.wan_usb.proto=dhcp
-	uci set network.wan_usb.ipv6=0
 	uci set network.wan_usb.hostname='*'
 	uci set network.wan_usb.disabled=1
 	uci commit network
@@ -266,6 +264,49 @@ if [ "$(uci -q get travel.globals.dhcp_hostname_init)" != "1" ]; then
 	uci set travel.globals.dhcp_hostname_init=1
 	uci commit travel
 fi
+
+# IPv6 sulle WAN: acceso, cancellando il divieto invece di scrivere un permesso.
+#
+# Le WAN nate prima hanno `option ipv6 '0'`, che le teneva IPv4-only. Qui
+# l'opzione si CANCELLA, e la differenza conta: senza opzione vale il default di
+# OpenWrt, che e' dual-stack, mentre scrivere `1` imporrebbe un valore nostro su
+# una scelta che appartiene alla distribuzione. E' la stessa distinzione del
+# `macaddr` in stageEthMac, e vale anche per le WAN create da qui in avanti, che
+# infatti l'opzione non la scrivono affatto.
+#
+# Una volta sola, segnata in travel: dopo, la scelta e' dell'utente. Chi rimette
+# `ipv6 '0'` su una WAN se lo tiene anche rilanciando questo script.
+if [ "$(uci -q get travel.globals.ipv6_init)" != "1" ]; then
+	for net in $(uci -q get "firewall.$WAN_ZONE.network"); do
+		[ -n "$(uci -q get "network.$net")" ] || continue
+		[ -n "$(uci -q get "network.$net.ipv6")" ] || continue
+		say "$net: accendo IPv6 (tolgo ipv6=0)"
+		uci delete "network.$net.ipv6"
+		NEED_NETWORK_RELOAD=1
+	done
+	uci commit network
+	uci set travel.globals.ipv6_init=1
+	uci commit travel
+fi
+
+# IPv6 sulle WAN: una interfaccia logica esplicita per ognuna.
+#
+# Su OpenWrt 25.12 non esiste nessun altro modo, e il blocco qui sopra da solo
+# non accende niente. Verificato sul router: /lib/netifd/proto/dhcp.sh non
+# nomina mai l'opzione `ipv6`, e nessuno script in /lib/netifd/proto/ crea alias
+# `<net>_6` al volo. Senza una `config interface` dedicata IPv6 su una WAN
+# semplicemente non si alza - ed e' lo stesso motivo per cui l'immagine di
+# fabbrica porta gia' un `wan6` accanto a `wan`.
+#
+# `device '@<net>'`, non il nome del device: per una STA WiFi il device in uci
+# non c'e' affatto - glielo assegna la sezione wireless - e cambia quando la
+# radio si riassocia. Il riferimento simbolico segue la sorella v4 dovunque
+# vada, ed e' la stessa ragione per cui l'appaiamento in lettura si fa sul
+# l3_device e non sui nomi.
+#
+# Si crea solo se manca. Chi vuole IPv6 spento su una WAN mette `disabled 1`
+# sulla sua sezione `<net>6`: quella sopravvive a questo script, mentre
+# cancellarla la farebbe soltanto ricreare al prossimo giro.
 
 # Reti salvate: una sola voce per rete, con le bande dentro.
 #
@@ -563,6 +604,92 @@ fi
 chmod 0755 /usr/share/travel/mwan3-setup.sh
 say "multi-WAN"
 sh /usr/share/travel/mwan3-setup.sh
+
+# IPv6 sulle WAN: una interfaccia logica esplicita per ognuna.
+#
+# Su OpenWrt 25.12 non esiste nessun altro modo, e la migrazione `ipv6_init`
+# piu' sopra da sola non accende niente. Verificato sul router:
+# /lib/netifd/proto/dhcp.sh non nomina mai l'opzione `ipv6`, e nessuno script in
+# /lib/netifd/proto/ crea alias `<net>_6` al volo. Senza una `config interface`
+# dedicata IPv6 su una WAN semplicemente non si alza - ed e' lo stesso motivo
+# per cui l'immagine di fabbrica porta gia' un `wan6` accanto a `wan`.
+#
+# STA DOPO mwan3-setup.sh, e non e' un dettaglio di ordinamento: le metriche
+# delle WAN v4 le assegna lui, e su un'installazione nuova prima del suo giro
+# non esistono. Piu' in alto ogni gemella nascerebbe con metrica 0 - tutte
+# uguali, tutte "migliori" - e siccome le sezioni si creano una volta sola,
+# quel valore sbagliato non lo correggerebbe piu' nessuno.
+for net in $(uci -q get "firewall.$WAN_ZONE.network"); do
+	[ -n "$(uci -q get "network.$net")" ] || continue
+	# Solo le WAN v4: cosi' `wan6` e le altre gemelle non generano una gemella
+	# della gemella.
+	[ "$(uci -q get "network.$net.proto")" = "dhcp" ] || continue
+
+	net6="${net}6"
+	if [ -n "$(uci -q get "network.$net6")" ]; then
+		say "interfaccia $net6 gia' presente"
+	else
+		say "creo l'interfaccia $net6 (DHCPv6 su $net)"
+		uci set "network.$net6=interface"
+		uci set "network.$net6.proto=dhcpv6"
+		# Il riferimento simbolico e non il nome del device: per una STA WiFi il
+		# device in uci non c'e' affatto - glielo assegna la sezione wireless -
+		# e cambia quando la radio si riassocia. Cosi' la gemella segue la
+		# sorella v4 dovunque vada.
+		uci set "network.$net6.device=@$net"
+		uci commit network
+		NEED_IPV6_NETWORK_RELOAD=1
+	fi
+
+	# La metrica si riallinea a OGNI giro, non solo alla creazione: quella della
+	# sorella v4 cambia ogni volta che si riordinano le priorita' delle WAN
+	# dall'interfaccia, e una gemella rimasta indietro manderebbe IPv6 fuori da
+	# una WAN diversa da IPv4. E' il guasto in cui "meta' del web carica", molto
+	# piu' difficile da diagnosticare di una caduta pulita.
+	#
+	# Vale anche per il `wan6` dell'immagine, che nasce con metrica 0: la sua
+	# metrica non e' una preferenza dell'utente, e' la meta' v6 di una coppia.
+	# `|| true` per la stessa ragione di `net_get` piu' sopra: con `set -e` una
+	# assegnazione da un'opzione che non c'e' ferma tutto lo script. E qui il
+	# caso non e' teorico - mwan3-setup.sh esce prima di assegnare le metriche
+	# quando mwan3 non e' installabile perche' manca Internet, e proprio allora
+	# saltare il resto del setup sarebbe il danno peggiore.
+	metric=$(uci -q get "network.$net.metric" 2>/dev/null || true)
+	if [ -n "$metric" ] && [ "$metric" != "$(uci -q get "network.$net6.metric" || true)" ]; then
+		say "$net6: metrica $metric, come $net"
+		uci set "network.$net6.metric=$metric"
+		uci commit network
+		NEED_IPV6_NETWORK_RELOAD=1
+	fi
+
+	# Senza zona firewall il traffico v6 verso la rete a monte non passa, e la
+	# WAN sembrerebbe su senza portare niente.
+	if [ -n "$WAN_ZONE" ]; then
+		if uci -q get "firewall.$WAN_ZONE.network" | tr ' ' '\n' | grep -qx "$net6"; then
+			say "$net6 gia' nella zona firewall wan"
+		else
+			say "aggiungo $net6 alla zona firewall wan"
+			uci add_list "firewall.$WAN_ZONE.network=$net6"
+			uci commit firewall
+			NEED_IPV6_FIREWALL_RELOAD=1
+		fi
+	else
+		say "ATTENZIONE: zona firewall 'wan' non trovata, $net6 non e' stata aggiunta"
+	fi
+done
+
+# Ricarica sua, perche' questo ciclo gira DOPO il blocco che ricarica rete e
+# firewall piu' in alto. Contatori separati e non i soliti NEED_*: quelli sono
+# gia' stati letti e riazzerare i loro non direbbe niente a nessuno, mentre
+# riusarli farebbe credere al prossimo lettore che il reload di sopra copra
+# anche questa parte.
+if [ "$NEED_IPV6_FIREWALL_RELOAD" = "1" ]; then
+	/etc/init.d/firewall reload >/dev/null 2>&1
+fi
+if [ "$NEED_IPV6_NETWORK_RELOAD" = "1" ]; then
+	say "ricarico la rete per le interfacce IPv6"
+	/etc/init.d/network reload >/dev/null 2>&1
+fi
 
 # VPN (Fase 6a): tailscale e la regola del kill switch. Come per il multi-WAN,
 # la mancanza di Internet non blocca il resto: lo script lo dice ed esce.
