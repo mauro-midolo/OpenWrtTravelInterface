@@ -1388,7 +1388,8 @@ fare.
 ### Backup, orologio e riavvio
 
 Il backup è l'archivio OpenWrt di `sysupgrade -b`, restituito in base64 tramite
-ubus e scaricato come `.tar.gz`. L'esportazione rifiuta archivi oltre 512 KiB.
+ubus e scaricato (la codifica la fa ucode: il busybox di OpenWrt 25.12 non ha
+l'applet `base64`) come `.tar.gz`. L'esportazione rifiuta archivi oltre 512 KiB.
 Il ripristino invia blocchi di 24 KiB di testo base64, con flag `first` e
 `last`; il router li decodifica in `/tmp/travel-restore.tar.gz`.
 Prima di `sysupgrade -r` controlla che il tar sia leggibile e contenga voci
@@ -1480,7 +1481,7 @@ le funzioni opzionali siano operative.
 | Multi-WAN | `mwan3`, `ip-full`, richiesti dal setup se mwan3 manca |
 | Tethering installato | `kmod-usb-net`, `kmod-usb-net-cdc-ncm`, `kmod-usb-net-rndis`, `kmod-usb-net-cdc-ether` |
 | VPN | `tailscale`, `wireguard-tools`, `luci-proto-wireguard`, con le rispettive dipendenze |
-| Portali e sistema | `nc` o `uclient-fetch`, `nslookup`, `base64`, `tar`, `sysupgrade`, `sysntpd`, `cron` |
+| Portali e sistema | `nc` o `uclient-fetch`, `nslookup`, `tar`, `sysupgrade`, `sysntpd`, `cron` |
 | Terminale web opzionale | `luci-app-ttyd`, richiesto da `-WithTtyd` |
 
 Gli AP usano il wpad del firmware; il setup non installa automaticamente una

@@ -4577,17 +4577,28 @@ BACKUP_RESTORE=/tmp/travel-restore.tar.gz
 # aspettando.
 BACKUP_MAX_KB=512
 
-# base64 e' un'applet di busybox e c'e' quasi sempre, ma "quasi" non basta per
-# una cosa che senza di lei produrrebbe un file scaricato e illeggibile.
+# Il base64 lo fa ucode, non l'applet `base64`: il busybox di OpenWrt 25.12
+# esce senza, mentre ucode con `fs` e' gia' nella base richiesta (lo usa LuCI).
+# Andata e ritorno passano dallo stesso codificatore, quello che c'e' sempre.
 have_base64() {
-	command -v base64 >/dev/null 2>&1
+	command -v ucode >/dev/null 2>&1
+}
+
+# Il file in $1, in base64 su una riga sola.
+b64_encode_file() {
+	ucode -e 'import { readfile } from "fs"; let d = readfile(ARGV[0]); if (d == null) exit(1); print(b64enc(d));' "$1"
+}
+
+# stdin in base64, decodificato su stdout; esce con errore se non si decodifica.
+b64_decode() {
+	ucode -e 'import { stdin } from "fs"; let d = b64dec(stdin.read("all")); if (d == null) exit(1); print(d);'
 }
 
 method_backup_export() {
-	local size
+	local size data
 
 	if ! have_base64; then
-		fail_json "manca il comando base64: scarica il backup da LuCI"
+		fail_json "manca ucode: scarica il backup da LuCI"
 		return
 	fi
 
@@ -4615,7 +4626,12 @@ method_backup_export() {
 	# cartella dei download sei mesi dopo.
 	json_add_string  name "backup-$(first_line /proc/sys/kernel/hostname)-$(date +%Y%m%d-%H%M).tar.gz"
 	json_add_int     size "$size"
-	json_add_string  data "$(base64 < "$BACKUP_FILE" | tr -d '\n')"
+	if ! data=$(b64_encode_file "$BACKUP_FILE"); then
+		rm -f "$BACKUP_FILE"
+		fail_json "codifica del backup fallita"
+		return
+	fi
+	json_add_string  data "$data"
 	json_dump
 
 	rm -f "$BACKUP_FILE"
@@ -4638,7 +4654,7 @@ method_backup_import() {
 	json_get_var first first
 	json_get_var last last
 
-	have_base64 || { fail_json "manca il comando base64: ripristina il backup da LuCI"; return; }
+	have_base64 || { fail_json "manca ucode: ripristina il backup da LuCI"; return; }
 	[ -n "$chunk" ] || { fail_json "pezzo vuoto"; return; }
 
 	# Solo l'alfabeto del base64: quello che arriva dalla rete non entra in un
@@ -4654,7 +4670,7 @@ method_backup_import() {
 
 	[ "$first" = "1" ] && rm -f "$BACKUP_RESTORE"
 
-	if ! printf '%s' "$chunk" | base64 -d >> "$BACKUP_RESTORE" 2>/dev/null; then
+	if ! printf '%s' "$chunk" | b64_decode >> "$BACKUP_RESTORE" 2>/dev/null; then
 		rm -f "$BACKUP_RESTORE"
 		fail_json "decodifica del pezzo fallita"
 		return
