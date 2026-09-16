@@ -2519,7 +2519,7 @@ method_portal_probe() {
 	netstat=$(ubus call "network.interface.$network" status 2>/dev/null)
 	device=$(printf '%s' "$netstat" | jsonfilter -e '@.l3_device')
 	address=$(printf '%s' "$netstat" | jsonfilter -e '@["ipv4-address"][0].address')
-	gateway=$(default_gateway "$netstat")
+	gateway=$(default_gateway "$netstat" "0.0.0.0")
 
 	if ! portal_split "$url"; then
 		reason="url-non-http"
