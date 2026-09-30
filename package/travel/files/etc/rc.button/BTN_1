@@ -1,0 +1,5 @@
+#!/bin/sh
+# I router da viaggio chiamano la levetta con nomi diversi (BTN_0 su un
+# modello, BTN_1 su un altro): il gestore e' uno solo, questi sono i nomi con
+# cui l'hotplug lo va a cercare.
+exec sh /usr/share/travel/toggle-button.sh

@@ -1,0 +1,7 @@
+#!/bin/sh /etc/rc.common
+# Dopo done (95) e led (96), che impostano a loro volta i LED al boot.
+START=99
+
+start() {
+	sh /usr/share/travel/led.sh apply || logger -t travel-led 'Ripristino del LED fallito'
+}

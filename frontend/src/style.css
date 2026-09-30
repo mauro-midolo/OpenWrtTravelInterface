@@ -1,0 +1,983 @@
+/*
+ * Base dell'interfaccia: mobile-first, una mano sola, leggibile in una hall
+ * d'albergo. Niente framework CSS — il foglio di stile viaggia in flash e va
+ * servito a un telefono da un router, quindi ogni KB e' visibile.
+ */
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --border: #dcdfe4;
+  --text: #14171a;
+  --text-muted: #5c6570;
+  --accent: #0b6bcb;
+  --accent-text: #ffffff;
+  --error-bg: #fdeaea;
+  --error-text: #a11212;
+  --info-bg: #eef4fd;
+  --info-text: #1d4e89;
+  --ok-bg: #e6f4ea;
+  --ok-text: #14632c;
+  --warn-bg: #fdf3e2;
+  --warn-text: #8a5300;
+
+  /* Bersaglio tattile minimo: si usa in piedi, con una mano, di fretta. */
+  --tap: 48px;
+  --radius: 12px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --surface: #1a1f25;
+    --border: #2c333b;
+    --text: #e8eaed;
+    --text-muted: #98a2ad;
+    --accent: #4d9bf0;
+    --accent-text: #0b1620;
+    --error-bg: #3a1d1d;
+    --error-text: #ff9b9b;
+    --info-bg: #16283d;
+    --info-text: #9cc4f5;
+    --ok-bg: #17301f;
+    --ok-text: #86d99f;
+    --warn-bg: #33280f;
+    --warn-text: #f0c476;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Evita lo zoom automatico di iOS quando si tocca un campo di testo. */
+  -webkit-text-size-adjust: 100%;
+}
+
+.screen {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.screen--centered {
+  min-height: 100dvh;
+  justify-content: center;
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Titolo con il tasto indietro accanto, quando la pagina e' aperta da un'altra.
+   La larghezza minima azzerata serve perche' sia il titolo ad accorciarsi,
+   invece di spingere fuori dalla barra il pulsante di destra. */
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Un pulsante che contiene un solo segno: il riempimento laterale dei pulsanti
+   di testo lo renderebbe largo il doppio del necessario, ma l'area toccabile
+   resta quella minima. */
+.button--icon {
+  min-width: var(--tap);
+  padding: 0 12px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row__label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  flex: none;
+}
+
+/* Il nome della riga con accanto uno stato che il router riporta e l'utente non
+   sceglie - la posizione dell'interruttore fisico. Flex solo qui e non su tutti
+   i nomi di riga: le altre portano solo testo, e non c'e' motivo di cambiare
+   come si appoggiano alla linea di base. */
+.row__label--state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  /* Accanto c'e' un menu, che e' largo quanto la sua voce piu' lunga: qui il
+     nome puo' andare a capo, altrimenti i due insieme escono dalla scheda. */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.row__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* Un interruttore al posto del valore: sta nella colonna di destra come
+   ci sta un numero, senza portarsi dietro una scheda intera. */
+label.row {
+  cursor: pointer;
+}
+
+label.row--readonly {
+  cursor: default;
+}
+
+.row__toggle {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  flex: none;
+  /* La riga allinea alla linea di base; una casella non ne ha una utile. */
+  align-self: center;
+  margin: 0;
+}
+
+.row__select {
+  max-width: 60%;
+  /* Senza, un elemento flex non scende sotto la larghezza del suo contenuto e
+     il max-width da solo non basta: la voce lunga si tronca invece di sbordare. */
+  min-width: 0;
+  flex: 0 1 auto;
+  align-self: center;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+}
+
+.login {
+  gap: 16px;
+}
+
+.login__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.login__lang {
+  min-height: 36px;
+  font-size: 0.9rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field > span {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+input {
+  min-height: var(--tap);
+  padding: 0 12px;
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+select {
+  min-height: var(--tap);
+  padding: 0 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* Una casella a piu' righe: i server NTP, uno per riga. Ha lo stesso peso
+   visivo delle altre caselle, altrimenti in mezzo a un modulo sembra un pezzo
+   di un'altra pagina. */
+textarea {
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* Solo in verticale: allargandola sfonderebbe la scheda su un telefono. */
+  resize: vertical;
+}
+
+/* La casella per scegliere un file ha dentro un pulsante disegnato dal
+   browser: senza altezza libera resta schiacciato. */
+input[type='file'] {
+  height: auto;
+  padding: 10px 12px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: var(--tap);
+  padding: 0 20px;
+  font: inherit;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+/* Un collegamento con l'aspetto di un pulsante.
+   Lo stile base sta sul selettore d'elemento `button`, che un <a> non eredita:
+   serve a LuCI, che e' una pagina diversa - quindi un link, non un'azione - ma
+   dentro la scheda deve avere lo stesso peso delle altre voci.
+   Niente `border-color` qui: la scriverebbe sopra quella di --ghost, che ha
+   specificita' minore. */
+a.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  padding: 0 20px;
+  font-weight: 600;
+  border-radius: 8px;
+  border-width: 1px;
+  border-style: solid;
+  text-decoration: none;
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.alert--error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.alert--info {
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+/* Messaggi che riportano un errore tecnico alla lettera: monospaziato, e
+   spezzabile perche' i nomi ubus non hanno spazi dove andare a capo. */
+.alert--code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.footnote {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+/* --- Barra delle schede -----------------------------------------------------
+   In basso e non in alto: e' la parte dello schermo che il pollice raggiunge
+   senza cambiare presa. */
+
+.tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Sopra al contenuto che scorre: i titoli di banda restano appiccicati in
+     alto con un livello proprio, e senza questo passerebbero davanti alla
+     barra invece di finirci sotto. */
+  z-index: 5;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Cinque voci su uno schermo da telefono.
+   `flex: 1 1 auto` e non `flex: 1`: le celle partono dalla larghezza del
+   proprio testo e si spartiscono lo spazio che avanza, invece di prendere tutte
+   lo stesso quinto. Con voci di lunghezza molto diversa - "LAN" contro
+   "Impostazioni" - la divisione in parti uguali darebbe a quella lunga meno
+   spazio di quanto le serve mentre a quella corta ne avanza.
+   `min-width: 0` resta necessario: senza, un elemento flex non scende comunque
+   sotto la larghezza del proprio contenuto e la barra deborda di lato. Il corpo
+   piu' piccolo e' la conseguenza; l'area toccabile no, quella sono i 56px di
+   altezza per tutta la larghezza della cella. */
+.tab {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 56px;
+  padding: 0 4px;
+  font-size: 13px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+}
+
+.tab--on {
+  color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* La barra e' fissa: il contenuto deve poterle scorrere sotto senza finirci
+   nascosto. */
+.app .screen {
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+}
+
+/* --- Elenco delle reti ------------------------------------------------------ */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 16px;
+  gap: 0;
+}
+
+.net {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  /* Riga alta quanto un bersaglio tattile: si tocca in movimento. */
+  min-height: var(--tap);
+  padding: 10px 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-weight: inherit;
+  text-align: left;
+}
+
+.list li:last-child .net {
+  border-bottom: none;
+}
+
+.net__main {
+  min-width: 0;
+}
+
+.net__ssid {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.net__ssid--hidden {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.net__meta {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.net__side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* Le targhette di una riga di scansione possono essere tre - collegata,
+   salvata, aperta - piu' il segnale, e su un telefono in fila non ci stanno:
+   vanno a capo verso destra invece di schiacciare il nome della rete, che e'
+   la colonna lungo cui si scorre. */
+.net__side--wrap {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+.signal-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.signal-group__dbm {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.signal {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.signal__bar {
+  width: 3px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.signal__bar:nth-child(1) { height: 25%; }
+.signal__bar:nth-child(2) { height: 50%; }
+.signal__bar:nth-child(3) { height: 75%; }
+.signal__bar:nth-child(4) { height: 100%; }
+
+.signal__bar--on {
+  background: var(--accent);
+}
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.badge--warn {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+/* Le bande su cui vale una rete salvata. Sono un dato di configurazione, non
+   uno stato: si leggono a colpo d'occhio scorrendo l'elenco - "2.4", "5" o
+   tutte e due - senza gridare come farebbe un avviso. Il colore dell'accento
+   perche' e' la cosa che si va a cercare in quella riga. */
+.badge--band {
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+/* Un fatto che non e' ne' un problema ne' una conferma: "nascosta" dice com'e'
+   fatta la rete, non come sta andando. Colorata come un avviso si sarebbe letta
+   come un guasto. */
+.badge--muted {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+/* --- Filtri ----------------------------------------------------------------- */
+
+.chips {
+  display: flex;
+  gap: 8px;
+}
+
+.chip {
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.chip--on {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.badge--ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.alert--ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+/* --- Foglio di conferma -----------------------------------------------------
+   Ancorato in basso e non centrato: nasce vicino al pollice, e il conto alla
+   rovescia resta visibile anche con la tastiera aperta. */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 10;
+}
+
+.sheet__panel {
+  width: 100%;
+  max-width: 640px;
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+
+.sheet__panel form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sheet__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.sheet__actions .button {
+  flex: 1;
+}
+
+.countdown {
+  font-size: 2.5rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0;
+}
+
+.alert--warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- Scheda di una radio ---------------------------------------------------- */
+
+.radio__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Titoli che sono nomi, non etichette di sezione: vanno letti come tali. */
+.radio__title,
+.uplink__title {
+  font-size: 1.05rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+/* --- Uplink: uno per radio -------------------------------------------------
+   Il bordo colorato dice a colpo d'occhio se quella radio sta portando
+   traffico, senza dover leggere. */
+
+.uplink {
+  border-left: 4px solid var(--border);
+}
+
+.uplink--addressed {
+  border-left-color: var(--ok-text);
+}
+
+.uplink--no-address {
+  border-left-color: var(--warn-text);
+}
+
+.uplink--unassociated,
+.uplink--disabled {
+  border-left-color: var(--error-text);
+}
+
+.radio__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.radio__actions .button {
+  flex: 1;
+  min-width: 150px;
+}
+
+/* L'elenco vive gia' dentro la scheda della radio: niente cornice doppia. */
+.list--flush {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* --- Scelta del MAC --------------------------------------------------------- */
+
+/* --- Nodi di una VPN --------------------------------------------------------
+   Elenco che puo' essere lungo: nome corto a sinistra, indirizzo a destra
+   incolonnato, e un pallino per lo stato. Il pallino da solo non basta - chi
+   non distingue i colori vedrebbe due cerchi uguali - quindi lo stato viene
+   detto anche a parole nell'etichetta di accessibilita'. */
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.node:last-child {
+  border-bottom: none;
+}
+
+.node__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node__ip {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+
+.dot--on {
+  background: var(--ok-text);
+}
+
+.mac-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mac-row code {
+  flex: 1;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.check input {
+  /* Casella grande abbastanza da centrarla col pollice al primo colpo. */
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  flex: none;
+  margin-top: 1px;
+}
+
+/* --- Cronologia eventi -------------------------------------------------------
+   Righe corte con il "quando" allineato: si scorre con l'occhio senza leggere
+   ogni parola. */
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.events__when {
+  display: inline-block;
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* --- Porte ethernet ----------------------------------------------------------
+   Riga con il nome della porta a sinistra e il comando a destra: si legge
+   com'e' messa e si cambia senza aprire altro. */
+
+.port {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.port:last-of-type {
+  border-bottom: none;
+}
+
+.port__main {
+  min-width: 0;
+}
+
+/* Due comandi in coda alla riga di una porta - il MAC e il ruolo. Su uno
+   schermo stretto vanno a capo fra loro invece di schiacciare il nome della
+   porta, che e' l'unica cosa che permette di riconoscerla. */
+.port__controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+}
+
+/* Da dove entra un dispositivo, in fondo alla sua riga. Non si spezza su due
+   righe: "Access point 2.4 GHz" letto a meta' non dice piu' niente. */
+
+.port__from {
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* --- Intervallo Da/A ---------------------------------------------------------
+   Due caselle piccole con le etichette in linea: si legge come una frase, non
+   come due campi scollegati. */
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range__label {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.range__box {
+  width: 5.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Comandi in coda a una riga di WAN: frecce o peso, sempre a destra. */
+.wan-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.wan-controls .button {
+  min-width: 48px;
+  padding: 0 10px;
+}
+
+/* --- Gruppi dentro una scheda -----------------------------------------------
+   Le reti salvate sono divise per banda. Il titolo del gruppo deve leggersi
+   come una suddivisione della scheda, non come una scheda nuova: piu' leggero
+   del titolo della scheda, con aria sopra per staccarlo dal gruppo precedente
+   e non dal proprio elenco. */
+
+.group__title {
+  margin: 18px 0 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.group__title:first-of-type {
+  margin-top: 12px;
+}
+
+/* --- Reti salvate: la pagina dedicata ---------------------------------------
+   L'elenco puo' essere lungo - una rete per ogni posto in cui si e' dormito -
+   e va letto scorrendo, non leggendo. Da qui in giu' tutto serve a una cosa
+   sola: che ogni riga sia alta come le altre e dica le stesse cose nello stesso
+   posto, cosi' l'occhio scende lungo la colonna dei nomi senza rimettersi a
+   fuoco a ogni voce. */
+
+/* La posizione per priorita', davanti al nome. Larghezza fissa: incolonnati,
+   i numeri si saltano con l'occhio invece di doverli leggere, e i nomi partono
+   tutti dallo stesso punto. */
+.saved__rank {
+  display: inline-block;
+  min-width: 1.6em;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Nome e riga di dettaglio non vanno a capo: una riga d'elenco che cresce
+   perche' la nota e' lunga romperebbe il passo con cui si scorre. Quello che
+   qui viene tagliato si legge per intero aprendo la rete. */
+.saved__ssid,
+.saved__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* Le targhette possono essere cinque - le due bande, collegata, nascosta,
+   disattivata - e su uno schermo stretto non ci stanno in fila: vanno a capo
+   verso destra invece di schiacciare il nome. */
+.saved__badges {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+/* Una riga sola dentro la sua scheda: la riga di separazione in fondo non
+   separerebbe da niente, perche' sotto c'e' gia' il bordo della scheda. */
+.net--link {
+  border-bottom: none;
+}
+
+/* --- Condivisione di una rete ------------------------------------------------
+   Il QR va inquadrato da un altro telefono: deve essere grande abbastanza da
+   leggersi a mezzo metro e restare quadrato, e non deve seguire il tema. */
+
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+  /* Il bianco esce dal disegno e circonda il codice: la zona di quiete deve
+     restare chiara anche quando la scheda sotto e' scura. */
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.qr {
+  /* Non piu' larga della scheda, e non cosi' piccola da non leggersi: su un
+     telefono in verticale sono circa 260px. */
+  width: min(260px, 100%);
+  height: auto;
+  display: block;
+}
+
+/* Una password mostrata: monospaziata perche' si legge carattere per
+   carattere, e spezzabile perche' non ha spazi dove andare a capo. */
+.secret {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.05rem;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  /* Si seleziona col dito per copiarla: e' l'alternativa al QR per chi ha un
+     dispositivo senza fotocamera. */
+  user-select: all;
+}
+
+/* I pallini al posto della password: non sono un testo da selezionare. */
+.secret--masked {
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* Il segno che una riga porta da qualche parte invece di aprire un foglio. */
+.chevron {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-muted);
+}

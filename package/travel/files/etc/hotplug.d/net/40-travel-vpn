@@ -1,0 +1,36 @@
+#!/bin/sh
+# Rimette a posto l'instradamento dei tunnel ogni volta che uno di essi compare.
+#
+# Serve perche' i pezzi che fanno funzionare una VPN vivono in RAM e sono legati
+# all'interfaccia: per Tailscale la rotta verso il tailnet in tabella 52 e
+# l'inoltro su `conf/tailscale0/forwarding`, per WireGuard la rotta predefinita
+# in tabella 53 e la regola che ci manda il traffico. Quando il demone si
+# riavvia - aggiornamento del pacchetto, `down` e `up`, un crash - il device
+# sparisce e si porta via tutto.
+#
+# Senza questo, la VPN smetteva di funzionare in silenzio fino al riavvio
+# successivo: niente errori, niente log, solo traffico che non passa piu'. E' il
+# modo peggiore di rompersi, e lo stesso che ha reso difficile trovare il guasto
+# la prima volta.
+#
+# Vale anche per la PRIMA accensione, ed e' li' che si e' visto: netifd alza
+# l'interfaccia qualche istante dopo aver risposto, e chi aveva appena acceso il
+# tunnel scriveva l'instradamento troppo presto. Il metodo che accende adesso
+# aspetta il device, ma questo hotplug e' la rete di sicurezza che non dipende
+# da quell'attesa.
+
+# `travel_wg` senza numero e' il tunnel unico delle versioni precedenti; i
+# profili salvati dopo si chiamano `travel_wg1`, `travel_wg2`... Ne puo' salire
+# uno solo alla volta, ma quale non si sa in anticipo: il filtro li prende tutti.
+case "$DEVICENAME" in
+	tailscale0|travel_wg|travel_wg[0-9]*) ;;
+	*) exit 0 ;;
+esac
+
+[ "$ACTION" = "add" ] || exit 0
+
+# `runtime` fa tutti i passi, ed e' lo stesso codice che gira al boot dall'init
+# e dopo ogni accesso dal plugin rpcd. Un posto solo: se un giorno serve un
+# passo in piu', non ci sono tre copie da ricordare.
+logger -t travel-vpn "$DEVICENAME comparsa: riapplico instradamento e inoltro"
+sh /usr/share/travel/vpn-setup.sh runtime >/dev/null 2>&1
