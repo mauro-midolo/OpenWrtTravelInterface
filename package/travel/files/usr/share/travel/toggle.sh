@@ -288,11 +288,65 @@ toggle_set() (
 
 # --- Posizione rilevata ------------------------------------------------------
 
+# Dov'e' la levetta adesso, chiesto al kernel invece che a un evento.
+#
+# Serve perche' l'evento non arriva quando servirebbe: verificato sul
+# GL-MT3600BE, al boot procd non ne manda nessuno per la levetta ferma, e il file
+# della posizione sparisce a ogni riavvio e a ogni deploy. Restava `unknown`
+# finche' qualcuno non la muoveva - e una levetta spostata a router spento non
+# veniva mai applicata.
+#
+# La levetta e' il gpio-keys con codice BTN_0 o BTN_1 (gli stessi nomi di
+# /etc/rc.button). Il suo livello lo dice debugfs, grezzo: `ACTIVE LOW` lo
+# inverte. Attiva = "pressed" = off, come in toggle-button.sh. Qualunque pezzo
+# manchi - debugfs, hexdump, il nodo - si risponde "non lo so", che e' com'era.
+toggle_kernel_position() {
+	local prop node code label line active
+
+	[ -r /sys/kernel/debug/gpio ] || return 1
+	command -v hexdump >/dev/null 2>&1 || return 1
+
+	for prop in $(find /sys/firmware/devicetree/base -maxdepth 3 -name 'linux,code' 2>/dev/null); do
+		node="${prop%/*}"
+		code=$(hexdump -ve '1/1 "%02x"' "$prop" 2>/dev/null)
+		case "$code" in
+			00000100|00000101) ;;
+			*) continue ;;
+		esac
+		label=$(tr -d '\000' < "$node/label" 2>/dev/null)
+		[ -n "$label" ] || continue
+		# La riga ha il consumatore fra `|` e `)`, allineato con spazi.
+		line=$(awk -v want="$label" '{
+			split($0, a, "|"); c = a[2]; sub(/\).*/, "", c); gsub(/ +$/, "", c)
+			if (c == want) { print; exit }
+		}' /sys/kernel/debug/gpio)
+		[ -n "$line" ] || continue
+		case "$line" in
+			*" hi"*) active=1 ;;
+			*" lo"*) active=0 ;;
+			*) continue ;;
+		esac
+		case "$line" in
+			*"ACTIVE LOW"*) active=$((1 - active)) ;;
+		esac
+		[ "$active" -eq 1 ] && printf 'off' || printf 'on'
+		return 0
+	done
+
+	return 1
+}
+
 # Sta in /var/run e non in /etc/config perche' non e' una preferenza: e' dove
-# si trova adesso una levetta. Dopo un riavvio la riporta il primo evento.
+# si trova adesso una levetta. Dopo un riavvio la riporta il primo evento, o il
+# kernel se l'evento non arriva.
 toggle_position() {
 	TOGGLE_POSITION=unknown
-	[ -r "$TOGGLE_POSITION_FILE" ] || return 0
+	if [ ! -r "$TOGGLE_POSITION_FILE" ]; then
+		TOGGLE_POSITION=$(toggle_kernel_position) || TOGGLE_POSITION=unknown
+		[ "$TOGGLE_POSITION" = unknown ] ||
+			printf '%s\n' "$TOGGLE_POSITION" > "$TOGGLE_POSITION_FILE" 2>/dev/null
+		return 0
+	fi
 	read -r TOGGLE_POSITION < "$TOGGLE_POSITION_FILE" 2>/dev/null
 	case "$TOGGLE_POSITION" in
 		on|off) ;;

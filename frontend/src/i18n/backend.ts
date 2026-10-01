@@ -88,6 +88,7 @@ export const backendText = defineText<Record<string, Format>>({
     // WireGuard
     wg_empty_config: () => 'configurazione vuota',
     wg_unknown: () => 'configurazione WireGuard sconosciuta',
+    wg_bad_state: () => 'stato richiesto non valido: deve essere acceso o spento',
     wg_too_many: () => 'troppe configurazioni WireGuard salvate',
     wg_name_taken: () => 'esiste già una configurazione WireGuard con questo nome',
     wg_delete_active: () => 'è la configurazione attiva: disattivala prima di eliminarla',
@@ -214,6 +215,7 @@ export const backendText = defineText<Record<string, Format>>({
     // WireGuard
     wg_empty_config: () => 'empty configuration',
     wg_unknown: () => 'unknown WireGuard configuration',
+    wg_bad_state: () => 'invalid requested state: it must be on or off',
     wg_too_many: () => 'too many saved WireGuard configurations',
     wg_name_taken: () => 'a WireGuard configuration with this name already exists',
     wg_delete_active: () => 'it is the active configuration: deactivate it before deleting it',

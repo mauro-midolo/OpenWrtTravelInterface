@@ -710,8 +710,18 @@ rm -f /var/run/travel-toggle.position
 
 say "riavvio rpcd"
 /etc/init.d/rpcd restart
-# rpcd rilegge i plugin all'avvio: piccola attesa prima dello smoke test.
-sleep 2
+# Si aspetta che il plugin risponda davvero, con tentativi brevi, invece di una
+# pausa fissa. Il riavvio torna prima che il vecchio rpcd sia morto - spesso va
+# finito con SIGKILL, perche' sta servendo una chiamata lenta di travelD - e
+# finche' c'e' l'oggetto `travel` resta suo: una chiamata partita in quel
+# momento aspettava tutti i 30 secondi del timeout e faceva fallire il deploy
+# a installazione gia' completa.
+_tries=0
+until ubus -t 3 call travel status >/dev/null 2>&1; do
+	_tries=$((_tries + 1))
+	[ "$_tries" -lt 10 ] || break
+	sleep 1
+done
 
 if [ "$NEED_UHTTPD_RELOAD" = "1" ]; then
 	say "ricarico uhttpd"

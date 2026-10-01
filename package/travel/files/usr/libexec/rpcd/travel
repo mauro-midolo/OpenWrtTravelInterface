@@ -3900,15 +3900,16 @@ wg_write() {
 wg_config_json() {
 	local section="$1"
 
-	json_add_string  addresses  "$(uci -q get "network.$section.addresses" | tr '\n' ' ')"
+	# Senza lo spazio in coda che `tr` lasciava al posto dell'a capo finale.
+	json_add_string  addresses  "$(uci -q get "network.$section.addresses" | tr '\n' ' ' | sed 's/ *$//')"
 	json_add_string  mtu        "$(uci -q get "network.$section.mtu")"
-	json_add_string  dns        "$(uci -q get "network.$section.dns" | tr '\n' ' ')"
+	json_add_string  dns        "$(uci -q get "network.$section.dns" | tr '\n' ' ' | sed 's/ *$//')"
 	json_add_boolean has_private_key "$([ -n "$(uci -q get "network.$section.private_key")" ] && echo 1 || echo 0)"
 	json_add_string  peer_key   "$(uci -q get "network.${section}_peer.public_key")"
 	json_add_boolean has_preshared "$([ -n "$(uci -q get "network.${section}_peer.preshared_key")" ] && echo 1 || echo 0)"
 	json_add_string  endpoint   "$(uci -q get "network.${section}_peer.endpoint_host")"
 	json_add_string  port       "$(uci -q get "network.${section}_peer.endpoint_port")"
-	json_add_string  allowed_ips "$(uci -q get "network.${section}_peer.allowed_ips" | tr '\n' ' ')"
+	json_add_string  allowed_ips "$(uci -q get "network.${section}_peer.allowed_ips" | tr '\n' ' ' | sed 's/ *$//')"
 	json_add_string  keepalive  "$(uci -q get "network.${section}_peer.persistent_keepalive")"
 }
 
@@ -4040,7 +4041,15 @@ method_wg_toggle() {
 	# dire quale spegne quello acceso e il nome poi va ripetuto qui sotto.
 	busy=$(wg_active) || busy=""
 
-	if [ "$want" = "1" ] || [ "$want" = "true" ]; then
+	# Solo valori espliciti. Prima qualunque altra cosa - un campo mancante, un
+	# refuso - valeva "spegni", e spegneva davvero il tunnel acceso.
+	case "$want" in
+		1|true)  want=on ;;
+		0|false) want=off ;;
+		*) fail_code wg_bad_state "invalid requested state: it must be on or off"; return ;;
+	esac
+
+	if [ "$want" = on ]; then
 		error=$(wg_switch "$id" on ui 2>&1) || { fail_helper "$error"; return; }
 	else
 		error=$(wg_switch "$id" off ui 2>&1) || { fail_helper "$error"; return; }

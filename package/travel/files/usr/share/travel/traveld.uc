@@ -60,6 +60,22 @@ if (!ubus) die("missing module ubus");
 if (!uci) die("missing module uci");
 if (!fs) die("missing module fs");
 
+// Facoltativo: senza, i messaggi tornano su stderr com'era.
+const log = tryRequire('log');
+
+if (log)
+	log.openlog("traveld", log.LOG_PID, log.LOG_DAEMON);
+
+// Al syslog con la sua priorita'. Su stderr procd registra tutto come
+// `daemon.err`, e "Internet reachable" finiva fra gli errori: chi cerca un
+// guasto con `logread | grep err` trovava soprattutto le cose andate bene.
+function say(warning, message) {
+	if (log)
+		log.syslog(warning ? log.LOG_WARNING : log.LOG_NOTICE, "%s", message);
+	else
+		warn("traveld: " + message + "\n");
+}
+
 const started = time();
 let ticks = 0;
 let lastError = "";
@@ -95,7 +111,7 @@ function note(kind, message, code, params) {
 	unshift(events, event);
 	while (length(events) > MAX_EVENTS)
 		pop(events);
-	warn("traveld: " + kind + ": " + message + "\n");
+	say(kind == 'errore' || kind == 'fallita', kind + ": " + message);
 }
 
 // --- Configurazione ----------------------------------------------------------
@@ -1214,7 +1230,7 @@ uloop.timer(TICK_MS, function() {
 	this.set(TICK_MS);
 });
 
-warn("traveld " + VERSION + ": avviato\n");
+say(false, "version " + VERSION + " started");
 
 uloop.run();
 uloop.done();
