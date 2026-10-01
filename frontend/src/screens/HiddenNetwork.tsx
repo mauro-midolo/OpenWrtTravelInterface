@@ -13,6 +13,8 @@
  * il caso normale per una rete d'ufficio.
  */
 
+import { commonText } from '../i18n/common';
+import { hiddenText } from '../i18n/hidden';
 import { useState } from 'preact/hooks';
 import {
   BANDS,
@@ -48,6 +50,7 @@ export function HiddenSheet({
    * una banda che valga come testimone.
    */
   const [bands, setBands] = useState<BandSet>(() => bandsFromScan(initialBand));
+  const t = hiddenText();
   const [encryption, setEncryption] = useState<string>('psk2');
   const [password, setPassword] = useState('');
   const [note, setNote] = useState('');
@@ -105,18 +108,18 @@ export function HiddenSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Aggiungi rete nascosta</h2>
+        <h2>{t.title}</h2>
 
         <form onSubmit={save}>
           <label class="field">
-            <span>Nome della rete (SSID)</span>
+            <span>{t.ssid}</span>
             <input
               type="text"
               value={ssid}
               autocomplete="off"
               autocapitalize="none"
               spellcheck={false}
-              placeholder="esattamente com'è scritto"
+              placeholder={t.ssidPlaceholder}
               onInput={(e) => setSsid((e.target as HTMLInputElement).value)}
             />
           </label>
@@ -124,11 +127,11 @@ export function HiddenSheet({
           {/* Errori solo su un campo gia' toccato: dire "obbligatorio" su una
               casella ancora vuota accusa di un errore non ancora commesso. */}
           {ssid !== '' && !ssidOk && (
-            <p class="alert alert--error">Il nome può essere lungo al massimo 32 byte.</p>
+            <p class="alert alert--error">{t.ssidTooLong}</p>
           )}
 
           <div class="field">
-            <span id="banda-nascosta">Bande</span>
+            <span id="banda-nascosta">{t.bands}</span>
             <div role="group" aria-labelledby="banda-nascosta">
               {BANDS.map((entry) => (
                 <label class="check" key={entry}>
@@ -146,13 +149,11 @@ export function HiddenSheet({
           </div>
 
           {!hasAnyBand(bands) && (
-            <p class="alert alert--error">
-              Scegli almeno una banda.
-            </p>
+            <p class="alert alert--error">{t.pickBand}</p>
           )}
 
           <label class="field">
-            <span>Sicurezza</span>
+            <span>{t.security}</span>
             <select
               value={encryption}
               onChange={(e) => setEncryption((e.target as HTMLSelectElement).value)}
@@ -170,36 +171,34 @@ export function HiddenSheet({
               disattivata a far chiedere cosa manchi. */}
           {wantsKey && (
             <label class="field">
-              <span>Password</span>
+              <span>{t.password}</span>
               <input
                 type="password"
                 value={password}
                 autocomplete="new-password"
-                placeholder="almeno 8 caratteri"
+                placeholder={t.minPassword}
                 onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
               />
             </label>
           )}
 
           {wantsKey && password !== '' && !passwordOk && (
-            <p class="alert alert--error">
-              La password deve essere fra 8 e 63 caratteri.
-            </p>
+            <p class="alert alert--error">{t.badPassword}</p>
           )}
 
           <label class="field">
-            <span>Nota (facoltativa)</span>
+            <span>{t.note}</span>
             <input
               type="text"
               value={note}
-              placeholder="es. rete dell'ufficio"
+              placeholder={t.notePlaceholder}
               onInput={(e) => setNote((e.target as HTMLInputElement).value)}
             />
           </label>
 
           {conflicts.map(({ band, net }) => (
             <p class="alert alert--warn" key={band}>
-              «{net.ssid}» è già salvata a {bandLabel(band)}: modificala dalle reti salvate.
+              {t.conflict(net.ssid, bandLabel(band))}
             </p>
           ))}
 
@@ -207,10 +206,10 @@ export function HiddenSheet({
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {commonText().actions.cancel}
             </button>
             <button class="button button--primary" type="submit" disabled={!canSave}>
-              Salva
+              {commonText().actions.save}
             </button>
           </div>
         </form>

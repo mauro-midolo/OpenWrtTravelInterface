@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isValidElement } from 'preact';
 import { browserLang, defineText, detectLang, getLang, locale, onLangChange, setLang } from '../src/i18n';
 import { commonText } from '../src/i18n/common';
 
@@ -72,19 +73,20 @@ describe('setLang', () => {
 
 /** Le chiavi di un dizionario, con i percorsi annidati. */
 function keys(value: unknown, prefix = ''): string[] {
-  if (value === null || typeof value !== 'object') return [prefix];
+  // Un pezzo di JSX e' un testo, non un ramo del dizionario.
+  if (value === null || typeof value !== 'object' || isValidElement(value)) return [prefix];
   return Object.entries(value as Record<string, unknown>)
     .flatMap(([key, child]) => keys(child, prefix ? `${prefix}.${key}` : key))
     .sort();
 }
 
 function values(value: unknown): unknown[] {
-  if (value === null || typeof value !== 'object') return [value];
+  if (value === null || typeof value !== 'object' || isValidElement(value)) return [value];
   return Object.values(value as Record<string, unknown>).flatMap(values);
 }
 
 describe('dictionaries', () => {
-  const modules = import.meta.glob('../src/i18n/*.ts', { eager: true }) as Record<
+  const modules = import.meta.glob('../src/i18n/*.{ts,tsx}', { eager: true }) as Record<
     string,
     Record<string, unknown>
   >;

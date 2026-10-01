@@ -6,6 +6,7 @@
  * dallo stesso meccanismo di applica-e-conferma che usa LuCI (decisione D5).
  */
 
+import { networksText } from '../i18n/networks';
 import { call } from './ubus';
 import { maskToPrefix, prefixToMask } from './ip';
 import { stageWanHostname } from './hostname';
@@ -335,7 +336,7 @@ export async function scanRadio(radio: Radio): Promise<ScanResult[]> {
     SCAN_TIMEOUT_MS,
   );
 
-  if (response.error) throw new Error(`Scansione su ${radio.band ?? radio.name} GHz: ${response.error}`);
+  if (response.error) throw new Error(networksText().scanFailed(radio.band ?? radio.name, response.error));
 
   const found = (response.results ?? [])
     // Un'interfaccia temporanea puo' vedere entrambe le bande: qui interessa
@@ -589,9 +590,7 @@ export async function stageConnection(
 /** Prepara l'accensione o lo spegnimento dell'access point su una radio. */
 export async function stageApEnabled(radio: Radio, enabled: boolean): Promise<void> {
   if (!radio.apSection) {
-    throw new Error(
-      `Nessun access point configurato su ${radio.name}. Rilancia tools\\setup-ap.ps1.`,
-    );
+    throw new Error(networksText().noAp(radio.name));
   }
   await call('uci', 'set', {
     config: 'wireless',
@@ -665,18 +664,30 @@ export interface ApSection {
 export const AP_ENCRYPTIONS = [
   {
     value: 'sae-mixed',
-    label: 'WPA2 + WPA3 (consigliato)',
-    note: 'Compatibile con tutto, usa WPA3 dove il dispositivo lo supporta.',
+    get label() {
+      return networksText().enc.apSaeMixed.label;
+    },
+    get note() {
+      return networksText().enc.apSaeMixed.note;
+    },
   },
   {
     value: 'sae',
-    label: 'WPA3',
-    note: "Il piu' sicuro. I dispositivi anteriori al 2019 circa non si collegano.",
+    get label() {
+      return networksText().enc.apSae.label;
+    },
+    get note() {
+      return networksText().enc.apSae.note;
+    },
   },
   {
     value: 'psk2',
-    label: 'WPA2',
-    note: 'Lo standard classico, compatibile con qualunque dispositivo recente.',
+    get label() {
+      return networksText().enc.apPsk2.label;
+    },
+    get note() {
+      return networksText().enc.apPsk2.note;
+    },
   },
 ] as const;
 
@@ -692,26 +703,42 @@ export const AP_ENCRYPTIONS = [
 export const STA_ENCRYPTIONS = [
   {
     value: 'psk2',
-    label: 'WPA2',
-    note: 'Il caso normale: quasi tutte le reti protette di oggi.',
+    get label() {
+      return networksText().enc.staPsk2.label;
+    },
+    get note() {
+      return networksText().enc.staPsk2.note;
+    },
     needsKey: true,
   },
   {
     value: 'sae-mixed',
-    label: 'WPA2 / WPA3',
-    note: 'Reti che accettano entrambi. Se WPA2 non basta, di solito è questa.',
+    get label() {
+      return networksText().enc.staSaeMixed.label;
+    },
+    get note() {
+      return networksText().enc.staSaeMixed.note;
+    },
     needsKey: true,
   },
   {
     value: 'sae',
-    label: 'WPA3',
-    note: 'Solo WPA3. Una rete così rifiuta i dispositivi più vecchi.',
+    get label() {
+      return networksText().enc.staSae.label;
+    },
+    get note() {
+      return networksText().enc.staSae.note;
+    },
     needsKey: true,
   },
   {
     value: 'none',
-    label: 'Nessuna (rete aperta)',
-    note: 'Senza password. Il traffico viaggia in chiaro fino al punto di accesso.',
+    get label() {
+      return networksText().enc.staNone.label;
+    },
+    get note() {
+      return networksText().enc.staNone.note;
+    },
     needsKey: false,
   },
 ] as const;
@@ -727,7 +754,7 @@ export function encryptionLabel(value: string): string {
   // "none" in mezzo a etichette italiane. Non sta in AP_ENCRYPTIONS perche'
   // quell'elenco riempie la scelta della cifratura dell'access point, e un
   // access point aperto non e' un'opzione da offrire.
-  if (value === 'none') return 'Aperta';
+  if (value === 'none') return networksText().open;
   return AP_ENCRYPTIONS.find((e) => e.value === value)?.label ?? value ?? '—';
 }
 

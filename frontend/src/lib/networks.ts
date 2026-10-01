@@ -17,6 +17,7 @@
  * e non della rete.
  */
 
+import { networksText } from '../i18n/networks';
 import { call } from './ubus';
 import type { ShareInput } from './share';
 import { HOSTNAME_OFF } from './hostname';
@@ -152,8 +153,8 @@ export function bandLabel(band: Band | string): string {
 /** Le bande di una rete, in una frase: "2.4 e 5 GHz". */
 export function bandsLabel(bands: BandSet): string {
   const list = bandList(bands);
-  if (list.length === 0) return 'nessuna banda';
-  if (list.length === BANDS.length) return '2.4 e 5 GHz';
+  if (list.length === 0) return networksText().noBand;
+  if (list.length === BANDS.length) return networksText().bothBands;
   return bandLabel(list[0]);
 }
 
@@ -498,7 +499,7 @@ export async function readShareNetwork(section: string): Promise<ShareInput & { 
   if (values?.['.type'] !== 'network' || typeof values.ssid !== 'string' ||
       typeof values.encryption !== 'string' ||
       (values.key !== undefined && typeof values.key !== 'string')) {
-    throw new Error('Impossibile leggere i dati della rete salvata.');
+    throw new Error(networksText().unreadableSaved);
   }
   return {
     ssid: values.ssid,

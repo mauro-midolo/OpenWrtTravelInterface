@@ -31,15 +31,18 @@ import { ApCard, ApSheet } from './AccessPoint';
 import { SavedEntryCard, SavedNetworksScreen } from './SavedNetworks';
 import { HiddenSheet } from './HiddenNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
-import { PORTAL_LABEL, getPortals, portalLoginUrl } from '../lib/portal';
+import { getPortals, portalLabel, portalLoginUrl } from '../lib/portal';
+import { commonText } from '../i18n/common';
+import { wifiText } from '../i18n/wifi';
 import type { PortalResult, PortalStatus } from '../lib/portal';
 
 function Signal({ dbm }: { dbm: number }) {
+  const t = wifiText();
   const bars = signalBars(dbm);
   return (
     // Il numero accanto alle tacche: su un telefono il tooltip non esiste, e
     // fra due reti "a tre tacche" il dBm e' l'unica cosa che le distingue.
-    <span class="signal-group" aria-label={`segnale ${dbm} dBm`}>
+    <span class="signal-group" aria-label={t.signal(dbm)}>
       <span class="signal-group__dbm">{dbm}</span>
       <span class="signal" aria-hidden="true">
         {[1, 2, 3, 4].map((n) => (
@@ -68,20 +71,22 @@ function Row({ label, value }: { label: string; value: string }) {
  * il titolo continua a parlare del solo collegamento, che e' cio' che sa.
  */
 function uplinkTitle(uplink: Uplink, state: UplinkState): string {
-  const band = uplink.band ? `WiFi ${uplink.band} GHz` : `WiFi ${uplink.radio}`;
+  const t = wifiText().uplink;
+  const band = uplink.band ? t.band(uplink.band) : t.radio(uplink.radio);
   switch (state) {
     case 'addressed':
-      return `Connesso tramite ${band}`;
+      return t.addressed(band);
     case 'no-address':
-      return `${band} senza indirizzo`;
+      return t.noAddress(band);
     case 'disabled':
-      return `${band} disattivata`;
+      return t.disabled(band);
     default:
-      return `${band} non agganciata`;
+      return t.notAssociated(band);
   }
 }
 
 function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult | null }) {
+  const t = wifiText().uplink;
   const state = uplinkState(uplink);
 
   return (
@@ -93,12 +98,12 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
           nella scheda Internet, che e' dove si va quando qualcosa non va. */}
       {state === 'addressed' && portal && (
         <p class={portal.state === 'online' ? 'alert alert--ok' : 'alert alert--warn'}>
-          {PORTAL_LABEL[portal.state]}
+          {portalLabel(portal.state)}
           {portal.state === 'portal' && portalLoginUrl(portal) && (
             <>
               {' — '}
               <a href={portalLoginUrl(portal)} target="_blank" rel="noreferrer">
-                apri la pagina di accesso
+                {t.openLogin}
               </a>
             </>
           )}
@@ -107,20 +112,20 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
 
       {state === 'addressed' || state === 'no-address' ? (
         <>
-          <Row label="Rete" value={uplink.ssid ?? '—'} />
+          <Row label={t.network} value={uplink.ssid ?? '—'} />
           {/* "nessuno" accanto a un IPv6 che funziona direbbe una cosa falsa:
               su un uplink v6-only la riga si qualifica e mostra un trattino. */}
           <Row
-            label={uplink.ipv6.length > 0 ? 'Indirizzo IPv4' : 'Indirizzo'}
-            value={uplink.ipv4 || (uplink.ipv6.length > 0 ? '—' : 'nessuno')}
+            label={uplink.ipv6.length > 0 ? t.address4 : t.address}
+            value={uplink.ipv4 || (uplink.ipv6.length > 0 ? '—' : t.none)}
           />
-          <Row label="Gateway" value={uplink.gateway || '—'} />
-          <Row label="DNS" value={uplink.dns?.length ? uplink.dns.join('  ') : '—'} />
+          <Row label={t.gateway} value={uplink.gateway || '—'} />
+          <Row label={t.dns} value={uplink.dns?.length ? uplink.dns.join('  ') : '—'} />
           {/* Le righe IPv6 compaiono solo dove IPv6 c'e': su una rete v4-only
               quattro righe con un trattino direbbero che manca qualcosa. */}
           {uplink.ipv6.length > 0 && (
             <>
-              <Row label="Indirizzo IPv6" value={uplink.ipv6.join('  ')} />
+              <Row label={t.address6} value={uplink.ipv6.join('  ')} />
               {/* Un trattino accanto a un indirizzo valido fa sospettare un
                   guasto che non c'e': senza rotta predefinita IPv6 non esce
                   dalla rete locale, e la riga lo dice invece di lasciarlo
@@ -132,26 +137,26 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
                   stesso. A quella domanda risponde la verifica dell'uscita,
                   che e' un'altra cosa e sta apposta altrove. */}
               <Row
-                label="Gateway IPv6"
-                value={uplink.gateway6 || 'nessuno · IPv6 non esce dalla rete locale'}
+                label={t.gateway6}
+                value={uplink.gateway6 || t.noGateway6}
               />
               {uplink.dns6.length > 0 && (
-                <Row label="DNS IPv6" value={uplink.dns6.join('  ')} />
+                <Row label={t.dns6} value={uplink.dns6.join('  ')} />
               )}
-              {uplink.prefix6 && <Row label="Prefisso delegato" value={uplink.prefix6} />}
+              {uplink.prefix6 && <Row label={t.prefix6} value={uplink.prefix6} />}
             </>
           )}
-          <Row label="MAC in uso" value={uplink.mac || '—'} />
+          <Row label={t.mac} value={uplink.mac || '—'} />
           {typeof uplink.signal === 'number' && (
-            <Row label="Segnale" value={`${uplink.signal} dBm`} />
+            <Row label={t.signal} value={`${uplink.signal} dBm`} />
           )}
-          {uplink.channel ? <Row label="Canale" value={String(uplink.channel)} /> : null}
+          {uplink.channel ? <Row label={t.channel} value={String(uplink.channel)} /> : null}
         </>
       ) : (
         <p class="muted">
           {state === 'disabled'
-            ? 'La rete è configurata ma disattivata.'
-            : 'La radio non è riuscita ad agganciare la rete.'}
+            ? t.disabledNote
+            : t.notAssociatedNote}
         </p>
       )}
     </section>
@@ -173,11 +178,12 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
  */
 export function savedLabel(saved: SavedNetwork[], net: ScanResult): string {
   if (net.hidden) return '';
-  if (findSavedOn(saved, net.ssid, net.band)) return 'salvata';
+  const label = wifiText().saved;
+  if (findSavedOn(saved, net.ssid, net.band)) return label;
 
   const elsewhere = findSaved(saved, net.ssid);
   if (!elsewhere) return '';
-  return hasAnyBand(elsewhere.bands) ? `salvata · ${bandsLabel(elsewhere.bands)}` : 'salvata';
+  return hasAnyBand(elsewhere.bands) ? `${label} · ${bandsLabel(elsewhere.bands)}` : label;
 }
 
 function Network({
@@ -195,6 +201,7 @@ function Network({
   /** Per le righe senza nome: l'unico modo di usarle e' scriverlo a mano. */
   onAddHidden: () => void;
 }) {
+  const t = wifiText();
   return (
     <li>
       {/* Una rete che non annuncia il nome si vede - il punto di accesso e'
@@ -205,21 +212,21 @@ function Network({
       <button class="net" onClick={net.hidden ? onAddHidden : onPick}>
         <span class="net__main">
           <span class={net.hidden ? 'net__ssid net__ssid--hidden' : 'net__ssid'}>
-            {net.hidden ? 'rete nascosta' : net.ssid}
+            {net.hidden ? t.hidden : net.ssid}
           </span>
           <span class="net__meta">
             ch {net.channel} · {net.security}
-            {net.count > 1 && ` · ${net.count} punti di accesso`}
+            {net.count > 1 && ` · ${t.accessPoints(net.count)}`}
           </span>
         </span>
         <span class="net__side net__side--wrap">
-          {connected && <span class="badge badge--ok">collegata</span>}
+          {connected && <span class="badge badge--ok">{t.connected}</span>}
           {/* Un fatto sulla configurazione, non sullo stato: la stessa
               targhetta muta che nell'elenco delle reti salvate dice
               "nascosta". Verde o arancione competerebbe con "collegata" e con
               "aperta", che parlano di adesso. */}
           {saved !== '' && <span class="badge badge--muted">{saved}</span>}
-          {net.open && <span class="badge badge--warn">aperta</span>}
+          {net.open && <span class="badge badge--warn">{t.open}</span>}
           <Signal dbm={net.signal} />
         </span>
       </button>
@@ -236,6 +243,7 @@ interface Action {
 
 /** Esegue una modifica rischiosa con conto alla rovescia e ritorno indietro. */
 function ActionSheet({ action, onClose }: { action: Action; onClose: (c: boolean) => void }) {
+  const t = commonText().actions;
   const apply = useApply();
   const [confirmed, setConfirmed] = useState(false);
 
@@ -253,10 +261,10 @@ function ActionSheet({ action, onClose }: { action: Action; onClose: (c: boolean
             {action.warn && <p class="alert alert--warn">{action.warn}</p>}
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Annulla
+                {t.cancel}
               </button>
               <button class="button button--primary" onClick={go}>
-                Procedi
+                {t.proceed}
               </button>
             </div>
           </>
@@ -266,10 +274,10 @@ function ActionSheet({ action, onClose }: { action: Action; onClose: (c: boolean
 
         {confirmed && (
           <>
-            <p class="alert alert--ok">Fatto.</p>
+            <p class="alert alert--ok">{t.done}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {t.close}
               </button>
             </div>
           </>
@@ -306,6 +314,7 @@ function RadioCard({
   onDisconnect: () => void;
   onAddHidden: () => void;
 }) {
+  const t = wifiText().radio;
   const busy = radio.staSection !== null;
   const label = radio.band ? `${radio.band} GHz` : radio.name;
 
@@ -316,32 +325,27 @@ function RadioCard({
           <h2 class="radio__title">{label}</h2>
           <p class="muted">
             {busy
-              ? `Collegata${uplink?.ssid ? ` a ${uplink.ssid}` : ''}`
+              ? t.connected(uplink?.ssid ?? '')
               : radio.apEnabled
-                ? `Access point ${radio.apSsid ?? ''}`.trim()
-                : 'Libera'}
-            {radio.up && radio.channel ? ` · canale ${radio.channel}` : ''}
+                ? t.ap(radio.apSsid ?? '')
+                : t.free}
+            {radio.up && radio.channel ? t.channel(radio.channel) : ''}
           </p>
         </div>
         <button class="button button--primary" onClick={onScan} disabled={scanning || blocked}>
-          {scanning ? 'Cerco…' : 'Cerca reti'}
+          {scanning ? t.scanning : t.scan}
         </button>
       </header>
 
       {radio.apEnabled && busy && (
-        <p class="alert alert--warn">
-          Access point e rete condividono questa radio: l'access point cadrà quando la rete
-          cade.
-        </p>
+        <p class="alert alert--warn">{t.shared}</p>
       )}
 
       {/* Perche' il pulsante qui sotto non si preme. Sta accanto al pulsante e
           non in cima alla schermata: chi lo trova spento cerca la ragione li',
           e "l'access point è acceso" da solo non spiega chi lo tiene acceso. */}
       {radio.apSection && radio.apToggle && (
-        <p class="alert alert--info">
-          Questo access point segue l’interruttore fisico.
-        </p>
+        <p class="alert alert--info">{t.followsSwitch}</p>
       )}
 
       <div class="radio__actions">
@@ -355,12 +359,12 @@ function RadioCard({
             disabled={radio.apToggle}
             onClick={() => onAp(!radio.apEnabled)}
           >
-            {radio.apEnabled ? 'Spegni access point' : 'Accendi access point'}
+            {radio.apEnabled ? t.apOff : t.apOn}
           </button>
         )}
         {busy && (
           <button class="button button--ghost" onClick={onDisconnect}>
-            Disconnetti
+            {t.disconnect}
           </button>
         )}
         {/* Sta qui e non altrove perche' e' l'altra meta' della stessa scelta:
@@ -368,14 +372,14 @@ function RadioCard({
             quelle che non lo fanno. Sotto la scheda della radio ne eredita
             anche la banda, che e' il primo campo del modulo. */}
         <button class="button button--ghost" onClick={onAddHidden}>
-          Aggiungi rete nascosta
+          {t.addHidden}
         </button>
       </div>
 
-      {scanning && <p class="muted">La connessione può bloccarsi per qualche secondo.</p>}
+      {scanning && <p class="muted">{t.scanNote}</p>}
 
       {results !== null && results.length === 0 && !scanning && (
-        <p class="muted">Nessuna rete trovata su questa banda.</p>
+        <p class="muted">{t.noResults}</p>
       )}
 
       {results !== null && results.length > 0 && (
@@ -397,6 +401,7 @@ function RadioCard({
 }
 
 export function Wifi({ onLogout }: { onLogout: () => void }) {
+  const t = wifiText();
   const [radios, setRadios] = useState<Radio[] | null>(null);
   const [uplinks, setUplinks] = useState<Uplink[]>([]);
   const [aps, setAps] = useState<ApSection[]>([]);
@@ -496,7 +501,7 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
     if (!radios) return;
     const plan = planConnection(radios, net.band);
     if (!plan) {
-      setError(`Nessuna radio disponibile sulla banda ${net.band} GHz.`);
+      setError(t.noRadio(net.band));
       return;
     }
     setPicked({ net, plan });
@@ -505,24 +510,22 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
   const toggleAp = (radio: Radio, enable: boolean) => {
     const other = (radios ?? []).find((r) => r.name !== radio.name);
     setAction({
-      title: enable
-        ? `Accendi l'access point su ${radio.band} GHz`
-        : `Spegni l'access point su ${radio.band} GHz`,
+      title: enable ? t.apOnTitle(radio.band ?? radio.name) : t.apOffTitle(radio.band ?? radio.name),
       warn: enable
         ? radio.staSection
-          ? "L'access point cadrà insieme alla rete a cui sei collegato."
+          ? t.apFallsWithUplink
           : ''
         : other?.apEnabled
           ? ''
-          : "Non resterà nessun access point attivo: dal WiFi perderai l'accesso.",
+          : t.noApLeft,
       stage: () => stageApEnabled(radio, enable),
     });
   };
 
   const disconnect = (radio: Radio) => {
     setAction({
-      title: `Disconnetti la rete su ${radio.band} GHz`,
-      warn: 'Se è il tuo uplink, perderai Internet.',
+      title: t.disconnectTitle(radio.band ?? radio.name),
+      warn: t.disconnectWarn,
       stage: () => stageDisconnect(radio),
     });
   };
@@ -542,9 +545,9 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
   return (
     <main class="screen">
       <header class="topbar">
-        <h1>Reti WiFi</h1>
+        <h1>{t.title}</h1>
         <button class="button button--ghost" onClick={reload}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
@@ -576,7 +579,7 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
 
-      {radios === null && error === null && <p class="muted">Leggo le radio…</p>}
+      {radios === null && error === null && <p class="muted">{t.loadingRadios}</p>}
 
       {(radios ?? []).map((radio) => (
         <RadioCard

@@ -4,7 +4,7 @@ import { stageStaMac, wirelessCameUp } from '../lib/wifi';
 import { findSavedOn, listSaved, updateMacOnBand } from '../lib/networks';
 import type { SavedNetwork } from '../lib/networks';
 import {
-  PORTAL_LABEL,
+  portalLabel,
   checkPortal,
   forgetPortal,
   listPortalMemory,
@@ -101,7 +101,7 @@ export function PortalPanel({
     <>
       <h2>Uscita verso Internet</h2>
       <Row
-        label={PORTAL_LABEL[result.state]}
+        label={portalLabel(result.state)}
         value={[portalAt(result), result.http ? `HTTP ${result.http}` : '']
           .filter(Boolean)
           .join(' · ')}

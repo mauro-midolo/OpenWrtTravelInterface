@@ -5,6 +5,8 @@ import type { SavedNetwork } from '../lib/networks';
 import { encryptionLabel } from '../lib/wifi';
 import { qrMatrix, qrPath, qrSide } from '../lib/qr';
 import { wifiUri } from '../lib/share';
+import { commonText } from '../i18n/common';
+import { shareText } from '../i18n/share';
 
 type ShareProps = { net: SavedNetwork; onClose: () => void };
 type ShareData = Awaited<ReturnType<typeof readShareNetwork>>;
@@ -15,6 +17,7 @@ export function ShareSheet(props: ShareProps) {
 }
 
 function ShareContent({ net, onClose }: ShareProps) {
+  const t = shareText();
   const [data, setData] = useState<{ network: ShareData; matrix: boolean[][] } | null>(null);
   const [shown, setShown] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,23 +48,23 @@ function ShareContent({ net, onClose }: ShareProps) {
   return (
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="share-title">
       <div class="sheet__panel card">
-        <h2 id="share-title">Condividi {network?.ssid ?? net.ssid}</h2>
+        <h2 id="share-title">{t.title(network?.ssid ?? net.ssid)}</h2>
 
         {error && <p class="alert alert--error alert--code" role="alert">{error}</p>}
-        {!data && !error && <p class="muted" role="status">Leggo la rete salvata dal router…</p>}
+        {!data && !error && <p class="muted" role="status">{t.loading}</p>}
 
         {data && network && (
           <>
             <p class="muted">
               {encryptionLabel(network.encryption)} · {bandsLabel(network.bands)}
-              {network.hidden ? ' · rete nascosta' : ''}
+              {network.hidden ? t.hidden : ''}
             </p>
             <div class="qr-wrap">
               <svg
                 class="qr"
                 viewBox={`0 0 ${side} ${side}`}
                 role="img"
-                aria-label={`Codice QR per collegarsi a ${network.ssid}`}
+                aria-label={t.qr(network.ssid)}
                 shape-rendering="crispEdges"
               >
                 <rect width={side} height={side} fill="#ffffff" />
@@ -70,15 +73,15 @@ function ShareContent({ net, onClose }: ShareProps) {
             </div>
 
             {open ? (
-              <p class="muted">Rete aperta, senza password.</p>
+              <p class="muted">{t.open}</p>
             ) : (
               <>
                 <div class="field">
-                  <span>Password</span>
+                  <span>{t.password}</span>
                   {shown ? (
                     <code class="secret">{network.key}</code>
                   ) : (
-                    <code class="secret secret--masked" aria-label="Password nascosta">
+                    <code class="secret secret--masked" aria-label={t.masked}>
                       ••••••••••
                     </code>
                   )}
@@ -88,7 +91,7 @@ function ShareContent({ net, onClose }: ShareProps) {
                       aria-pressed={shown}
                       onClick={() => setShown(!shown)}
                     >
-                      {shown ? 'Nascondi password' : 'Mostra password'}
+                      {shown ? t.hide : t.show}
                     </button>
                   </div>
                 </div>
@@ -100,10 +103,10 @@ function ShareContent({ net, onClose }: ShareProps) {
         <div class="sheet__actions">
           {error && (
             <button class="button button--ghost" onClick={() => setAttempt(attempt + 1)}>
-              Riprova
+              {commonText().actions.retry}
             </button>
           )}
-          <button class="button button--primary" onClick={onClose}>Chiudi</button>
+          <button class="button button--primary" onClick={onClose}>{commonText().actions.close}</button>
         </div>
       </div>
     </div>

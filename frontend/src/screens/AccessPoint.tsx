@@ -3,6 +3,8 @@ import { useApply } from '../lib/apply';
 import { AP_ENCRYPTIONS, encryptionLabel, stageApSettings, wirelessCameUp } from '../lib/wifi';
 import type { ApSection } from '../lib/wifi';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { apText } from '../i18n/ap';
+import { commonText } from '../i18n/common';
 
 /**
  * Cambiare nome o password stacca tutti i client, che devono riagganciarsi a
@@ -21,11 +23,12 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }) {
+  const t = apText();
   if (aps.length === 0) {
     return (
       <section class="card">
-        <h2 class="uplink__title">Access point</h2>
-        <p class="muted">Nessun access point configurato.</p>
+        <h2 class="uplink__title">{t.title}</h2>
+        <p class="muted">{t.none}</p>
       </section>
     );
   }
@@ -49,41 +52,38 @@ export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }
     <section class={`card uplink uplink--${active.length > 0 ? 'addressed' : 'disabled'}`}>
       <header class="radio__head">
         <h2 class="uplink__title">
-          {active.length > 0 ? 'Access point attivo' : 'Access point spento'}
+          {active.length > 0 ? t.active : t.off}
         </h2>
         <button class="button button--ghost" onClick={onEdit}>
-          Modifica
+          {t.edit}
         </button>
       </header>
 
-      <Row label="Nome rete" value={reference.ssid || '—'} />
-      <Row label="Sicurezza" value={encryptionLabel(reference.encryption)} />
-      <Row label="Password" value={reference.has_key ? 'impostata' : 'assente'} />
+      <Row label={t.ssid} value={reference.ssid || '—'} />
+      <Row label={t.security} value={encryptionLabel(reference.encryption)} />
+      <Row label={t.password} value={reference.has_key ? t.set : t.missing} />
 
       {active.length > 0 ? (
         <>
           <Row
-            label="Banda"
+            label={t.band}
             value={active.map((ap) => `${ap.band} GHz${ap.channel ? ` (ch ${ap.channel})` : ''}`).join(', ')}
           />
           <Row label="BSSID" value={active.map((ap) => ap.bssid).filter(Boolean).join('  ') || '—'} />
-          <Row label="Dispositivi collegati" value={String(clients)} />
+          <Row label={t.clients} value={String(clients)} />
         </>
       ) : (
-        <p class="muted">Spento su {aps.map((ap) => `${ap.band} GHz`).join(' e ')}.</p>
+        <p class="muted">{t.offOn(aps.map((ap) => `${ap.band} GHz`).join(t.and))}</p>
       )}
 
       {byToggle.length > 0 && (
         <p class="alert alert--info">
-          {byToggle.map((ap) => `${ap.band} GHz`).join(' e ')}: comandato dall’interruttore
-          fisico.
+          {t.byToggle(byToggle.map((ap) => `${ap.band} GHz`).join(t.and))}
         </p>
       )}
 
       {diverging && (
-        <p class="alert alert--warn">
-          Le due radio hanno impostazioni diverse: salvale di nuovo per riallinearle.
-        </p>
+        <p class="alert alert--warn">{t.diverging}</p>
       )}
     </section>
   );
@@ -96,6 +96,8 @@ export function ApSheet({
   aps: ApSection[];
   onClose: (changed: boolean) => void;
 }) {
+  const t = apText();
+  const actions = commonText().actions;
   const reference = aps.find((ap) => ap.enabled) ?? aps[0];
   const apply = useApply();
 
@@ -130,12 +132,12 @@ export function ApSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Access point</h2>
+        <h2>{t.title}</h2>
 
         {apply.phase === 'idle' && !confirmed && (
           <form onSubmit={save}>
             <label class="field">
-              <span>Nome della rete (SSID)</span>
+              <span>{t.ssidField}</span>
               <input
                 type="text"
                 value={ssid}
@@ -146,13 +148,13 @@ export function ApSheet({
               />
               {!ssidOk && (
                 <span class="muted">
-                  {ssidBytes === 0 ? 'Il nome non può essere vuoto.' : `Troppo lungo: ${ssidBytes} byte su 32.`}
+                  {ssidBytes === 0 ? t.ssidEmpty : t.ssidTooLong(ssidBytes)}
                 </span>
               )}
             </label>
 
             <label class="field">
-              <span>Sicurezza</span>
+              <span>{t.security}</span>
               <select
                 value={encryption}
                 onChange={(e) => setEncryption((e.target as HTMLSelectElement).value)}
@@ -166,13 +168,13 @@ export function ApSheet({
             </label>
 
             <label class="field">
-              <span>Password</span>
+              <span>{t.password}</span>
               <div class="mac-row">
                 <input
                   type={reveal ? 'text' : 'password'}
                   value={password}
                   autocomplete="new-password"
-                  placeholder={needsPassword ? 'almeno 8 caratteri' : 'lascia vuoto per non cambiarla'}
+                  placeholder={needsPassword ? t.minPassword : t.keepPassword}
                   onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
                 />
                 <button
@@ -180,28 +182,26 @@ export function ApSheet({
                   class="button button--ghost"
                   onClick={() => setReveal((v) => !v)}
                 >
-                  {reveal ? 'Nascondi' : 'Mostra'}
+                  {reveal ? t.hide : t.show}
                 </button>
               </div>
               {password !== '' && password.length < 8 && (
-                <span class="muted">Servono almeno 8 caratteri.</span>
+                <span class="muted">{t.shortPassword}</span>
               )}
             </label>
 
             {changesCredentials && (
               <p class="alert alert--warn">
-                Cambiando nome o password <strong>tutti i dispositivi si scollegano</strong>:
-                ricollegati entro {AP_ROLLBACK_SECONDS} secondi, altrimenti il router torna
-                indietro da solo.
+                {t.credentialsWarn(AP_ROLLBACK_SECONDS)}
               </p>
             )}
 
             <div class="sheet__actions">
               <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               <button class="button button--primary" type="submit" disabled={!ssidOk || !passwordOk}>
-                Salva
+                {actions.save}
               </button>
             </div>
           </form>
@@ -211,10 +211,10 @@ export function ApSheet({
 
         {confirmed && (
           <>
-            <p class="alert alert--ok">Impostazioni salvate su entrambe le radio.</p>
+            <p class="alert alert--ok">{t.saved}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
