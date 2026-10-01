@@ -408,7 +408,7 @@ const usbDevices = [
     driver: 'cdc_ncm',
     interfaces: [
       {
-        label: 'MTP (trasferimento file)',
+        label: 'MTP (file transfer)',
         class: 'ff.ff.00',
         driver: '',
         network: false,
@@ -475,9 +475,9 @@ function wgActiveMock(): MockWgProfile | undefined {
  */
 const MOCK_REASON: Record<string, string> = {
   balance:
-    'il multi-WAN e in bilanciamento: sparpaglia le connessioni su piu WAN, e un tunnel non si puo sparpagliare',
-  ts_exit: 'un exit node Tailscale sta gia portando fuori tutto il traffico',
-  wireguard: 'il tunnel WireGuard sta gia portando fuori tutto il traffico',
+    'multi-WAN is load balancing: it spreads connections over several WANs, and a tunnel cannot be spread',
+  ts_exit: 'a Tailscale exit node is already carrying all traffic',
+  wireguard: 'a WireGuard tunnel is already carrying all traffic',
 };
 
 function mockHolder(want: string): string {
@@ -1075,7 +1075,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       {
         at: Math.floor(Date.now() / 1000) - 320,
         kind: 'fallita',
-        message: 'net_demo: nuovo tentativo fra 60s',
+        message: 'net_demo: next attempt in 60s',
         code: 'retry',
         params: { key: 'net_demo', wait: 60 },
       },
@@ -1415,12 +1415,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     const name = String(args.name ?? '').trim();
     const id = String(args.id ?? '');
 
-    if (!/PrivateKey/i.test(conf)) return { error: 'manca PrivateKey nella sezione [Interface]', error_code: 'wg_no_private_key' };
-    if (!/Endpoint/i.test(conf)) return { error: 'manca Endpoint nella sezione [Peer]', error_code: 'wg_no_endpoint' };
+    if (!/PrivateKey/i.test(conf)) return { error: 'the private key is missing (PrivateKey in the [Interface] section)', error_code: 'wg_no_private_key' };
+    if (!/Endpoint/i.test(conf)) return { error: 'the peer endpoint is missing (Endpoint in the [Peer] section)', error_code: 'wg_no_endpoint' };
 
     const existing = id ? wgState.profiles.find((p) => p.id === id) : undefined;
-    if (id && !existing) return { error: 'configurazione WireGuard sconosciuta', error_code: 'wg_unknown' };
-    if (!existing && name === '') return { error: 'il nome è obbligatorio', error_code: 'wg_bad_name' };
+    if (id && !existing) return { error: 'unknown WireGuard configuration', error_code: 'wg_unknown' };
+    if (!existing && name === '') return { error: 'invalid name: letters, digits, spaces, dot, - and _, up to 32 characters', error_code: 'wg_bad_name' };
     // Lo stesso cancello del router: due nomi uguali renderebbero l'elenco
     // inutile proprio nel momento in cui serve.
     if (
@@ -1430,7 +1430,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       )
     ) {
       return {
-        error: 'esiste gia’ una configurazione WireGuard con questo nome',
+        error: 'a WireGuard configuration with this name already exists',
         error_code: 'wg_name_taken',
       };
     }
@@ -1485,13 +1485,13 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     const id = String(args.id ?? '');
     const name = String(args.name ?? '').trim();
     const profile = wgState.profiles.find((p) => p.id === id);
-    if (!profile) return { error: 'configurazione WireGuard sconosciuta', error_code: 'wg_unknown' };
-    if (name === '') return { error: 'il nome è obbligatorio', error_code: 'wg_bad_name' };
+    if (!profile) return { error: 'unknown WireGuard configuration', error_code: 'wg_unknown' };
+    if (name === '') return { error: 'invalid name: letters, digits, spaces, dot, - and _, up to 32 characters', error_code: 'wg_bad_name' };
     if (
       wgState.profiles.some((p) => p !== profile && p.name.toLowerCase() === name.toLowerCase())
     ) {
       return {
-        error: 'esiste gia’ una configurazione WireGuard con questo nome',
+        error: 'a WireGuard configuration with this name already exists',
         error_code: 'wg_name_taken',
       };
     }
@@ -1517,10 +1517,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   'travel.wg_delete': (args) => {
     const id = String(args.id ?? '');
     const index = wgState.profiles.findIndex((p) => p.id === id);
-    if (index < 0) return { error: 'configurazione WireGuard sconosciuta', error_code: 'wg_unknown' };
+    if (index < 0) return { error: 'unknown WireGuard configuration', error_code: 'wg_unknown' };
     if (wgState.profiles[index].active) {
       return {
-        error: 'e’ la configurazione attiva: disattivala prima di eliminarla',
+        error: 'it is the active configuration: deactivate it before deleting it',
         error_code: 'wg_delete_active',
       };
     }
@@ -1536,8 +1536,8 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
     if (!profile) {
       return want
-        ? { error: 'configurazione WireGuard sconosciuta', error_code: 'wg_unknown' }
-        : { error: 'nessuna configurazione WireGuard attiva', error_code: 'wg_none_active' };
+        ? { error: 'unknown WireGuard configuration', error_code: 'wg_unknown' }
+        : { error: 'no active WireGuard configuration', error_code: 'wg_none_active' };
     }
 
     // Lo stesso cancello del router, e viene prima di tutti gli altri: quando
@@ -1545,7 +1545,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     const owner = toggleWgMock();
     if (owner) {
       return {
-        error: `la comanda l'interruttore fisico: "${owner.name}" segue la levetta. Cambia la funzione dell'interruttore per tornare a decidere da qui`,
+        error: `the physical switch controls it: "${owner.name}" follows the switch. Change the switch function to decide from here again`,
         error_code: 'wg_by_toggle',
         error_params: { name: owner.name },
       };
@@ -1556,7 +1556,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       // esattamente come fa il router.
       if (on && on !== profile) {
         return {
-          error: `e’ gia’ attiva la configurazione "${on.name}": disattivala prima di attivarne un’altra`,
+          error: `the configuration "${on.name}" is already active: deactivate it before activating another one`,
           error_code: 'wg_busy',
           error_params: { name: on.name },
         };
@@ -1566,7 +1566,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       const holder = mockHolder('wireguard');
       if (holder) {
         return {
-          error: `non posso accendere WireGuard: ${MOCK_REASON[holder]}`,
+          error: `cannot turn on WireGuard: ${MOCK_REASON[holder]}`,
           error_code: 'wg_blocked',
           error_params: { holder, name: holder === 'wireguard' ? (wgActiveMock()?.name ?? '') : '' },
         };
@@ -1662,7 +1662,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   'travel.profile_save': (args) => {
     const name = String(args.name ?? '').trim();
-    if (!/^[A-Za-z0-9 _-]{1,24}$/.test(name)) return { error: 'nome non valido', error_code: 'profile_bad_name' };
+    if (!/^[A-Za-z0-9 _-]{1,24}$/.test(name)) return { error: 'invalid name: letters, digits, spaces, - and _, up to 24 characters', error_code: 'profile_bad_name' };
 
     const section = String(args.section ?? '') || `prof_${Date.now()}`;
     const snapshot: MockProfile = {
@@ -1691,7 +1691,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   'travel.profile_delete': (args) => {
     const section = String(args.section ?? '');
     if (!mockProfiles.some((p) => p.section === section)) {
-      return { error: 'profilo sconosciuto', error_code: 'profile_unknown' };
+      return { error: 'unknown profile', error_code: 'profile_unknown' };
     }
     mockProfiles = mockProfiles.filter((p) => p.section !== section);
     return { deleted: true };
@@ -1708,7 +1708,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   'travel.profile_apply': (args) => {
     const section = String(args.section ?? '');
     const profile = mockProfiles.find((p) => p.section === section);
-    if (!profile) return { error: 'profilo sconosciuto', error_code: 'profile_unknown' };
+    if (!profile) return { error: 'unknown profile', error_code: 'profile_unknown' };
 
     let mode = profile.mode;
     let note = '';
@@ -1717,7 +1717,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       const holder = mockHolder('balance');
       if (holder) {
         mode = 'failover';
-        note = `il profilo chiedeva il bilanciamento: ${MOCK_REASON[holder] ?? holder}`;
+        note = `the profile asked for load balancing: ${MOCK_REASON[holder] ?? holder}`;
         noteHolder = holder;
       }
     }
@@ -1757,10 +1757,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   'travel.backup_import': (args) => {
     const chunk = String(args.chunk ?? '');
-    if (chunk.length === 0) return { error: 'pezzo vuoto', error_code: 'chunk_empty' };
+    if (chunk.length === 0) return { error: 'empty chunk', error_code: 'chunk_empty' };
     // Lo stesso controllo del router: un pezzo tagliato fuori dai multipli di
     // quattro produrrebbe un archivio corrotto, e va scoperto qui e non dopo.
-    if (chunk.length % 4 !== 0) return { error: 'pezzo non allineato', error_code: 'chunk_misaligned' };
+    if (chunk.length % 4 !== 0) return { error: 'misaligned chunk: it must be a multiple of 4 characters', error_code: 'chunk_misaligned' };
     if (args.last !== true) return { received: true, size: chunk.length };
     return { restored: true, size: chunk.length, reboot_in: 2 };
   },
@@ -1784,7 +1784,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     const servers = String(args.servers ?? '')
       .split(' ')
       .filter((s) => s.length > 0);
-    if (servers.length === 0) return { error: 'serve almeno un server NTP', error_code: 'ntp_none' };
+    if (servers.length === 0) return { error: 'at least one NTP server is needed', error_code: 'ntp_none' };
     timeState.timezone = String(args.timezone ?? timeState.timezone);
     timeState.zonename = String(args.zonename ?? '');
     timeState.ntp_enabled = args.enabled !== false;
@@ -1971,7 +1971,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   'travel.stage_connect_saved': (args) => {
     const entry = savedNetworks[String(args.section ?? '')];
     const name = String(args.radio ?? '');
-    if (!entry || !radios[name]) return { error: 'rete salvata o radio sconosciuta', error_code: 'unknown_saved' };
+    if (!entry || !radios[name]) return { error: 'unknown saved network', error_code: 'unknown_saved' };
     pending.push(() => {
       const radio = radios[name];
       if (radio) {
@@ -2025,8 +2025,8 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     names: toggleNames(),
   }),
   'travel.toggle_set': (args) => {
-    if (typeof args.action !== 'string') return { error: 'action deve essere una stringa.', error_code: 'toggle_bad_action_type' };
-    if (!toggleActions().includes(args.action)) return { error: 'Azione non valida.', error_code: 'toggle_bad_action' };
+    if (typeof args.action !== 'string') return { error: 'action must be a string.', error_code: 'toggle_bad_action_type' };
+    if (!toggleActions().includes(args.action)) return { error: 'Invalid action.', error_code: 'toggle_bad_action' };
     const previous = physicalToggleState.action;
     physicalToggleState.action = args.action;
     // L'allineamento e' la parte che conta, ed e' la stessa del router: la
@@ -2056,7 +2056,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         if (holder) {
           physicalToggleState.action = previous;
           return {
-            error: `non posso accendere WireGuard: ${MOCK_REASON[holder]}`,
+            error: `cannot turn on WireGuard: ${MOCK_REASON[holder]}`,
             error_code: 'wg_blocked',
             error_params: { holder, name: holder === 'wireguard' ? (busy?.name ?? '') : '' },
           };
@@ -2073,7 +2073,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 
   'travel.led_get': () => ({ ...statusLedState }),
   'travel.led_set': (args) => {
-    if (typeof args.enabled !== 'boolean') return { error: 'enabled deve essere booleano.', error_code: 'led_bad_enabled' };
+    if (typeof args.enabled !== 'boolean') return { error: 'enabled must be a boolean.', error_code: 'led_bad_enabled' };
     statusLedState.enabled = args.enabled;
     return { ...statusLedState };
   },
@@ -2104,7 +2104,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   'travel.scan': (args) => {
     const name = String(args.radio ?? '');
     const radio = radios[name];
-    if (!radio) return { error: 'radio sconosciuta', error_code: 'unknown_radio', results: [] };
+    if (!radio) return { error: 'unknown radio', error_code: 'unknown_radio', results: [] };
     return scanForBand(radio.band);
   },
 

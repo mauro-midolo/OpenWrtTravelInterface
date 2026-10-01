@@ -30,7 +30,7 @@ export interface NetworkPenalty {
 export interface DaemonEvent {
   at: number;
   kind: string;
-  /** La frase del demone, in italiano: resta per i demoni senza `code`. */
+  /** La frase del demone, in inglese: resta per i demoni senza `code`. */
   message: string;
   /** Cosa e' successo, per comporre la frase nella lingua dell'interfaccia. */
   code?: string;

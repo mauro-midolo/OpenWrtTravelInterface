@@ -214,10 +214,10 @@ italiano e inglese uno accanto all'altro (`defineText`). Il tipo dell'inglese è
 quello dell'italiano: una chiave mancante è un errore di `npm run typecheck`, e
 `tests/i18n.test.ts` controlla che le due lingue abbiano le stesse chiavi.
 
-Gli errori del router arrivano con un codice stabile accanto alla frase
-italiana (`error_code`, `error_params`): l'interfaccia la ricompone nella lingua
-scelta da `frontend/src/i18n/backend.ts`, e se il codice non lo conosce mostra
-la frase del router. Un nuovo errore nel backend si scrive con
+Il router scrive i suoi messaggi in inglese, accanto a un codice stabile
+(`error_code`, `error_params`): l'interfaccia li ricompone nella lingua scelta
+da `frontend/src/i18n/backend.ts`, e se il codice non lo conosce mostra la frase
+inglese del router. Un nuovo errore nel backend si scrive con
 `fail_code codice "frase" chiave valore`; `tests/backend-codes.test.ts` fallisce
 finché il codice non ha la sua traduzione.
 

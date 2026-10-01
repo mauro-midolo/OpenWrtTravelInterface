@@ -217,10 +217,10 @@ English side by side (`defineText`). The English type is derived from the
 Italian one: a missing key is an `npm run typecheck` error, and
 `tests/i18n.test.ts` checks that both languages have the same keys.
 
-Router errors come with a stable code next to the Italian sentence
+The router writes its messages in English, next to a stable code
 (`error_code`, `error_params`): the interface rebuilds the message in the chosen
 language from `frontend/src/i18n/backend.ts`, and falls back to the router's
-sentence when it does not know the code. A new backend error is written as
+English sentence when it does not know the code. A new backend error is written as
 `fail_code code "sentence" key value`; `tests/backend-codes.test.ts` fails until
 the code has its translation.
 

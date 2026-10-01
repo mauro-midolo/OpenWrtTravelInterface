@@ -137,11 +137,11 @@ ap_switch() {
 
 	case "$want" in
 		on|off) ;;
-		*) ap_error ap_bad_state "stato dell'access point non valido"; return 1 ;;
+		*) ap_error ap_bad_state "invalid access point state"; return 1 ;;
 	esac
 
 	section=$(ap_section_of_band "$band") || {
-		ap_error ap_none "nessun access point configurato sulla banda $band GHz" band "$band"
+		ap_error ap_none "no access point configured on the $band GHz band" band "$band"
 		return 1
 	}
 
@@ -159,7 +159,7 @@ ap_switch() {
 		# Spegnere invece resta sempre lecito - il verso pericoloso e' uno solo.
 		case "$(uci -q get "wireless.$section.encryption")" in
 			''|none)
-				ap_error ap_open "l'access point $section sulla banda $band GHz e' senza password: non lo accendo. Configuralo con tools/setup-ap.sh" \
+				ap_error ap_open "the access point $section on the $band GHz band has no password: not turning it on. Configure it with tools/setup-ap.sh" \
 					section "$section" band "$band"
 				return 1
 				;;

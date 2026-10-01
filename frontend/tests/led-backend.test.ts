@@ -77,7 +77,7 @@ describe('router LED helper', () => {
     write('etc/config/travel_led', "config led 'main'\n option enabled '1'\n");
     const result = run('mv() { return 1; }; led_set 0');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Impossibile salvare');
+    expect(result.stderr).toContain('Could not save');
     expect(read('sys/class/leds/blue-status/brightness')).toBe('1');
     expect(read('sys/class/leds/white-status/trigger')).toBe('timer');
     expect(read('etc/config/travel_led')).toContain("enabled '1'");
@@ -93,7 +93,7 @@ describe('router LED helper', () => {
     expect(run('led_set invalid').status).toBe(1);
     expect(run('get_dt_led() { echo missing; }; led_set 0').status).toBe(1);
     mkdirSync(file('var/lock/travel-led'));
-    expect(run('led_set 0').stderr).toContain('in corso');
+    expect(run('led_set 0').stderr).toContain('being changed');
     expect(existsSync(file('etc/config/travel_led'))).toBe(false);
   });
 });

@@ -151,7 +151,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     profile('travel_wg1', 'Casa', '1');
     const result = run('toggle_set wg:travel_wg9');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Azione non valida');
+    expect(result.stderr).toContain('Invalid action');
     expect(existsSync(file('etc/config/travel_toggle'))).toBe(false);
   });
 
@@ -212,7 +212,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     for (const section of ['travel_wg1', 'travel_wg2']) {
       const result = run(`toggle_wg_load; wg_switch ${section} on ui`);
       expect(result.status, section).toBe(1);
-      expect(result.stderr).toContain('interruttore fisico');
+      expect(result.stderr).toContain('physical switch');
     }
     expect(active()).toBe('');
 
@@ -231,7 +231,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     profile('travel_wg2', 'Ufficio', '1');
     const result = run('toggle_wg_load; wg_switch travel_wg2 on ui');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('disattivala prima');
+    expect(result.stderr).toContain('deactivate it before');
     expect(active()).toBe('travel_wg1');
   });
 
@@ -242,7 +242,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     expect(flip('on').status).toBe(0);
     const result = run('toggle_set wg:travel_wg1');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('bilanciamento');
+    expect(result.stderr).toContain('load balancing');
     expect(active()).toBe('');
     expect(existsSync(file('etc/config/travel_toggle'))).toBe(false);
   });
@@ -314,7 +314,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     const result = run(`${restless}\ntoggle_run on`);
     // 2, non 1: qualcosa e' stato applicato. La differenza serve a chi disfa.
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain('continua a muoversi');
+    expect(result.stderr).toContain('keeps moving');
     expect(read('uci.db.visto').split(' ').filter(Boolean)).toHaveLength(3);
     // Il turno torna comunque libero, e l'ultima posizione resta scritta per
     // il prossimo evento.
@@ -329,7 +329,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     mkdirSync(file('var/lock/travel-toggle'));
     const result = run('TOGGLE_LOCK_WAIT=0; toggle_run on');
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain('la applica chi ha il turno');
+    expect(result.stderr).toContain('whoever holds the turn will apply it');
     expect(read('var/run/travel-toggle.position')).toBe('on');
   });
 
@@ -352,7 +352,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     expect(flip('on').status).toBe(0);
     const result = run(`${restless}\ntoggle_set wg:travel_wg1`);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain('Funzione salvata');
+    expect(result.stderr).toContain('Function saved');
     // La scelta resta: e' l'unica cosa che potra' riallineare il tunnel al
     // prossimo spostamento della levetta.
     expect(read('etc/config/travel_toggle')).toContain("option action 'wg:travel_wg1'");
@@ -387,7 +387,7 @@ describe('la levetta e le configurazioni WireGuard', () => {
     expect(flip('on').status).toBe(0);
     const result = run('toggle_set wg:travel_wg1');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Impossibile applicare');
+    expect(result.stderr).toContain('Could not apply');
     expect(existsSync(file('etc/config/travel_toggle'))).toBe(false);
     expect(active()).toBe('');
   });

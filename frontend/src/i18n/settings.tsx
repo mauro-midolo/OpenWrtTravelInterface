@@ -59,13 +59,13 @@ export const settingsText = defineText({
         installato: 'installato',
         assente: 'assente',
       } as Record<string, string>,
-      // Le funzioni USB come le scrive il router: in italiano sono gia' giuste.
+      // Le funzioni USB come le scrive il router, in inglese.
       functions: {
-        'dati CDC': 'dati CDC',
-        'PTP (foto)': 'PTP (foto)',
-        archiviazione: 'archiviazione',
-        'MTP (trasferimento file)': 'MTP (trasferimento file)',
-        'periferica di input': 'periferica di input',
+        'CDC data': 'dati CDC',
+        'PTP (photos)': 'PTP (foto)',
+        storage: 'archiviazione',
+        'MTP (file transfer)': 'MTP (trasferimento file)',
+        'input device': 'periferica di input',
       } as Record<string, string>,
       none: 'Nessun dispositivo collegato alla porta USB.',
       noInterface: 'nessuna interfaccia',
@@ -268,12 +268,13 @@ export const settingsText = defineText({
         installato: 'installed',
         assente: 'missing',
       },
+      // In inglese sono gia' giuste.
       functions: {
-        'dati CDC': 'CDC data',
-        'PTP (foto)': 'PTP (photos)',
-        archiviazione: 'storage',
-        'MTP (trasferimento file)': 'MTP (file transfer)',
-        'periferica di input': 'input device',
+        'CDC data': 'CDC data',
+        'PTP (photos)': 'PTP (photos)',
+        storage: 'storage',
+        'MTP (file transfer)': 'MTP (file transfer)',
+        'input device': 'input device',
       },
       none: 'No device connected to the USB port.',
       noInterface: 'no interface',

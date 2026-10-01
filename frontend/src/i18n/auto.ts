@@ -128,7 +128,7 @@ function portalWordsEn(p: Params): string {
 /**
  * Il testo di un evento o di un errore di traveld nella lingua dell'interfaccia.
  *
- * Il demone manda un codice e i suoi parametri accanto alla frase in italiano:
+ * Il demone manda un codice e i suoi parametri accanto alla frase in inglese:
  * se il codice e' noto si ricompone qui, altrimenti (demone piu' vecchio, o un
  * codice nuovo che questo frontend non conosce) si mostra la frase com'e'.
  */

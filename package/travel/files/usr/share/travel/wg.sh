@@ -159,15 +159,15 @@ policy_holder() {
 policy_reason() {
 	case "$1" in
 		balance)
-			printf 'il multi-WAN e in bilanciamento: sparpaglia le connessioni su piu WAN, e un tunnel non si puo sparpagliare' ;;
+			printf 'multi-WAN is load balancing: it spreads connections over several WANs, and a tunnel cannot be spread' ;;
 		ts_exit)
-			printf 'un exit node Tailscale sta gia portando fuori tutto il traffico' ;;
+			printf 'a Tailscale exit node is already carrying all traffic' ;;
 		wireguard)
 			# Col nome del profilo, adesso che ce ne puo' essere piu' d'uno:
 			# "un tunnel WireGuard" non basta piu' a dire quale spegnere.
 			_wg_on=$(wg_active) &&
-				printf 'il tunnel WireGuard "%s" sta gia portando fuori tutto il traffico' "$(wg_name "$_wg_on")" ||
-				printf 'un tunnel WireGuard sta gia portando fuori tutto il traffico' ;;
+				printf 'the WireGuard tunnel "%s" is already carrying all traffic' "$(wg_name "$_wg_on")" ||
+				printf 'a WireGuard tunnel is already carrying all traffic' ;;
 		*)
 			printf '' ;;
 	esac
@@ -262,8 +262,8 @@ wg_switch() {
 	busy=$(wg_active) || busy=""
 
 	if [ "$want" = on ]; then
-		wg_known "$id" || { wg_error wg_unknown "configurazione WireGuard sconosciuta"; return 1; }
-		wg_installed || { wg_error wg_not_installed "wireguard-tools non e' installato"; return 1; }
+		wg_known "$id" || { wg_error wg_unknown "unknown WireGuard configuration"; return 1; }
+		wg_installed || { wg_error wg_not_installed "wireguard-tools is not installed"; return 1; }
 		# Gia' com'e' richiesta: rialzare la rete per confermare uno stato gia'
 		# giusto vorrebbe dire far cadere il traffico a ogni allineamento, e la
 		# levetta si riallinea a ogni avvio.
@@ -272,8 +272,8 @@ wg_switch() {
 		# Spegnere senza dire quale spegne quello acceso: e' l'unico che possa
 		# esserlo, e chiederne il nome per dire "spegni" sarebbe cerimonia.
 		[ -n "$id" ] || id="$busy"
-		[ -n "$id" ] || { wg_error wg_none_active "nessuna configurazione WireGuard attiva"; return 1; }
-		wg_known "$id" || { wg_error wg_unknown "configurazione WireGuard sconosciuta"; return 1; }
+		[ -n "$id" ] || { wg_error wg_none_active "no active WireGuard configuration"; return 1; }
+		wg_known "$id" || { wg_error wg_unknown "unknown WireGuard configuration"; return 1; }
 		# Con la levetta in basso non deve restare acceso niente. Quella
 		# associata e' spenta per definizione; un'altra accesa da prima
 		# resterebbe li' a smentire una levetta che dice "no", e l'interfaccia
@@ -290,7 +290,7 @@ wg_switch() {
 
 	if [ "$from" != toggle ]; then
 		owner=$(wg_toggle_owner) && {
-			wg_error wg_by_toggle "la comanda l'interruttore fisico: \"$(wg_name "$owner")\" segue la levetta. Cambia la funzione dell'interruttore per tornare a decidere da qui" \
+			wg_error wg_by_toggle "the physical switch controls it: \"$(wg_name "$owner")\" follows the switch. Change the switch function to decide from here again" \
 				name "$(wg_name "$owner")"
 			return 1
 		}
@@ -301,7 +301,7 @@ wg_switch() {
 	if [ "$want" = on ]; then
 		if [ -n "$busy" ]; then
 			[ "$from" = toggle ] || {
-				wg_error wg_busy "e' gia' attiva la configurazione \"$(wg_name "$busy")\": disattivala prima di attivarne un'altra" \
+				wg_error wg_busy "the configuration \"$(wg_name "$busy")\" is already active: deactivate it before activating another one" \
 					name "$(wg_name "$busy")"
 				return 1
 			}
@@ -309,7 +309,7 @@ wg_switch() {
 		# Il vincolo generale - al massimo una cosa alla volta decide da dove
 		# esce il traffico - vale anche per la levetta: e' lo stesso traffico.
 		holder=$(policy_holder wireguard) && {
-			wg_error wg_blocked "non posso accendere WireGuard: $(policy_reason "$holder")" \
+			wg_error wg_blocked "cannot turn on WireGuard: $(policy_reason "$holder")" \
 				holder "$holder" name "$(policy_name "$holder")"
 			return 1
 		}

@@ -219,7 +219,7 @@ export function blocked(policy: VpnPolicy | undefined, what: PolicyHolder): bool
 /** Perche' e' bloccata, gia' pronta da mostrare. Vuota se non lo e'. */
 export function blockReason(policy: VpnPolicy | undefined, what: PolicyHolder): string {
   const backend = policy?.reason?.[what] ?? '';
-  // La frase la scrive il router, in italiano; qui si riscrive nella lingua
+  // La frase la scrive il router, in inglese; qui si riscrive nella lingua
   // dell'interfaccia partendo da chi blocca. Il nome del profilo WireGuard sta
   // solo nella frase, fra virgolette. Un occupante che non conosciamo (un
   // router piu' nuovo del frontend) si mostra com'e'.

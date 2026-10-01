@@ -160,8 +160,8 @@ toggle_do_led() {
 # ce n'e' piu' d'una, che e' la regola che l'interfaccia legge dall'altro lato.
 toggle_do_ap() {
 	local band position="$2"
-	band=$(toggle_ap_band_of "$1") || { toggle_error toggle_bad_band 'Banda non valida.'; return 1; }
-	. /usr/share/travel/ap.sh || { toggle_error toggle_ap_unavailable 'Access point non disponibile.'; return 1; }
+	band=$(toggle_ap_band_of "$1") || { toggle_error toggle_bad_band 'Invalid band.'; return 1; }
+	. /usr/share/travel/ap.sh || { toggle_error toggle_ap_unavailable 'Access point not available.'; return 1; }
 	ap_switch "$band" "$position"
 }
 
@@ -176,7 +176,7 @@ toggle_do_ap5() { toggle_do_ap ap5 "$1"; }
 # `wg_switch` spegne quella che trova, con la logica che ha gia'.
 toggle_do_wg() {
 	local id="$1" position="$2"
-	toggle_wg_load || { toggle_error toggle_wg_unavailable 'WireGuard non disponibile.'; return 1; }
+	toggle_wg_load || { toggle_error toggle_wg_unavailable 'WireGuard not available.'; return 1; }
 	case "$position" in
 		on)  wg_switch "$id" on toggle ;;
 		off) wg_switch "$id" off toggle ;;
@@ -223,7 +223,7 @@ toggle_get() {
 	case "$TOGGLE_ACTION" in
 		wg:*) TOGGLE_ACTION=none; return 0 ;;
 	esac
-	toggle_error toggle_bad_config 'Configurazione dell interruttore non valida.'
+	toggle_error toggle_bad_config 'Invalid switch configuration.'
 	return 1
 }
 
@@ -245,16 +245,16 @@ toggle_write() {
 
 toggle_set() (
 	local action="$1" previous
-	toggle_known "$action" || { toggle_error toggle_bad_action 'Azione non valida.'; exit 1; }
+	toggle_known "$action" || { toggle_error toggle_bad_action 'Invalid action.'; exit 1; }
 	# Chi chiede dall'interfaccia non aspetta in coda: c'e' un "Riprova", ed e'
 	# meglio di una chiamata che resta appesa.
-	toggle_lock || { toggle_error toggle_busy 'Modifica in corso. Riprova.'; exit 1; }
+	toggle_lock || { toggle_error toggle_busy 'A change is in progress. Try again.'; exit 1; }
 	trap 'toggle_unlock' EXIT
 	previous=$(uci -q get travel_toggle.main.action)
 	# Niente riscrittura della flash per una scelta gia' salvata. L'allineamento
 	# si fa lo stesso: e' quello che rimette d'accordo levetta e uscita.
 	if [ "$previous" != "$action" ]; then
-		toggle_write "$action" || { toggle_error toggle_save_failed 'Impossibile salvare la scelta.'; exit 1; }
+		toggle_write "$action" || { toggle_error toggle_save_failed 'Could not save the choice.'; exit 1; }
 	fi
 	# Si allinea per ultimo, cosi' l'unica cosa gia' fatta e' la scrittura della
 	# scelta, ed e' una cosa che si sa disfare. Scegliere una funzione non
@@ -275,12 +275,12 @@ toggle_set() (
 		# nessuno a comandarla - il contrario di cio' che il ritorno indietro
 		# serve a ottenere.
 		2)
-			toggle_error toggle_moved 'Funzione salvata: la levetta si e mossa, si riallinea al prossimo spostamento.'
+			toggle_error toggle_moved 'Function saved: the switch moved, it will realign at the next movement.'
 			;;
 		*)
 			toggle_write "$previous" ||
-				toggle_error toggle_not_restored 'Scelta non applicata e non ripristinata.'
-			toggle_error toggle_apply_failed 'Impossibile applicare la funzione scelta.'
+				toggle_error toggle_not_restored 'Choice not applied and not restored.'
+			toggle_error toggle_apply_failed 'Could not apply the chosen function.'
 			exit 1
 			;;
 	esac
@@ -309,7 +309,7 @@ toggle_run() {
 	local position="$1" status
 	case "$position" in
 		on|off) ;;
-		*) toggle_error toggle_bad_position 'Posizione non valida.'; return 1 ;;
+		*) toggle_error toggle_bad_position 'Invalid position.'; return 1 ;;
 	esac
 	# La posizione si registra sempre e subito, anche dovendo poi aspettare il
 	# turno: e' l'unica cosa che dice dov'e' la levetta adesso, e chi si allinea
@@ -322,7 +322,7 @@ toggle_run() {
 	# resta occupato a lungo proprio quando l'azione e' lenta, cioe' quando un
 	# allarme a ogni movimento sarebbe la norma invece che l'eccezione.
 	toggle_lock "$TOGGLE_LOCK_WAIT" || {
-		toggle_error toggle_deferred 'Modifica in corso: la applica chi ha il turno.'; return 0
+		toggle_error toggle_deferred 'A change is in progress: whoever holds the turn will apply it.'; return 0
 	}
 	# La posizione la rilegge `toggle_align` dal file, e non e' un giro inutile:
 	# chi ha aspettato il turno puo' aver visto la levetta muoversi ancora, e
@@ -367,7 +367,7 @@ toggle_run() {
 toggle_align() {
 	local action="$1" tries=0 seen status applied=0
 	[ -n "$action" ] || { toggle_get || return 1; action="$TOGGLE_ACTION"; }
-	toggle_known "$action" || { toggle_error toggle_bad_action 'Azione non valida.'; return 1; }
+	toggle_known "$action" || { toggle_error toggle_bad_action 'Invalid action.'; return 1; }
 	while :; do
 		toggle_position
 		[ "$TOGGLE_POSITION" = unknown ] && return 0
@@ -385,7 +385,7 @@ toggle_align() {
 		[ "$TOGGLE_POSITION" = "$seen" ] && return 0
 		tries=$((tries + 1))
 		[ "$tries" -lt "$TOGGLE_ALIGN_TRIES" ] || {
-			toggle_error toggle_unstable 'La levetta continua a muoversi: allineamento interrotto.'
+			toggle_error toggle_unstable 'The switch keeps moving: alignment interrupted.'
 			return 2
 		}
 	done
@@ -396,7 +396,7 @@ toggle_align() {
 toggle_apply() {
 	local status
 	toggle_lock "$TOGGLE_LOCK_WAIT" || {
-		toggle_error toggle_align_skipped 'Modifica in corso: allineamento saltato.'; return 1
+		toggle_error toggle_align_skipped 'A change is in progress: alignment skipped.'; return 1
 	}
 	toggle_align
 	status=$?

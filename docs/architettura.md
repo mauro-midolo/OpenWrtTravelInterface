@@ -92,8 +92,8 @@ quello dell'italiano, quindi una chiave dimenticata non compila. Le funzioni di
 stessi dizionari, nella lingua del momento. Nessuna libreria esterna: il
 pacchetto resta piccolo per la flash del router.
 
-Il router continua a scrivere le sue frasi in italiano, che restano nei log e
-per i frontend più vecchi. Accanto alla frase manda un codice stabile:
+Il router scrive le sue frasi in inglese, che restano nei log e valgono come
+ripiego. Accanto alla frase manda un codice stabile:
 
 - il plugin rpcd risponde con `error`, `error_code` ed `error_params`
   (`fail_code`); gli helper `led.sh`, `toggle.sh`, `wg.sh` e `ap.sh` scrivono
@@ -103,8 +103,9 @@ per i frontend più vecchi. Accanto alla frase manda un codice stabile:
 - `traveld` aggiunge `code` e `params` agli eventi e `last_error_code` /
   `last_error_params` all'ultimo errore.
 
-Il frontend ricompone la frase dal codice (`src/i18n/backend.ts`,
-`src/i18n/auto.ts`); un codice sconosciuto ricade sulla frase originale. Anche
+Il frontend ricompone la frase dal codice, in italiano o in inglese
+(`src/i18n/backend.ts`, `src/i18n/auto.ts`); un codice sconosciuto ricade sulla
+frase inglese del router. Anche
 i motivi per cui un'opzione VPN è bloccata si ricompongono da `blocked_by`.
 
 ### Sessioni, permessi e segreti

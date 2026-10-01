@@ -136,8 +136,9 @@ function DeviceNameSheet({
  */
 function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<string, string> }) {
   const t = settingsText().usb;
-  // Le etichette e gli stati arrivano dal router, in italiano: si traducono
-  // quelli noti, gli altri (sigle come NCM o RNDIS) restano come sono.
+  // Le etichette arrivano dal router in inglese e gli stati dei moduli come
+  // codici: si traducono quelli noti, gli altri (sigle come NCM o RNDIS)
+  // restano come sono.
   const fn = (label: string) => t.functions[label] ?? label;
   const state = (value: string) => t.moduleState[value] ?? value;
   const net = dev.interfaces.find((i) => i.network);
