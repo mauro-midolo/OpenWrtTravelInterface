@@ -1,15 +1,15 @@
 #!/bin/sh
-# Misura quanto una scansione WiFi disturba il resto del dispositivo.
+# Measures how much a WiFi scan disturbs the rest of the device.
 #
-# Domanda a cui deve rispondere: su questo hardware c'e' UNA SOLA phy con due
-# radio. Una scansione su una radio interrompe anche quello che sta girando
-# sull'altra? Non e' deducibile dalla documentazione, dipende dal driver mt76.
+# Question it must answer: on this hardware there is ONE SINGLE phy with two
+# radios. Does a scan on one radio also interrupt what is running on the other?
+# It cannot be inferred from the documentation, it depends on the mt76 driver.
 #
-# Dalla risposta dipende la schermata di scansione: se la scansione e'
-# distruttiva a livello di phy, il requisito "scansiona senza interrompere le
-# STA connesse" e' impossibile, e la UI deve avvisare invece di prometterlo.
+# The scan screen depends on the answer: if scanning is disruptive at the phy
+# level, the requirement "scan without interrupting connected STAs" is
+# impossible, and the UI must warn instead of promising it.
 #
-# NON MODIFICA NIENTE: esegue solo ping e scansioni.
+# IT CHANGES NOTHING: it only runs pings and scans.
 
 PINGS=20
 TMP=/tmp/travel-measure
@@ -17,11 +17,11 @@ mkdir -p "$TMP"
 
 title() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 say()   { printf '%s\n' "$*"; }
-fail()  { printf '\nERRORE: %s\n' "$*" >&2; exit 1; }
+fail()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-# --- 1. Che cosa c'e' acceso -------------------------------------------------
+# --- 1. What is turned on ---------------------------------------------------
 
-command -v iw >/dev/null || fail "manca 'iw' (installa il pacchetto iw-full)"
+command -v iw >/dev/null || fail "'iw' is missing (install the iw-full package)"
 
 iw dev | awk '
 	function flush() {
@@ -35,22 +35,22 @@ iw dev | awk '
 	END { flush() }
 ' > "$TMP/ifaces"
 
-[ -s "$TMP/ifaces" ] || fail "nessuna interfaccia wireless attiva"
+[ -s "$TMP/ifaces" ] || fail "no active wireless interface"
 
 band_of() {
-	[ "$1" = "0" ] && { echo "spenta"; return; }
+	[ "$1" = "0" ] && { echo "off"; return; }
 	[ "$1" -lt 3000 ] && echo "2.4 GHz" || echo "5 GHz"
 }
 
-title "Interfacce wireless"
+title "Wireless interfaces"
 while read -r ifn typ freq; do
 	printf '  %-8s %-8s %s\n' "$ifn" "$typ" "$(band_of "$freq")"
 done < "$TMP/ifaces"
 
-# --- 2. Chi facciamo soffrire ------------------------------------------------
+# --- 2. Who we make suffer -------------------------------------------------
 #
-# Il bersaglio migliore e' un dispositivo collegato all'AP: e' esattamente
-# quello che succede nella realta' mentre scansioni dal telefono.
+# The best target is a device connected to the AP: it is exactly what happens
+# in real life while you scan from the phone.
 
 target_ip=""
 target_desc=""
@@ -62,14 +62,14 @@ while read -r ifn typ freq; do
 		ip=$(awk -v m="$mac" 'tolower($2) == tolower(m) { print $3; exit }' /tmp/dhcp.leases 2>/dev/null)
 		[ -n "$ip" ] || continue
 		target_ip="$ip"
-		target_desc="client $mac collegato all'AP $ifn"
+		target_desc="client $mac connected to AP $ifn"
 		target_freq="$freq"
 		break
 	done
 	[ -n "$target_ip" ] && break
 done < "$TMP/ifaces"
 
-# Ripiego: se non c'e' nessun client sull'AP, si misura il gateway di una STA.
+# Fallback: if there is no client on the AP, measure a STA's gateway.
 if [ -z "$target_ip" ]; then
 	while read -r ifn typ freq; do
 		[ "$typ" = "managed" ] || continue
@@ -77,7 +77,7 @@ if [ -z "$target_ip" ]; then
 		gw=$(ip route show dev "$ifn" 2>/dev/null | awk '/^default/ { print $3; exit }')
 		[ -n "$gw" ] || continue
 		target_ip="$gw"
-		target_desc="gateway $gw raggiunto dalla STA $ifn"
+		target_desc="gateway $gw reached by STA $ifn"
 		target_freq="$freq"
 		break
 	done < "$TMP/ifaces"
@@ -86,46 +86,46 @@ fi
 if [ -z "$target_ip" ]; then
 	cat <<'EOF'
 
-Non ho trovato niente da misurare.
+Found nothing to measure.
 
-Serve almeno una di queste due cose, poi rilancia:
-  - un dispositivo collegato all'access point del router (il telefono va
-    benissimo: collegalo al WiFi del router e lascialo li');
-  - il router collegato a una rete WiFi come client.
+At least one of these two things is needed, then run again:
+  - a device connected to the router's access point (the phone is just
+    fine: connect it to the router's WiFi and leave it there);
+  - the router connected to a WiFi network as a client.
 
-Se stai lavorando via cavo ethernet, collega il telefono all'AP: e' proprio
-il caso che ci interessa misurare.
+If you are working over an ethernet cable, connect the phone to the AP: that
+is exactly the case we want to measure.
 EOF
 	exit 1
 fi
 
-title "Bersaglio della misura"
+title "Measurement target"
 say "  $target_desc"
-say "  radio del bersaglio: $(band_of "$target_freq")"
+say "  target radio: $(band_of "$target_freq")"
 
-# Alcune build di busybox accettano intervalli frazionari, altre no: piu'
-# risoluzione se possibile, senza rompersi se non lo e'.
+# Some busybox builds accept fractional intervals, others do not: more
+# resolution when possible, without breaking when it is not.
 PING_INT=1
 if ping -c 1 -i 0.2 -W 1 "$target_ip" >/dev/null 2>&1; then
 	PING_INT=0.2
 fi
-say "  intervallo fra i ping: ${PING_INT}s, $PINGS pacchetti per prova"
+say "  interval between pings: ${PING_INT}s, $PINGS packets per test"
 
-# --- 3. Le prove -------------------------------------------------------------
+# --- 3. The tests -----------------------------------------------------------
 
 report_ping() {
 	loss=$(sed -n 's/.*, \([0-9]*\)% packet loss.*/\1/p' "$TMP/ping")
 	rtt=$(sed -n 's|.*round-trip min/avg/max = \(.*\)|\1|p' "$TMP/ping")
 	[ -n "$loss" ] || loss="?"
-	printf '  perdita: %s%%   rtt min/avg/max: %s\n' "$loss" "${rtt:-n/d}"
+	printf '  loss: %s%%   rtt min/avg/max: %s\n' "$loss" "${rtt:-n/a}"
 }
 
-title "Prova 0 - riferimento, nessuna scansione"
+title "Test 0 - baseline, no scan"
 ping -c "$PINGS" -i "$PING_INT" -W 1 "$target_ip" > "$TMP/ping" 2>&1
 report_ping
 
-# Una prova per ogni radio: si scansiona usando un'interfaccia che vive su
-# quella radio, e si guarda se il bersaglio (che sta sull'altra) se ne accorge.
+# One test per radio: scan using an interface that lives on that radio, and
+# see whether the target (which is on the other one) notices.
 seen_bands=""
 while read -r ifn typ freq; do
 	[ "$freq" = "0" ] && continue
@@ -134,13 +134,13 @@ while read -r ifn typ freq; do
 	seen_bands="$seen_bands $band"
 
 	if [ "$band" = "$(band_of "$target_freq")" ]; then
-		relazione="STESSA radio del bersaglio (ci si aspetta disturbo)"
+		relation="SAME radio as the target (disturbance expected)"
 	else
-		relazione="ALTRA radio rispetto al bersaglio (qui si gioca tutto)"
+		relation="OTHER radio than the target (this is what matters)"
 	fi
 
-	title "Prova - scansione su $ifn ($band)"
-	say "  $relazione"
+	title "Test - scan on $ifn ($band)"
+	say "  $relation"
 
 	ping -c "$PINGS" -i "$PING_INT" -W 1 "$target_ip" > "$TMP/ping" 2>&1 &
 	ping_pid=$!
@@ -150,34 +150,34 @@ while read -r ifn typ freq; do
 	if iw dev "$ifn" scan > "$TMP/scan" 2>&1; then
 		t1=$(date +%s)
 		found=$(grep -c '^BSS ' "$TMP/scan")
-		say "  scansione riuscita: $found reti in $((t1 - t0))s"
+		say "  scan succeeded: $found networks in $((t1 - t0))s"
 	else
 		t1=$(date +%s)
-		say "  scansione FALLITA dopo $((t1 - t0))s: $(head -n 1 "$TMP/scan")"
+		say "  scan FAILED after $((t1 - t0))s: $(head -n 1 "$TMP/scan")"
 	fi
 
 	wait "$ping_pid"
 	report_ping
 done < "$TMP/ifaces"
 
-# --- 4. Contesto -------------------------------------------------------------
+# --- 4. Context -------------------------------------------------------------
 
-title "Ultime righe di log"
+title "Latest log lines"
 logread 2>/dev/null | tail -n 25
 
-title "Come si legge"
+title "How to read it"
 cat <<'EOF'
-  Confronta la perdita della Prova 0 con quella delle prove successive.
+  Compare the loss of Test 0 with that of the following tests.
 
-  - Perdita simile al riferimento anche scansionando sull'ALTRA radio
-    -> le radio sono indipendenti: si puo' scansionare senza disturbare.
+  - Loss similar to the baseline even when scanning on the OTHER radio
+    -> the radios are independent: scanning does not disturb.
 
-  - Perdita molto piu' alta anche sull'ALTRA radio
-    -> la scansione occupa tutta la phy: la UI dovra' avvisare che
-       scansionare interrompe momentaneamente le connessioni.
+  - Much higher loss on the OTHER radio as well
+    -> the scan takes up the whole phy: the UI will have to warn that
+       scanning briefly interrupts connections.
 
-  - Scansione fallita su un'interfaccia in modo AP
-    -> per scansionare quella banda servira' un'interfaccia dedicata.
+  - Scan failed on an interface in AP mode
+    -> scanning that band will need a dedicated interface.
 EOF
 
 printf '\n'

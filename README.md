@@ -3,7 +3,7 @@
 **English** · [Italiano](README-it.md)
 
 [![Version: 1.11.0](https://img.shields.io/badge/version-1.11.0-blue)](package/travel/files/usr/share/travel/version)
-[![Reference OpenWrt: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
+[![Reference OpenWrt: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architecture.md)
 [![Device: GL-MT3600BE](https://img.shields.io/badge/device-GL--MT3600BE-green)](#reference-device-and-firmware)
 [![UI: English · Italiano](https://img.shields.io/badge/UI-English%20%C2%B7%20Italiano-lightgrey)](#languages)
 
@@ -80,9 +80,7 @@ second connection, failover lets you use it when the main one is no longer
 available.
 
 Technical details, rollback behaviour and missing pieces are described in
-[Architecture and implementation status](docs/architettura.md) (in Italian).
-For when something goes wrong on the road, see the
-[recovery guide](docs/recovery.md) (in Italian).
+[Architecture and implementation status](docs/architecture.md).
 
 ## Try the interface without a router
 
@@ -118,7 +116,7 @@ You need a PC with **PowerShell, Node.js, npm, SSH and tar**, a router with
 OpenWrt already installed, and administrative SSH access. The router is expected
 to provide the basic OpenWrt services, including uhttpd with ubus access,
 rpcd/UCI and ucode with its modules; the full list is in the
-[architecture document](docs/architettura.md#build-installazione-e-dipendenze).
+[architecture document](docs/architecture.md#build-installation-and-dependencies).
 Installing missing dependencies requires Internet access from the router.
 
 From the repository root:
@@ -207,8 +205,8 @@ project version, steps to reproduce and the expected behaviour. Remove
 passwords, keys and any other private data from attached logs.
 
 To find your way around the code and the areas still to be completed, start
-from [`docs/architettura.md`](docs/architettura.md) (in Italian). Comments in
-the source code are written in Italian as well.
+from [`docs/architecture.md`](docs/architecture.md). Comments in the source
+code are written in Italian.
 
 This README also exists in [Italian](README-it.md); the two files are kept in
 sync.

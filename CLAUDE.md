@@ -1,17 +1,21 @@
 ## Git
 
-Dopo ogni modifica completata, esegui sempre commit e push delle modifiche sul repository remoto, utilizzando il branch Git attualmente attivo.
+After every completed change, always commit and push to the remote repository, using the currently active Git branch.
 
-#Router di test
+## Test router
 
-È disponibile un router collegato al PC, raggiungibile all'indirizzo 192.168.10.1.
+A router connected to the PC is available at 192.168.10.1.
 
-Il router non ha alcuna password configurata ed è disponibile per test, verifiche e sviluppo delle funzionalità del progetto.
+The router has no password configured and is available for testing, verification and development of the project's features.
 
-## Documentazione in due lingue
+## Project language
 
-`README.md` (inglese, versione predefinita) e `README-it.md` (italiano) vanno sempre modificati insieme: ogni cambiamento a uno dei due deve essere riportato nell'altro nello stesso commit, mantenendo la stessa struttura di sezioni.
+The project is international: documentation (`docs/`, `CLAUDE.md`), the `tools/` scripts and their messages are written in English. New documentation pages are written in English.
 
-Lo stesso vale per i testi dell'interfaccia: ogni testo nuovo o modificato in `frontend/src/i18n/` va scritto sia in italiano sia in inglese.
+## Two-language documentation
 
-I messaggi che il backend (plugin rpcd, helper shell, traveld) manda all'interfaccia sono in inglese e hanno sempre un codice (`fail_code codice "message" chiave valore`); la traduzione italiana e quella inglese del codice vanno aggiunte in `frontend/src/i18n/backend.ts`.
+`README.md` (English, default version) and `README-it.md` (Italian) must always be changed together: every change to one of them must be carried over to the other in the same commit, keeping the same section structure.
+
+The same applies to the interface texts: every new or changed text in `frontend/src/i18n/` must be written in both Italian and English.
+
+The messages the backend (rpcd plugin, shell helpers, traveld) sends to the interface are in English and always carry a code (`fail_code code "message" key value`); the Italian and English translations of the code must be added to `frontend/src/i18n/backend.ts`.

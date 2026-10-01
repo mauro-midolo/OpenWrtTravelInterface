@@ -3,7 +3,7 @@
 [English](README.md) · **Italiano**
 
 [![Versione progetto: 1.11.0](https://img.shields.io/badge/versione-1.11.0-blue)](package/travel/files/usr/share/travel/version)
-[![OpenWrt di riferimento: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
+[![OpenWrt di riferimento: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architecture.md)
 [![Dispositivo: GL-MT3600BE](https://img.shields.io/badge/dispositivo-GL--MT3600BE-green)](#dispositivo-e-firmware-di-riferimento)
 [![Interfaccia: English · Italiano](https://img.shields.io/badge/interfaccia-English%20%C2%B7%20Italiano-lightgrey)](#lingue)
 
@@ -81,8 +81,8 @@ Se hai configurato una seconda connessione, il failover permette di usarla
 quando quella principale non è più disponibile.
 
 Dettagli tecnici, comportamenti di rollback e sviluppi mancanti sono descritti
-in [Architettura e stato dell'implementazione](docs/architettura.md). Per quando
-qualcosa va storto in viaggio c'è la [guida al ripristino](docs/recovery.md).
+in [Architettura e stato dell'implementazione](docs/architecture.md) (in
+inglese).
 
 ## Provare l'interfaccia senza router
 
@@ -116,8 +116,8 @@ In questa modalità le operazioni dell'interfaccia modificano il router indicato
 Servono un PC con **PowerShell, Node.js, npm, SSH e tar**, il router con
 OpenWrt già installato e accesso amministrativo via SSH. Sul router sono
 attesi i servizi OpenWrt di base, tra cui uhttpd con accesso ubus, rpcd/UCI e
-ucode con i relativi moduli; l'elenco completo è
-nell'[architettura](docs/architettura.md#build-installazione-e-dipendenze).
+ucode con i relativi moduli; l'elenco completo è nell'[architettura](docs/architecture.md#build-installation-and-dependencies)
+(in inglese).
 L'installazione delle dipendenze mancanti richiede accesso a Internet dal router.
 
 Dalla cartella principale del repository:
@@ -206,7 +206,7 @@ versione del progetto, passaggi per riprodurlo e comportamento atteso.
 Rimuovi password, chiavi e altri dati riservati dagli eventuali log allegati.
 
 Per orientarsi nel codice e individuare le aree da completare, parti da
-[`docs/architettura.md`](docs/architettura.md).
+[`docs/architecture.md`](docs/architecture.md) (in inglese).
 
 Questo README esiste anche in [inglese](README.md), che è la versione
 predefinita; i due file vengono aggiornati insieme.

@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
-    Crea l'access point sul router, su entrambe le radio.
+    Creates the access point on the router, on both radios.
 
 .DESCRIPTION
-    Serve prima della misura sull'impatto della scansione: senza niente acceso
-    non c'e' niente da misurare. Su OpenWrt vanilla le radio nascono disabilitate.
+    Needed before measuring the impact of scanning: with nothing turned on
+    there is nothing to measure. On vanilla OpenWrt the radios start disabled.
 
-    Attenzione: questo script MODIFICA la configurazione wireless del router.
-    Spegne le wifi-iface di default (altrimenti si accenderebbe una rete
-    "OpenWrt" aperta) e crea la propria su ogni radio.
+    Warning: this script CHANGES the router's wireless configuration. It turns
+    off the default wifi-ifaces (otherwise an open "OpenWrt" network would come
+    up) and creates its own on each radio.
 
-    La password viaggia sullo stdin di ssh, non sulla riga di comando: non
-    finisce nella cronologia della shell ne' nella lista dei processi del router.
+    The password travels over ssh's stdin, not on the command line: it ends up
+    neither in the shell history nor in the router's process list.
 
 .EXAMPLE
-    .\tools\setup-ap.ps1 -Ssid "Beryl" -Password "unapasswordlunga" -Country IT
+    .\tools\setup-ap.ps1 -Ssid "Beryl" -Password "alongpassword" -Country IT
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $Ssid,
     [Parameter(Mandatory = $true)] [string] $Password,
-    # Il paese in cui ti trovi FISICAMENTE: determina canali e potenze ammessi.
+    # The country you are PHYSICALLY in: it determines the allowed channels and power.
     [string] $Country = 'IT',
     [string] $Router = '192.168.10.1',
     [string] $User = 'root'
@@ -29,32 +29,32 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($Password.Length -lt 8) { throw 'La password deve essere di almeno 8 caratteri.' }
+if ($Password.Length -lt 8) { throw 'The password must be at least 8 characters long.' }
 
 $script = Join-Path $PSScriptRoot 'setup-ap.sh'
 $remote = "$User@$Router"
 
 function Sh([string] $value) { "'" + ($value -replace "'", "'\''") + "'" }
 
-# I parametri vengono anteposti come assegnazioni dentro lo script stesso, cosi'
-# non passano dalla riga di comando di ssh.
+# The parameters are prepended as assignments inside the script itself, so
+# they do not go through ssh's command line.
 $body = @(
     "AP_SSID=$(Sh $Ssid)",
     "AP_PASS=$(Sh $Password)",
     "AP_COUNTRY=$(Sh $Country)",
-    # -Encoding UTF8 non e' opzionale: senza, PowerShell 5.1 legge con la
-    # codepage ANSI e i caratteri non-ASCII diventano virgolette dritte, che
-    # sballano il quoting dello script una volta arrivato sul router.
+    # -Encoding UTF8 is not optional: without it, PowerShell 5.1 reads with the
+    # ANSI code page and non-ASCII characters turn into straight quotes, which
+    # break the script's quoting once it reaches the router.
     ((Get-Content $script -Raw -Encoding UTF8) -replace "`r`n", "`n")
 ) -join "`n"
 
-Write-Host "==> configuro l'access point su $remote" -ForegroundColor Cyan
+Write-Host "==> configuring the access point on $remote" -ForegroundColor Cyan
 Write-Host "    SSID: $Ssid   Country: $Country" -ForegroundColor DarkGray
-Write-Host "    Se sei collegato al router via WiFi potresti perdere la" -ForegroundColor DarkGray
-Write-Host "    connessione: meglio farlo via cavo." -ForegroundColor DarkGray
+Write-Host "    If you are connected to the router over WiFi you may lose the" -ForegroundColor DarkGray
+Write-Host "    connection: better to do it over a cable." -ForegroundColor DarkGray
 
-# Lo script contiene la password in chiaro: viene cancellato dal router subito
-# dopo l'esecuzione, comunque vada.
+# The script contains the password in clear text: it is deleted from the
+# router right after running, whatever the outcome.
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName              = 'ssh'
 $psi.Arguments             = "-o StrictHostKeyChecking=accept-new $remote ""cat > /tmp/setup-ap.sh; sh /tmp/setup-ap.sh; rc=`$?; rm -f /tmp/setup-ap.sh; exit `$rc"""
@@ -63,9 +63,9 @@ $psi.UseShellExecute       = $false
 
 $proc = [System.Diagnostics.Process]::Start($psi)
 try {
-    # StreamWriter esplicito in UTF-8 senza BOM: lo stdin di default userebbe la
-    # codepage della console, che rimappa i caratteri fuori tabella. Vale doppio
-    # qui, dove passa anche la password.
+    # Explicit UTF-8 StreamWriter without BOM: the default stdin would use the
+    # console code page, which remaps characters outside its table. This matters
+    # twice here, where the password goes through too.
     $writer = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, (New-Object System.Text.UTF8Encoding($false)))
     $writer.NewLine = "`n"
     $writer.Write($body)
@@ -78,5 +78,5 @@ try {
 
 if ($proc.ExitCode -ne 0) {
     Write-Host ''
-    Write-Host "Configurazione fallita (ssh ha restituito $($proc.ExitCode))." -ForegroundColor Yellow
+    Write-Host "Configuration failed (ssh returned $($proc.ExitCode))." -ForegroundColor Yellow
 }

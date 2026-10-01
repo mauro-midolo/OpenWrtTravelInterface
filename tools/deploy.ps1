@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    Compila l'interfaccia e la installa sul router.
+    Builds the interface and installs it on the router.
 
 .DESCRIPTION
-    Deploy per copia diretta: niente SDK OpenWrt, niente pacchetto da costruire.
-    Serve solo `ssh`, che Windows 11 ha gia' integrato.
+    Deployment by direct copy: no OpenWrt SDK, no package to build. Only `ssh`
+    is needed, which Windows 11 already ships.
 
-    Il trasferimento passa da un tar inviato sullo stdin di ssh perche' OpenWrt
-    non installa `scp` ne' il server SFTP di default: e' l'unico metodo che
-    funziona su un dispositivo appena flashato.
+    The transfer goes through a tar sent over ssh's stdin because OpenWrt does
+    not install `scp` or the SFTP server by default: it is the only method that
+    works on a freshly flashed device.
 
 .EXAMPLE
     .\tools\deploy.ps1
@@ -19,10 +19,10 @@
 param(
     [string] $Router = '192.168.10.1',
     [string] $User = 'root',
-    # Salta la compilazione del frontend: utile per iterare solo sul backend.
+    # Skips the frontend build: useful when iterating on the backend only.
     [switch] $SkipBuild,
-    # Installa anche il terminale web, la rete di sicurezza per quando sei in
-    # viaggio senza SSH. Richiede che il router abbia Internet.
+    # Also installs the web terminal, the safety net for when you are on the
+    # road without SSH. Requires the router to have Internet access.
     [switch] $WithTtyd
 )
 
@@ -39,62 +39,62 @@ $remote   = "$User@$Router"
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 function Note($text) { Write-Host "    $text" -ForegroundColor DarkGray }
 
-# --- 1. Compilazione del frontend -------------------------------------------
+# --- 1. Frontend build ------------------------------------------------------
 
 if (-not $SkipBuild) {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw "npm non trovato. Installa Node.js, oppure usa -SkipBuild."
+        throw "npm not found. Install Node.js, or use -SkipBuild."
     }
 
     if (-not (Test-Path (Join-Path $frontend 'node_modules'))) {
-        Step 'installo le dipendenze del frontend (solo la prima volta)'
+        Step 'installing frontend dependencies (first time only)'
         Push-Location $frontend
         try { npm install } finally { Pop-Location }
-        if ($LASTEXITCODE -ne 0) { throw 'npm install fallito' }
+        if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
     }
 
-    Step 'compilo il frontend'
+    Step 'building the frontend'
     Push-Location $frontend
     try { npm run build } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw 'npm run build fallito' }
+    if ($LASTEXITCODE -ne 0) { throw 'npm run build failed' }
 }
 
 $dist = Join-Path $frontend 'dist'
 if (-not (Test-Path $dist)) {
-    throw "Manca $dist. Rilancia senza -SkipBuild."
+    throw "$dist is missing. Run again without -SkipBuild."
 }
 
-# --- 2. Staging: un albero che rispecchia il filesystem del router ----------
+# --- 2. Staging: a tree that mirrors the router's filesystem ---------------
 
-Step 'preparo i file da inviare'
+Step 'preparing the files to send'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 $wwwTarget = Join-Path $stage 'www\travel'
 New-Item -ItemType Directory -Path $wwwTarget -Force | Out-Null
 Copy-Item (Join-Path $dist '*') $wwwTarget -Recurse -Force
 
-# Tutto quello che sta sotto package\travel\files rispecchia il filesystem del
-# router: si copiano tutti i rami, non solo usr, altrimenti un file nuovo in
-# etc\ non arriverebbe mai a destinazione.
+# Everything under package\travel\files mirrors the router's filesystem: all
+# branches are copied, not just usr, otherwise a new file in etc\ would never
+# reach its destination.
 foreach ($branch in Get-ChildItem $files -Directory) {
     Copy-Item $branch.FullName $stage -Recurse -Force
 }
 
 $payloadKb = [math]::Round(((Get-ChildItem $stage -Recurse -File | Measure-Object Length -Sum).Sum / 1KB))
-Note "$payloadKb KB da trasferire"
+Note "$payloadKb KB to transfer"
 
-# ustar: busybox tar sul router non legge in modo affidabile il formato pax
-# che bsdtar produrrebbe di default.
+# ustar: busybox tar on the router does not reliably read the pax format
+# that bsdtar would produce by default.
 if (Test-Path $tarball) { Remove-Item $tarball -Force }
 tar --format=ustar -czf $tarball -C $stage .
-if ($LASTEXITCODE -ne 0) { throw 'creazione del tar fallita' }
+if ($LASTEXITCODE -ne 0) { throw 'tar creation failed' }
 
-# --- 3. Trasferimento -------------------------------------------------------
+# --- 3. Transfer -----------------------------------------------------------
 
-Step "invio a $remote"
-Note 'Se chiede la password e ti stanca, configura una chiave: vedi README.'
+Step "sending to $remote"
+Note 'If typing the password gets tiresome, set up a key: see the README.'
 
-# `cat >` e non `dd`: il dd di busybox non conosce status=none e risponde
-# stampando l'help. La redirezione la interpreta la shell del router, non cmd.
+# `cat >` and not `dd`: busybox's dd does not know status=none and replies by
+# printing its help. The redirection is interpreted by the router's shell, not cmd.
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = 'ssh'
 $psi.Arguments              = "-o StrictHostKeyChecking=accept-new $remote ""cat > /tmp/travel-deploy.tar.gz"""
@@ -110,16 +110,16 @@ try {
 } finally {
     if (-not $proc.HasExited) { $proc.Kill() }
 }
-if ($proc.ExitCode -ne 0) { throw "trasferimento fallito (ssh ha restituito $($proc.ExitCode))" }
+if ($proc.ExitCode -ne 0) { throw "transfer failed (ssh returned $($proc.ExitCode))" }
 
-# --- 4. Installazione sul router -------------------------------------------
+# --- 4. Installation on the router -----------------------------------------
 
-Step 'installo sul router'
+Step 'installing on the router'
 
 if ($WithTtyd) { $ttyd = '1' } else { $ttyd = '0' }
 
-# /www/travel viene svuotata: Vite mette un hash nel nome dei file, senza
-# pulizia i vecchi bundle resterebbero li' a occupare flash per sempre.
+# /www/travel is emptied: Vite puts a hash in file names, and without cleanup
+# old bundles would stay there taking up flash forever.
 $install = @"
 set -e
 rm -rf /www/travel
@@ -129,9 +129,9 @@ TRAVEL_INSTALL_TTYD=$ttyd sh /usr/share/travel/setup.sh
 "@
 
 ssh -o StrictHostKeyChecking=accept-new $remote $install
-if ($LASTEXITCODE -ne 0) { throw 'installazione fallita sul router' }
+if ($LASTEXITCODE -ne 0) { throw 'installation failed on the router' }
 
 Write-Host ''
-Write-Host "Fatto. Apri  https://$Router/travel/" -ForegroundColor Green
-Note "LuCI resta dov'e': https://$Router/cgi-bin/luci"
-if ($WithTtyd) { Note "Terminale web: https://$Router/cgi-bin/luci/admin/services/ttyd" }
+Write-Host "Done. Open  https://$Router/travel/" -ForegroundColor Green
+Note "LuCI stays where it is: https://$Router/cgi-bin/luci"
+if ($WithTtyd) { Note "Web terminal: https://$Router/cgi-bin/luci/admin/services/ttyd" }

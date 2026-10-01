@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Esegue la misura dell'impatto della scansione WiFi sul router.
+    Measures the impact of WiFi scanning on the router.
 
 .DESCRIPTION
-    Copia measure-scan-impact.sh sul router e lo lancia. Non modifica niente:
-    lo script fa solo ping e scansioni.
+    Copies measure-scan-impact.sh to the router and runs it. It changes
+    nothing: the script only pings and scans.
 
-    Prima di lanciarlo, collega il telefono al WiFi del router e lascialo li':
-    e' il bersaglio della misura.
+    Before running it, connect the phone to the router's WiFi and leave it
+    there: it is the target of the measurement.
 
 .EXAMPLE
     .\tools\measure-scan-impact.ps1
@@ -24,13 +24,13 @@ Set-StrictMode -Version Latest
 $script = Join-Path $PSScriptRoot 'measure-scan-impact.sh'
 $remote = "$User@$Router"
 
-Write-Host "==> invio la misura a $remote" -ForegroundColor Cyan
-Write-Host "    Il telefono deve essere collegato al WiFi del router." -ForegroundColor DarkGray
+Write-Host "==> sending the measurement to $remote" -ForegroundColor Cyan
+Write-Host "    The phone must be connected to the router's WiFi." -ForegroundColor DarkGray
 
-# -Encoding UTF8 non e' opzionale: senza, PowerShell 5.1 legge il file con la
-# codepage ANSI e i caratteri non-ASCII si trasformano in virgolette dritte,
-# che sballano il quoting dello script una volta arrivato sul router.
-# CRLF -> LF perche' la shell del router non digerisce i ritorni a capo Windows.
+# -Encoding UTF8 is not optional: without it, PowerShell 5.1 reads the file with
+# the ANSI code page and non-ASCII characters turn into straight quotes, which
+# break the script's quoting once it reaches the router.
+# CRLF -> LF because the router's shell cannot digest Windows line endings.
 $body = (Get-Content $script -Raw -Encoding UTF8) -replace "`r`n", "`n"
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -41,8 +41,8 @@ $psi.UseShellExecute       = $false
 
 $proc = [System.Diagnostics.Process]::Start($psi)
 try {
-    # StreamWriter esplicito in UTF-8 senza BOM: lo stdin di default userebbe la
-    # codepage della console, che rimappa i caratteri fuori tabella.
+    # Explicit UTF-8 StreamWriter without BOM: the default stdin would use the
+    # console code page, which remaps characters outside its table.
     $writer = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, (New-Object System.Text.UTF8Encoding($false)))
     $writer.NewLine = "`n"
     $writer.Write($body)
@@ -55,5 +55,5 @@ try {
 
 if ($proc.ExitCode -ne 0) {
     Write-Host ''
-    Write-Host "La misura non e' andata a buon fine (ssh ha restituito $($proc.ExitCode))." -ForegroundColor Yellow
+    Write-Host "The measurement did not succeed (ssh returned $($proc.ExitCode))." -ForegroundColor Yellow
 }
