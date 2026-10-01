@@ -88,6 +88,13 @@ export const mwanText = defineText({
     trackIp: 'Indirizzo da controllare',
     trackIp2: 'Secondo indirizzo (facoltativo)',
     badTrackIp: 'Serve almeno un indirizzo IPv4 valido.',
+    reliability: 'Quando la WAN è su',
+    reliabilityAny: 'Basta che ne risponda uno',
+    reliabilityBoth: 'Devono rispondere entrambi',
+    reliabilityAnyHint:
+      'Il secondo indirizzo fa da riserva: viene controllato solo quando il primo non risponde.',
+    reliabilityBothHint:
+      'Si controllano sempre tutti e due: se uno smette di rispondere, la WAN risulta giù.',
     every: 'Ogni quanto controllare',
     intervalLabel: 'intervallo in secondi',
     secondsTimeout: 'secondi, timeout',
@@ -186,6 +193,13 @@ export const mwanText = defineText({
     trackIp: 'Address to check',
     trackIp2: 'Second address (optional)',
     badTrackIp: 'At least one valid IPv4 address is needed.',
+    reliability: 'When the WAN is up',
+    reliabilityAny: 'One answering is enough',
+    reliabilityBoth: 'Both must answer',
+    reliabilityAnyHint:
+      'The second address is a backup: it is checked only when the first one does not answer.',
+    reliabilityBothHint:
+      'Both are always checked: if either stops answering, the WAN is marked down.',
     every: 'How often to check',
     intervalLabel: 'interval in seconds',
     secondsTimeout: 'seconds, timeout',

@@ -610,6 +610,10 @@ export function HealthSheet({
   const [timeout, setTimeoutValue] = useState(String(iface.timeout));
   const [down, setDown] = useState(String(iface.down));
   const [up, setUp] = useState(String(iface.up));
+  // Quanti IP devono rispondere. mwan3track li pinga in ordine e si ferma
+  // appena ne hanno risposto abbastanza: con 1 il secondo e' una riserva,
+  // pingata solo quando il primo tace; con 2 si pingano sempre tutti e due.
+  const [both, setBoth] = useState(iface.reliability >= 2);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -640,7 +644,7 @@ export function HealthSheet({
         count: iface.count,
         up: Number(up),
         down: Number(down),
-        reliability: 1,
+        reliability: both && ips.length >= 2 ? 2 : 1,
       });
       await applyMwan();
       onClose(true);
@@ -681,6 +685,21 @@ export function HealthSheet({
           </label>
 
           {!ipsOk && <span class="muted">{t.badTrackIp}</span>}
+
+          {/* Solo con due indirizzi: con uno la domanda non esiste. */}
+          {ips.length >= 2 && (
+            <label class="field">
+              <span>{t.reliability}</span>
+              <select
+                value={both ? 'both' : 'any'}
+                onChange={(e) => setBoth((e.target as HTMLSelectElement).value === 'both')}
+              >
+                <option value="any">{t.reliabilityAny}</option>
+                <option value="both">{t.reliabilityBoth}</option>
+              </select>
+              <span class="muted">{both ? t.reliabilityBothHint : t.reliabilityAnyHint}</span>
+            </label>
+          )}
 
           <div class="field">
             <span>{t.every}</span>
