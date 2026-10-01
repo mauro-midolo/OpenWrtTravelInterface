@@ -105,6 +105,27 @@ export function statusLabel(status: string): string {
   }
 }
 
+export type TrackState = 'up' | 'down' | 'skipped' | 'unknown';
+
+/**
+ * L'esito di un tracking IP, ridotto ai casi che l'interfaccia distingue.
+ *
+ * `skipped` non e' un guasto: raggiunti `reliability` IP che rispondono,
+ * mwan3track non pinga gli altri in quel giro. Con il default (1) il secondo
+ * IP risulta quindi sempre saltato, e mostrarlo come irraggiungibile faceva
+ * sembrare rotto qualunque indirizzo ci si mettesse.
+ */
+export function trackState(status: string): TrackState {
+  switch (status) {
+    case 'up':
+    case 'down':
+    case 'skipped':
+      return status;
+    default:
+      return 'unknown';
+  }
+}
+
 /** Le WAN che mwan3 sta usando davvero, in ordine di priorita'. */
 export function activeInterfaces(mwan: Mwan): MwanInterface[] {
   return mwan.interfaces

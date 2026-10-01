@@ -4,9 +4,9 @@ import { usePoll } from '../lib/poll';
 import { useApply } from '../lib/apply';
 import { formatBytes, formatRate, getDashboard, overallState } from '../lib/dashboard';
 import type { Dashboard as DashboardData, DashWan, OverallState } from '../lib/dashboard';
-import { activeInterfaces, getMwan, modeLabel, statusLabel } from '../lib/mwan';
+import { activeInterfaces, getMwan, modeLabel, statusLabel, trackState } from '../lib/mwan';
 import { HealthSheet, MwanCard, MwanSheet, RuleSheet, RulesCard } from './MultiWan';
-import type { Mwan, MwanInterface, MwanRule } from '../lib/mwan';
+import type { Mwan, MwanInterface, MwanRule, TrackResult } from '../lib/mwan';
 import {
   hostnameFromUci,
   hostnameLabel,
@@ -76,6 +76,20 @@ function Row({ label, value }: { label: string; value: string }) {
       <span class="row__value">{value}</span>
     </div>
   );
+}
+
+function trackValue(track: TrackResult): string {
+  const t = dashboardText();
+  switch (trackState(track.status)) {
+    case 'up':
+      return t.trackUp(track.latency, track.packetloss);
+    case 'down':
+      return t.trackDown(track.packetloss);
+    case 'skipped':
+      return t.trackSkipped;
+    default:
+      return t.trackUnknown;
+  }
 }
 
 function wanTitle(wan: DashWan): string {
@@ -152,11 +166,7 @@ function WanCard({
             <Row
               key={track.ip}
               label={track.ip}
-              value={
-                track.status === 'up'
-                  ? t.trackUp(track.latency, track.packetloss)
-                  : t.trackDown(track.packetloss)
-              }
+              value={trackValue(track)}
             />
           ))}
           <Row
