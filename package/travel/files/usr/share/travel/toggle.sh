@@ -341,10 +341,12 @@ toggle_kernel_position() {
 # kernel se l'evento non arriva.
 toggle_position() {
 	TOGGLE_POSITION=unknown
+	# Il kernel si rilegge ogni volta e non si scrive nel file: il file e' solo
+	# di chi rileva gli eventi. Scriverlo da qui perdeva un movimento - letto il
+	# livello vecchio, un evento registra quello nuovo e rinuncia al turno
+	# contando sul file, e questa scrittura in ritardo lo riportava indietro.
 	if [ ! -r "$TOGGLE_POSITION_FILE" ]; then
 		TOGGLE_POSITION=$(toggle_kernel_position) || TOGGLE_POSITION=unknown
-		[ "$TOGGLE_POSITION" = unknown ] ||
-			printf '%s\n' "$TOGGLE_POSITION" > "$TOGGLE_POSITION_FILE" 2>/dev/null
 		return 0
 	fi
 	read -r TOGGLE_POSITION < "$TOGGLE_POSITION_FILE" 2>/dev/null
