@@ -46,6 +46,8 @@ import { getUplinks, isValidMac, normalizeMac } from '../lib/wifi';
 import type { MacChoice } from '../lib/wifi';
 import { ApplyStatus } from '../components/ApplyStatus';
 import { MacPicker } from '../components/MacPicker';
+import { commonText } from '../i18n/common';
+import { lanText } from '../i18n/lan';
 
 /**
  * Finestra lunga: dopo lo spostamento il dispositivo deve rinnovare il DHCP e
@@ -64,6 +66,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 
 export function Lan({ onLogout }: { onLogout: () => void }) {
+  const t = lanText();
   const [lan, setLan] = useState<LanConfig | null>(null);
   const [wans, setWans] = useState<WanSubnet[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -122,53 +125,45 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
   return (
     <main class="screen">
       <header class="topbar">
-        <h1>Rete locale</h1>
+        <h1>{t.title}</h1>
         <button class="button button--ghost" onClick={reload}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
-      {!lan && !error && <p class="muted">Leggo la configurazione…</p>}
+      {!lan && !error && <p class="muted">{t.loading}</p>}
 
       {lan && extra.length > 0 && (
         <section class="card uplink uplink--no-address">
-          <h2 class="uplink__title">Transizione in corso</h2>
-          <Row label="Nuovo" value={primary} />
+          <h2 class="uplink__title">{t.transition}</h2>
+          <Row label={t.newAddress} value={primary} />
           {extra.map((address) => (
-            <Row key={address} label="Vecchio" value={address} />
+            <Row key={address} label={t.oldAddress} value={address} />
           ))}
-          <p class="muted">
-            Verifica di raggiungere <strong>https://{primary}/travel/</strong> prima di
-            togliere il vecchio.
-          </p>
+          <p class="muted">{t.checkNew(primary)}</p>
           <button
             class="button button--primary"
             disabled={busy}
             onClick={() => void removeOld()}
           >
-            Rimuovi il vecchio indirizzo
+            {t.removeOld}
           </button>
         </section>
       )}
 
       {lan && conflicts.length > 0 && (
         <section class="card uplink uplink--unassociated">
-          <h2 class="uplink__title">Conflitto di sottorete</h2>
-          <p>
-            La rete locale usa la stessa sottorete di una rete a monte: il traffico dei
-            client <strong>non esce</strong>.
-          </p>
+          <h2 class="uplink__title">{t.conflict}</h2>
+          <p>{t.conflictText}</p>
           {conflicts.map((c) => (
             <Row key={c.label} label={c.label} value={c.ipv4} />
           ))}
           {suggestion && (
-            <p class="muted">
-              Intervallo libero: <strong>{suggestion}</strong>
-            </p>
+            <p class="muted">{t.freeRange(suggestion)}</p>
           )}
           <button class="button button--primary" onClick={() => setEditing(true)}>
-            Sposta la rete locale
+            {t.moveLan}
           </button>
         </section>
       )}
@@ -176,41 +171,39 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
       {lan && (
         <section class="card">
           <header class="radio__head">
-            <h2 class="uplink__title">Configurazione attuale</h2>
+            <h2 class="uplink__title">{t.current}</h2>
             <button class="button button--ghost" onClick={() => setEditing(true)}>
-              Modifica
+              {t.edit}
             </button>
           </header>
-          <Row label="Indirizzo del router" value={primary || '—'} />
-          <Row label="Rete" value={`${prefix24(primary)}.0 · 254 indirizzi`} />
+          <Row label={t.routerAddress} value={primary || '—'} />
+          <Row label={t.network} value={t.networkValue(prefix24(primary))} />
           {/* Solo dove IPv6 c'e': su una LAN senza, righe con un trattino
               direbbero che manca qualcosa invece che "qui non c'e'". */}
           {lan.addresses6.length > 0 && (
-            <Row label="Indirizzo IPv6" value={lan.addresses6.join('  ')} />
+            <Row label={t.address6} value={lan.addresses6.join('  ')} />
           )}
-          {lan.ula && <Row label="Prefisso ULA" value={lan.ula} />}
-          <Row label="Annunci IPv6" value={raModeLabel(matchRaMode(lan))} />
-          <Row label="Interfaccia" value={lan.device || '—'} />
+          {lan.ula && <Row label={t.ula} value={lan.ula} />}
+          <Row label={t.ra} value={raModeLabel(matchRaMode(lan))} />
+          <Row label={t.device} value={lan.device || '—'} />
           <Row
-            label="Pool DHCP"
+            label={t.pool}
             value={
               lan.dhcp.ignore
-                ? 'disattivato'
+                ? t.disabled
                 : `${lan.dhcp.start} → ${Number(lan.dhcp.start) + Number(lan.dhcp.limit) - 1} · lease ${lan.dhcp.leasetime}`
             }
           />
           <Row
-            label="DNS dati ai client"
-            value={lan.dns_client.length > 0 ? lan.dns_client.join('  ') : 'il router stesso'}
+            label={t.clientDns}
+            value={lan.dns_client.length > 0 ? lan.dns_client.join('  ') : t.routerItself}
           />
           {lan.dns_client6.length > 0 && (
-            <Row label="DNS IPv6 dati ai client" value={lan.dns_client6.join('  ')} />
+            <Row label={t.clientDns6} value={lan.dns_client6.join('  ')} />
           )}
           <Row
-            label="Resolver del router"
-            value={
-              lan.dns_upstream.length > 0 ? lan.dns_upstream.join('  ') : 'quelli della WAN'
-            }
+            label={t.resolver}
+            value={lan.dns_upstream.length > 0 ? lan.dns_upstream.join('  ') : t.wanOnes}
           />
         </section>
       )}
@@ -243,11 +236,7 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
  */
 const MAC_ROLLBACK_SECONDS = 150;
 
-const ROLE_LABEL: Record<PortRole, string> = {
-  wan: 'WAN (uplink)',
-  lan: 'LAN (bridge)',
-  free: 'non assegnata',
-};
+const roleLabel = (role: PortRole): string => lanText().role[role];
 
 /**
  * MAC di una porta ethernet.
@@ -270,6 +259,8 @@ function EthMacSheet({
   port: EthPort;
   onClose: (changed: boolean) => void;
 }) {
+  const t = lanText();
+  const actions = commonText().actions;
   const apply = useApply();
   // Si riparte da com'e' adesso: un MAC gia' imposto compare nella casella
   // manuale, pronto da correggere invece che da ridigitare.
@@ -317,14 +308,11 @@ function EthMacSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>MAC di {port.name}</h2>
+        <h2>{t.macOf(port.name)}</h2>
 
         {apply.phase === 'idle' && !done && (
           <>
-            <p class="muted">
-              Adesso la porta si presenta come <code>{port.mac || '—'}</code>
-              {port.mac_config ? ' (indirizzo impostato).' : ' (indirizzo di fabbrica).'}
-            </p>
+            <p class="muted">{t.macNow(port.mac || '—', Boolean(port.mac_config))}</p>
 
             <MacPicker
               choice={mac}
@@ -337,22 +325,22 @@ function EthMacSheet({
                 locale sotto ai tuoi. */}
             <p class="alert alert--warn">
               {port.role === 'wan'
-                ? 'Un eventuale portale di accesso chiederà di nuovo il login.'
+                ? t.macWarnWan
                 : port.role === 'lan'
-                  ? 'Il collegamento via cavo cade per qualche secondo.'
-                  : 'La porta non è assegnata.'}
+                  ? t.macWarnLan
+                  : t.macWarnFree}
             </p>
 
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               <button
                 class="button button--primary"
                 disabled={!valid || !changed}
                 onClick={go}
               >
-                {want ? 'Applica' : 'Togli'}
+                {want ? t.apply : t.removeMac}
               </button>
             </div>
           </>
@@ -363,13 +351,11 @@ function EthMacSheet({
         {done && (
           <>
             <p class="alert alert--ok">
-              {want
-                ? `${port.name} ora si presenta come ${want}.`
-                : `${port.name} è tornata all'indirizzo di fabbrica.`}
+              {want ? t.macSet(port.name, want) : t.macReset(port.name)}
             </p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -392,6 +378,8 @@ function EthMacSheet({
  * chiesto, non basta che risponda.
  */
 function EthPortCard() {
+  const t = lanText();
+  const actions = commonText().actions;
   const apply = useApply();
   const [info, setInfo] = useState<EthPorts | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -445,13 +433,13 @@ function EthPortCard() {
   return (
     <>
       <section class="card">
-        <h2 class="uplink__title">Porte ethernet</h2>
+        <h2 class="uplink__title">{t.ports}</h2>
 
         {error && <p class="alert alert--error alert--code">{error}</p>}
-        {!info && !error && <p class="muted">Leggo la configurazione…</p>}
+        {!info && !error && <p class="muted">{t.loading}</p>}
 
         {info && ports.length === 0 && (
-          <p class="muted">Nessuna porta ethernet rilevata sul dispositivo.</p>
+          <p class="muted">{t.noPorts}</p>
         )}
 
         {ports.map((port) => (
@@ -459,12 +447,8 @@ function EthPortCard() {
             <div class="port__main">
               <span class="net__ssid">{port.name}</span>
               <span class="net__meta">
-                {ROLE_LABEL[port.role]} ·{' '}
-                {port.carrier === 1
-                  ? 'cavo collegato'
-                  : port.carrier === 0
-                    ? 'nessun cavo'
-                    : 'cavo non leggibile'}
+                {roleLabel(port.role)} ·{' '}
+                {port.carrier === 1 ? t.cable : port.carrier === 0 ? t.noCable : t.cableUnknown}
                 {port.network ? ` · ${port.network}` : ''}
               </span>
               {/* Il MAC su una riga sua: e' lungo quanto il resto messo
@@ -475,21 +459,21 @@ function EthPortCard() {
               <span class="net__meta">
                 MAC {port.mac || '—'}
                 {port.mac_config === ''
-                  ? ' · di fabbrica'
+                  ? t.factory
                   : normalizeMac(port.mac_config) === normalizeMac(port.mac)
-                    ? ' · impostato'
-                    : ` · impostato ${port.mac_config}, non ancora applicato`}
+                    ? t.macConfigured
+                    : t.macPending(port.mac_config)}
               </span>
             </div>
             <div class="port__controls">
               <button class="button button--ghost" onClick={() => setMacPort(port)}>
-                Cambia MAC
+                {t.changeMac}
               </button>
               <button
                 class="button button--ghost"
                 onClick={() => setPick({ port, target: port.role === 'wan' ? 'lan' : 'wan' })}
               >
-                {port.role === 'wan' ? 'Usa come LAN' : 'Usa come WAN'}
+                {port.role === 'wan' ? t.useAsLan : t.useAsWan}
               </button>
             </div>
           </div>
@@ -518,24 +502,24 @@ function EthPortCard() {
               <>
                 <p class="alert alert--warn">
                   {pick.target === 'lan'
-                    ? 'Chi è collegato via cavo perde il collegamento per qualche secondo.'
-                    : 'Un computer attaccato a questa porta perde la rete.'}
+                    ? t.toLanWarn
+                    : t.toWanWarn}
                 </p>
 
                 {lastOfKind && (
                   <p class="alert alert--error">
                     {pick.target === 'wan'
-                      ? "È l'ultima porta LAN: dopo questa operazione al router ci si collega solo via WiFi."
-                      : "È l'ultimo uplink via cavo: dopo questa operazione Internet può arrivare solo dal WiFi o dal tethering."}
+                      ? t.lastLan
+                      : t.lastWan}
                   </p>
                 )}
 
                 <div class="sheet__actions">
                   <button class="button button--ghost" onClick={close}>
-                    Annulla
+                    {actions.cancel}
                   </button>
                   <button class="button button--primary" onClick={go}>
-                    Procedi
+                    {actions.proceed}
                   </button>
                 </div>
               </>
@@ -546,12 +530,11 @@ function EthPortCard() {
             {done && (
               <>
                 <p class="alert alert--ok">
-                  Fatto: {pick.port.name} è ora{' '}
-                  {pick.target === 'lan' ? 'una porta LAN' : 'un uplink WAN'}.
+                  {t.portDone(pick.port.name, pick.target === 'lan')}
                 </p>
                 <div class="sheet__actions">
                   <button class="button button--primary" onClick={close}>
-                    Chiudi
+                    {actions.close}
                   </button>
                 </div>
               </>
@@ -577,6 +560,7 @@ function EthPortCard() {
  * cercare. Il pulsante rilegge.
  */
 function ClientsCard() {
+  const t = lanText();
   const [clients, setClients] = useState<LanClient[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -594,17 +578,17 @@ function ClientsCard() {
   return (
     <section class="card">
       <header class="radio__head">
-        <h2 class="uplink__title">Dispositivi collegati</h2>
+        <h2 class="uplink__title">{t.clients}</h2>
         <button class="button button--ghost" onClick={load}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
-      {!clients && !error && <p class="muted">Leggo i dispositivi…</p>}
+      {!clients && !error && <p class="muted">{t.loadingClients}</p>}
 
       {clients && clients.length === 0 && (
-        <p class="muted">Nessun dispositivo collegato alla rete locale.</p>
+        <p class="muted">{t.noClients}</p>
       )}
 
       {(clients ?? []).map((client) => (
@@ -637,14 +621,14 @@ function DnsUntouched({ title, servers }: { title: string; servers: string[] }) 
     <div class="field">
       <span>{title}</span>
       <span class="row__value">{servers.join('  ')}</span>
-      <span class="muted">Modificabili solo da LuCI.</span>
+      <span class="muted">{lanText().luciOnly}</span>
     </div>
   );
 }
 
 /** Etichetta della modalita' RA, compreso lo stato che non si puo' scegliere. */
 function raModeLabel(mode: RaMode): string {
-  if (mode === 'custom') return 'Personalizzati (configurati fuori da qui)';
+  if (mode === 'custom') return lanText().raCustom;
   return RA_OPTIONS.find((o) => o.id === mode)?.label ?? mode;
 }
 
@@ -705,6 +689,7 @@ function DnsChoice({
   /** Se questa lista accetta anche indirizzi IPv6. Cambia tastiera e avviso. */
   ipv6: boolean;
 }) {
+  const t = lanText();
   const chosen = dnsProvider(mode, options);
   // Un tastierino numerico non ha i due punti ne' le lettere: su un telefono
   // renderebbe impossibile scrivere un indirizzo v6 nel campo che lo accetta.
@@ -728,7 +713,7 @@ function DnsChoice({
       {mode === 'custom' && (
         <>
           <label class="field">
-            <span>DNS primario</span>
+            <span>{t.dnsPrimary}</span>
             <input
               type="text"
               value={one}
@@ -739,7 +724,7 @@ function DnsChoice({
             />
           </label>
           <label class="field">
-            <span>DNS secondario (facoltativo)</span>
+            <span>{t.dnsSecondary}</span>
             <input
               type="text"
               value={two}
@@ -749,7 +734,7 @@ function DnsChoice({
               onInput={(e) => onTwo((e.target as HTMLInputElement).value)}
             />
           </label>
-          {!ipv6 && <span class="muted">Solo indirizzi IPv4.</span>}
+          {!ipv6 && <span class="muted">{t.ipv4Only}</span>}
         </>
       )}
     </div>
@@ -765,6 +750,8 @@ function LanSheet({
   suggestion: string | null;
   onClose: (changed: boolean) => void;
 }) {
+  const t = lanText();
+  const actions = commonText().actions;
   const apply = useApply();
   const current = lan.addresses[0] ?? '';
 
@@ -867,12 +854,12 @@ function LanSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Rete locale</h2>
+        <h2>{t.title}</h2>
 
         {apply.phase === 'idle' && !done && (
           <form onSubmit={save}>
             <label class="field">
-              <span>Indirizzo IP del router</span>
+              <span>{t.routerIp}</span>
               <input
                 type="text"
                 value={address}
@@ -883,42 +870,40 @@ function LanSheet({
                 onInput={(e) => setAddress(stripPrefix((e.target as HTMLInputElement).value))}
               />
               {!addressOk && address !== '' && (
-                <span class="muted">Indirizzo IPv4 non valido.</span>
+                <span class="muted">{t.badIp}</span>
               )}
             </label>
 
             <div class="field">
-              <span>Indirizzi assegnati automaticamente</span>
+              <span>{t.poolField}</span>
               <div class="range">
-                <span class="range__label">Da</span>
+                <span class="range__label">{t.from}</span>
                 <input
                   type="text"
                   class="range__box"
                   value={from}
                   inputMode="numeric"
-                  aria-label="primo indirizzo assegnato"
+                  aria-label={t.firstAssigned}
                   onInput={(e) => setFrom((e.target as HTMLInputElement).value)}
                 />
-                <span class="range__label">A</span>
+                <span class="range__label">{t.to}</span>
                 <input
                   type="text"
                   class="range__box"
                   value={to}
                   inputMode="numeric"
-                  aria-label="ultimo indirizzo assegnato"
+                  aria-label={t.lastAssigned}
                   onInput={(e) => setTo((e.target as HTMLInputElement).value)}
                 />
               </div>
               {addressOk && !poolProblem && (
-                <span class="muted">
-                  {net}.{fromN} → {net}.{toN} · {toN - fromN + 1} dispositivi
-                </span>
+                <span class="muted">{t.poolSummary(net, fromN, toN)}</span>
               )}
               {poolProblem && <span class="alert alert--error">{poolProblem.message}</span>}
             </div>
 
             <div class="field">
-              <span>Annunci IPv6 ai dispositivi</span>
+              <span>{t.raField}</span>
               {currentRa === 'custom' ? (
                 <>
                   {/* Il router e' in una configurazione che non e' nessuna
@@ -929,7 +914,7 @@ function LanSheet({
                   <span class="muted">
                     ra <strong>{lan.ra || '—'}</strong>, dhcpv6 <strong>{lan.dhcpv6 || '—'}</strong>
                     {lan.ra_flags.length > 0 && <> , flag <strong>{lan.ra_flags.join(' ')}</strong></>}
-                    {' '}· modificabili solo da LuCI.
+                    {t.raLuciOnly}
                   </span>
                 </>
               ) : (
@@ -950,7 +935,7 @@ function LanSheet({
 
             {clientEditable ? (
               <DnsChoice
-                title="DNS per i dispositivi della rete"
+                title={t.clientDnsField}
                 options={CLIENT_DNS_OPTIONS}
                 mode={clientMode}
                 onMode={setClientMode}
@@ -961,12 +946,12 @@ function LanSheet({
                 ipv6
               />
             ) : (
-              <DnsUntouched title="DNS per i dispositivi della rete" servers={clientCurrent} />
+              <DnsUntouched title={t.clientDnsField} servers={clientCurrent} />
             )}
 
             {routerEditable ? (
               <DnsChoice
-                title="DNS usati dal router"
+                title={t.routerDnsField}
                 options={ROUTER_DNS_OPTIONS}
                 mode={routerMode}
                 onMode={setRouterMode}
@@ -977,33 +962,29 @@ function LanSheet({
                 ipv6
               />
             ) : (
-              <DnsUntouched title="DNS usati dal router" servers={lan.dns_upstream} />
+              <DnsUntouched title={t.routerDnsField} servers={lan.dns_upstream} />
             )}
 
             {routerMode !== 'auto' && (
-              <p class="alert alert--warn">
-                Con DNS fissi la pagina di login di alcune reti potrebbe non aprirsi.
-              </p>
+              <p class="alert alert--warn">{t.fixedDnsWarn}</p>
             )}
 
             {moves && (
               <p class="alert alert--warn">
-                Stai spostando il router da <strong>{current}</strong> a{' '}
-                <strong>{address}</strong>. Il vecchio indirizzo resta attivo finché non lo
-                rimuovi.
+                {t.moving(current, address)}
               </p>
             )}
 
             <div class="sheet__actions">
               <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               <button
                 class="button button--primary"
                 type="submit"
                 disabled={!addressOk || poolProblem !== null || !dnsOk}
               >
-                Applica
+                {t.apply}
               </button>
             </div>
           </form>
@@ -1014,17 +995,17 @@ function LanSheet({
         {done && (
           <>
             <p class="alert alert--ok">
-              Configurazione applicata.
+              {t.applied}
               {moves && (
                 <>
                   {' '}
-                  L'interfaccia è ora su <strong>https://{address}/travel/</strong>.
+                  {t.nowOn(address)}
                 </>
               )}
             </p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>

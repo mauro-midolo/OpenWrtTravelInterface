@@ -1,6 +1,5 @@
 import { useState } from 'preact/hooks';
 import {
-  MODE_LABEL,
   applyMwan,
   byPriority,
   setDefaultRule,
@@ -11,12 +10,15 @@ import {
   statusLabel,
   addRule,
   deleteRule,
+  modeLabel,
   parsePolicy,
   updateRule,
 } from '../lib/mwan';
 import type { Mwan, MwanInterface, MwanMode, MwanRule } from '../lib/mwan';
 import { blockReason, blocked } from '../lib/vpn';
 import { isValidIp, parseCidr } from '../lib/ip';
+import { commonText } from '../i18n/common';
+import { mwanText } from '../i18n/mwan';
 
 /**
  * Etichetta di una WAN.
@@ -27,10 +29,11 @@ import { isValidIp, parseCidr } from '../lib/ip';
  * device invece resta lo stesso e identifica sempre la stessa presa.
  */
 export function wanLabel(network: string, device?: string): string {
-  if (network.endsWith('radio0')) return 'WiFi 2.4 GHz';
-  if (network.endsWith('radio1')) return 'WiFi 5 GHz';
-  if (network === 'wan_usb' || network.includes('usb')) return 'Tethering USB';
-  return device ? `Porta ${device}` : network;
+  const t = mwanText();
+  if (network.endsWith('radio0')) return t.wifi24;
+  if (network.endsWith('radio1')) return t.wifi5;
+  if (network === 'wan_usb' || network.includes('usb')) return t.usb;
+  return device ? t.port(device) : network;
 }
 
 export function MwanCard({
@@ -40,11 +43,12 @@ export function MwanCard({
   mwan: Mwan | null;
   onEdit: () => void;
 }) {
+  const t = mwanText();
   if (!mwan) {
     return (
       <section class="card">
-        <h2 class="uplink__title">Multi-WAN</h2>
-        <p class="muted">Lettura in corso…</p>
+        <h2 class="uplink__title">{t.title}</h2>
+        <p class="muted">{t.reading}</p>
       </section>
     );
   }
@@ -52,7 +56,7 @@ export function MwanCard({
   if (!mwan.installed) {
     return (
       <section class="card">
-        <h2 class="uplink__title">Multi-WAN non installato</h2>
+        <h2 class="uplink__title">{t.notInstalled}</h2>
       </section>
     );
   }
@@ -62,16 +66,16 @@ export function MwanCard({
   return (
     <section class={`card uplink uplink--${mwan.running ? 'addressed' : 'no-address'}`}>
       <header class="radio__head">
-        <h2 class="uplink__title">Multi-WAN · {MODE_LABEL[mwan.mode]}</h2>
+        <h2 class="uplink__title">
+          {t.title} · {modeLabel(mwan.mode)}
+        </h2>
         <button class="button button--ghost" onClick={onEdit}>
-          Modifica
+          {t.edit}
         </button>
       </header>
 
       {!mwan.running && (
-        <p class="alert alert--warn">
-          mwan3 è installato ma non risponde.
-        </p>
+        <p class="alert alert--warn">{t.notRunning}</p>
       )}
 
       {ordered.map((iface, index) => (
@@ -81,16 +85,16 @@ export function MwanCard({
               {index + 1}. {wanLabel(iface.network, iface.device)}
             </span>
             <span class="net__meta">
-              {iface.enabled ? statusLabel(iface.status) : 'esclusa'}
-              {mwan.mode === 'balance' && iface.enabled ? ` · peso ${iface.weight}` : ''}
+              {iface.enabled ? statusLabel(iface.status) : t.excluded}
+              {mwan.mode === 'balance' && iface.enabled ? t.weight(iface.weight) : ''}
             </span>
           </div>
         </div>
       ))}
 
       <p class="muted">
-        Sticky sul traffico generale:{' '}
-        {mwan.default_sticky ? `attivo, ${mwan.default_timeout}s` : 'disattivo'}
+        {t.stickyGeneral}:{' '}
+        {mwan.default_sticky ? t.stickyOn(mwan.default_timeout) : t.stickyOff}
       </p>
     </section>
   );
@@ -105,6 +109,8 @@ export function MwanSheet({
   mwan: Mwan;
   onClose: (changed: boolean) => void;
 }) {
+  const t = mwanText();
+  const actions = commonText().actions;
   const [mode, setModeValue] = useState<MwanMode>(mwan.mode === 'balance' ? 'balance' : 'failover');
   // Il router ha gia' deciso: qui si legge, non si ricalcola. La regola vive in
   // un posto solo, e questa schermata e' uno dei tre che la mostrano.
@@ -156,31 +162,30 @@ export function MwanSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Multi-WAN</h2>
+        <h2>{t.title}</h2>
 
         <form onSubmit={save}>
           <label class="field">
-            <span>Modalità</span>
+            <span>{t.modeField}</span>
             <select
               value={mode}
               onChange={(e) => setModeValue((e.target as HTMLSelectElement).value as MwanMode)}
             >
-              <option value="failover">Failover — una alla volta, in ordine</option>
+              <option value="failover">{t.failoverOption}</option>
               {/* Il bilanciamento sparisce dall'elenco solo quando è bloccato:
                   un'opzione che non si può scegliere e resta selezionabile è
                   un salvataggio che il router poi rifiuta, cioè un giro a
                   vuoto. Il motivo sta scritto qui sotto, perché un'opzione che
                   sparisce senza spiegazione fa cercare dove è finita. */}
               {!balanceBlocked && (
-                <option value="balance">Bilanciamento — tutte insieme</option>
+                <option value="balance">{t.balanceOption}</option>
               )}
             </select>
           </label>
 
           {balanceBlocked && (
             <p class="alert alert--info">
-              Il <strong>bilanciamento</strong> non è disponibile:{' '}
-              {blockReason(mwan.policy, 'balance')}.
+              {t.balanceBlocked(blockReason(mwan.policy, 'balance'))}
             </p>
           )}
 
@@ -190,12 +195,12 @@ export function MwanSheet({
               checked={sticky}
               onChange={(e) => setSticky((e.target as HTMLInputElement).checked)}
             />
-            <span>Sticky sul traffico generale</span>
+            <span>{t.stickyGeneral}</span>
           </label>
 
           {sticky && (
             <label class="field">
-              <span>Per quanti secondi</span>
+              <span>{t.seconds}</span>
               <input
                 type="text"
                 class="range__box"
@@ -207,7 +212,7 @@ export function MwanSheet({
           )}
 
           <div class="field">
-            <span>{mode === 'failover' ? 'Ordine di priorità' : 'WAN e pesi'}</span>
+            <span>{mode === 'failover' ? t.priority : t.weights}</span>
 
             {order.map((iface, index) => (
               <div key={iface.network} class="port">
@@ -225,7 +230,7 @@ export function MwanSheet({
                       class="range__box"
                       value={weights[iface.network]}
                       inputMode="numeric"
-                      aria-label={`peso di ${wanLabel(iface.network, iface.device)}`}
+                      aria-label={t.weightOf(wanLabel(iface.network, iface.device))}
                       disabled={!enabled[iface.network]}
                       onInput={(e) =>
                         setWeights({
@@ -242,7 +247,7 @@ export function MwanSheet({
                         class="button button--ghost"
                         disabled={index === 0}
                         onClick={() => move(index, -1)}
-                        aria-label="sposta su"
+                        aria-label={t.moveUp}
                       >
                         ↑
                       </button>
@@ -251,7 +256,7 @@ export function MwanSheet({
                         class="button button--ghost"
                         disabled={index === order.length - 1}
                         onClick={() => move(index, 1)}
-                        aria-label="sposta giù"
+                        aria-label={t.moveDown}
                       >
                         ↓
                       </button>
@@ -261,11 +266,11 @@ export function MwanSheet({
               </div>
             ))}
 
-            {!weightsOk && <span class="muted">I pesi devono essere numeri interi da 1 in su.</span>}
+            {!weightsOk && <span class="muted">{t.badWeights}</span>}
           </div>
 
           <div class="field">
-            <span>WAN incluse</span>
+            <span>{t.included}</span>
             {order.map((iface) => (
               <label key={iface.network} class="check">
                 <input
@@ -282,9 +287,7 @@ export function MwanSheet({
               </label>
             ))}
             {!anyEnabled && (
-              <span class="alert alert--error">
-                Almeno una WAN deve restare inclusa.
-              </span>
+              <span class="alert alert--error">{t.oneIncluded}</span>
             )}
           </div>
 
@@ -292,14 +295,14 @@ export function MwanSheet({
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             <button
               class="button button--primary"
               type="submit"
               disabled={busy !== null || !weightsOk || !anyEnabled || !timeoutOk}
             >
-              {busy ? 'Applico…' : 'Applica'}
+              {busy ? t.applying : t.apply}
             </button>
           </div>
         </form>
@@ -332,19 +335,20 @@ function isValidPortSpec(value: string): boolean {
 }
 
 function ruleSummary(rule: MwanRule, mwan: Mwan): string {
+  const t = mwanText().rule;
   const bits: string[] = [];
-  bits.push(rule.src_ip ? `da ${rule.src_ip}` : 'da chiunque');
-  if (rule.dest_ip) bits.push(`verso ${rule.dest_ip}`);
-  if (rule.dest_port) bits.push(`porta ${rule.dest_port}`);
+  bits.push(rule.src_ip ? t.from(rule.src_ip) : t.fromAnyone);
+  if (rule.dest_ip) bits.push(t.to(rule.dest_ip));
+  if (rule.dest_port) bits.push(t.port(rule.dest_port));
   if (rule.proto && rule.proto !== 'all') bits.push(rule.proto.toUpperCase());
 
   const parsed = parsePolicy(rule.use_policy);
   if (parsed) {
     const iface = mwan.interfaces.find((i) => i.network === parsed.network);
     bits.push(`→ ${wanLabel(parsed.network, iface?.device)}`);
-    if (parsed.strict) bits.push('(bloccante)');
+    if (parsed.strict) bits.push(t.strict);
   }
-  if (rule.sticky) bits.push(`sticky ${rule.timeout}s`);
+  if (rule.sticky) bits.push(t.sticky(rule.timeout));
   return bits.join(' · ');
 }
 
@@ -358,23 +362,24 @@ export function RulesCard({
   onEdit: (rule: MwanRule) => void;
 }) {
   if (!mwan || !mwan.installed) return null;
+  const t = mwanText();
 
   return (
     <section class="card">
       <header class="radio__head">
-        <h2 class="uplink__title">Regole di instradamento</h2>
+        <h2 class="uplink__title">{t.rules}</h2>
         <button class="button button--ghost" onClick={onAdd}>
-          Aggiungi
+          {t.add}
         </button>
       </header>
 
       {mwan.rules.length === 0 ? (
-        <p class="muted">Nessuna regola.</p>
+        <p class="muted">{t.noRules}</p>
       ) : (
         mwan.rules.map((rule, index) => (
           <button key={rule.section} class="net" onClick={() => onEdit(rule)}>
             <span class="net__main">
-              <span class="net__ssid">Regola {index + 1}</span>
+              <span class="net__ssid">{t.ruleN(index + 1)}</span>
               <span class="net__meta">{ruleSummary(rule, mwan)}</span>
             </span>
           </button>
@@ -394,6 +399,8 @@ export function RuleSheet({
   rule: MwanRule | null;
   onClose: (changed: boolean) => void;
 }) {
+  const t = mwanText();
+  const actions = commonText().actions;
   const existing = rule ? parsePolicy(rule.use_policy) : null;
 
   const [src, setSrc] = useState(rule?.src_ip ?? '');
@@ -460,61 +467,61 @@ export function RuleSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>{rule ? 'Modifica regola' : 'Nuova regola'}</h2>
+        <h2>{rule ? t.editRule : t.newRule}</h2>
 
         <form onSubmit={save}>
           <label class="field">
-            <span>Dispositivo di partenza</span>
+            <span>{t.source}</span>
             <input
               type="text"
               value={src}
               inputMode="decimal"
               autocomplete="off"
               spellcheck={false}
-              placeholder="es. 192.168.10.50 — vuoto = tutti"
+              placeholder={t.sourcePlaceholder}
               onInput={(e) => setSrc((e.target as HTMLInputElement).value)}
             />
-            {!srcOk && <span class="muted">Serve un indirizzo o una sottorete valida.</span>}
+            {!srcOk && <span class="muted">{t.badTarget}</span>}
           </label>
 
           <label class="field">
-            <span>Destinazione</span>
+            <span>{t.destination}</span>
             <input
               type="text"
               value={dest}
               inputMode="decimal"
               autocomplete="off"
               spellcheck={false}
-              placeholder="es. 10.0.0.0/8 — vuoto = ovunque"
+              placeholder={t.destPlaceholder}
               onInput={(e) => setDest((e.target as HTMLInputElement).value)}
             />
-            {!destOk && <span class="muted">Serve un indirizzo o una sottorete valida.</span>}
+            {!destOk && <span class="muted">{t.badTarget}</span>}
           </label>
 
           <div class="field">
-            <span>Porta e protocollo</span>
+            <span>{t.portProto}</span>
             <div class="range">
               <input
                 type="text"
                 class="range__box"
                 value={port}
                 inputMode="numeric"
-                aria-label="porta di destinazione"
+                aria-label={t.destPort}
                 placeholder="443"
                 onInput={(e) => setPort((e.target as HTMLInputElement).value)}
               />
               <select value={proto} onChange={(e) => setProto((e.target as HTMLSelectElement).value)}>
-                <option value="all">tutti i protocolli</option>
+                <option value="all">{t.allProtocols}</option>
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
                 <option value="icmp">ICMP</option>
               </select>
             </div>
-            {!portOk && <span class="muted">Una porta (443) o un intervallo (5000-5100).</span>}
+            {!portOk && <span class="muted">{t.badPort}</span>}
           </div>
 
           <label class="field">
-            <span>Instrada su</span>
+            <span>{t.routeVia}</span>
             <select
               value={network}
               onChange={(e) => setNetwork((e.target as HTMLSelectElement).value)}
@@ -533,10 +540,7 @@ export function RuleSheet({
               checked={strict}
               onChange={(e) => setStrict((e.target as HTMLInputElement).checked)}
             />
-            <span>
-              Se questa WAN non è disponibile, <strong>ferma</strong> il traffico invece di
-              mandarlo sulle altre
-            </span>
+            <span>{t.strictField}</span>
           </label>
 
           <label class="check">
@@ -545,12 +549,12 @@ export function RuleSheet({
               checked={sticky}
               onChange={(e) => setSticky((e.target as HTMLInputElement).checked)}
             />
-            <span>Sticky</span>
+            <span>{t.sticky}</span>
           </label>
 
           {sticky && (
             <label class="field">
-              <span>Per quanti secondi</span>
+              <span>{t.seconds}</span>
               <input
                 type="text"
                 class="range__box"
@@ -562,14 +566,14 @@ export function RuleSheet({
           )}
 
           {!hasCriteria && (
-            <p class="muted">Serve almeno un criterio.</p>
+            <p class="muted">{t.needsCriteria}</p>
           )}
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             {rule && (
               <button
@@ -578,11 +582,11 @@ export function RuleSheet({
                 disabled={busy}
                 onClick={remove}
               >
-                Elimina
+                {t.remove}
               </button>
             )}
             <button class="button button--primary" type="submit" disabled={busy || !ok}>
-              {busy ? 'Applico…' : 'Salva'}
+              {busy ? t.applying : actions.save}
             </button>
           </div>
         </form>
@@ -598,6 +602,8 @@ export function HealthSheet({
   iface: MwanInterface;
   onClose: (changed: boolean) => void;
 }) {
+  const t = mwanText();
+  const actions = commonText().actions;
   const [one, setOne] = useState(iface.track_ip[0] ?? '');
   const [two, setTwo] = useState(iface.track_ip[1] ?? '');
   const [interval, setInterval] = useState(String(iface.interval));
@@ -647,11 +653,11 @@ export function HealthSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Controllo di salute · {wanLabel(iface.network, iface.device)}</h2>
+        <h2>{t.healthOf(wanLabel(iface.network, iface.device))}</h2>
 
         <form onSubmit={save}>
           <label class="field">
-            <span>Indirizzo da controllare</span>
+            <span>{t.trackIp}</span>
             <input
               type="text"
               value={one}
@@ -663,7 +669,7 @@ export function HealthSheet({
           </label>
 
           <label class="field">
-            <span>Secondo indirizzo (facoltativo)</span>
+            <span>{t.trackIp2}</span>
             <input
               type="text"
               value={two}
@@ -674,26 +680,26 @@ export function HealthSheet({
             />
           </label>
 
-          {!ipsOk && <span class="muted">Serve almeno un indirizzo IPv4 valido.</span>}
+          {!ipsOk && <span class="muted">{t.badTrackIp}</span>}
 
           <div class="field">
-            <span>Ogni quanto controllare</span>
+            <span>{t.every}</span>
             <div class="range">
               <input
                 type="text"
                 class="range__box"
                 value={interval}
                 inputMode="numeric"
-                aria-label="intervallo in secondi"
+                aria-label={t.intervalLabel}
                 onInput={(e) => setInterval((e.target as HTMLInputElement).value)}
               />
-              <span class="range__label">secondi, timeout</span>
+              <span class="range__label">{t.secondsTimeout}</span>
               <input
                 type="text"
                 class="range__box"
                 value={timeout}
                 inputMode="numeric"
-                aria-label="timeout in secondi"
+                aria-label={t.timeoutLabel}
                 onInput={(e) => setTimeoutValue((e.target as HTMLInputElement).value)}
               />
               <span class="range__label">s</span>
@@ -701,47 +707,46 @@ export function HealthSheet({
           </div>
 
           <div class="field">
-            <span>Quanti tentativi prima di cambiare stato</span>
+            <span>{t.attempts}</span>
             <div class="range">
-              <span class="range__label">Giù dopo</span>
+              <span class="range__label">{t.downAfter}</span>
               <input
                 type="text"
                 class="range__box"
                 value={down}
                 inputMode="numeric"
-                aria-label="tentativi falliti prima di dichiarare la WAN giù"
+                aria-label={t.downLabel}
                 onInput={(e) => setDown((e.target as HTMLInputElement).value)}
               />
-              <span class="range__label">· su dopo</span>
+              <span class="range__label">{t.upAfter}</span>
               <input
                 type="text"
                 class="range__box"
                 value={up}
                 inputMode="numeric"
-                aria-label="tentativi riusciti prima di dichiarare la WAN su"
+                aria-label={t.upLabel}
                 onInput={(e) => setUp((e.target as HTMLInputElement).value)}
               />
             </div>
             <span class="muted">
-              Caduta rilevata in circa {Number(interval) * Number(down) || '—'} s, ritorno in{' '}
-              {Number(interval) * Number(up) || '—'} s.
+              {t.detection(Number(interval) * Number(down) || '—', Number(interval) * Number(up) || '—')}
             </span>
           </div>
 
-          {!numsOk && <span class="muted">I valori devono essere numeri interi da 1 in su.</span>}
+          {!numsOk && <span class="muted">{t.badNumbers}</span>}
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             <button
               class="button button--primary"
               type="submit"
               disabled={busy || !ipsOk || !numsOk}
             >
-              {busy ? 'Applico…' : 'Applica'}
+              {busy ? t.applying : t.apply}
             </button>
           </div>
         </form>

@@ -18,6 +18,8 @@ import { clientDetail, clientLink, clientTitle, listClients } from '../lib/lan';
 import type { LanClient } from '../lib/lan';
 import type { DashWan } from '../lib/dashboard';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { commonText } from '../i18n/common';
+import { portalScreenText } from '../i18n/portal-screen';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -46,6 +48,7 @@ export function PortalPanel({
   onDone: () => void;
   onClone: () => void;
 }) {
+  const t = portalScreenText();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<PortalResult | null>(null);
@@ -71,14 +74,14 @@ export function PortalPanel({
   const verify = (
     <div class="radio__actions">
       <button class="button button--ghost" disabled={busy} onClick={() => void recheck()}>
-        {busy ? 'Verifico…' : 'Verifica adesso'}
+        {busy ? t.checking : t.checkNow}
       </button>
       {/* Il MAC clonato serve dove il portale autentica gli indirizzi, ma e'
           utile anche prima di aver visto il portale: chi conosce l'albergo lo
           imposta e basta. Per questo il pulsante non aspetta il verdetto. */}
       {wan.kind === 'wifi' && wan.section && (
         <button class="button button--ghost" onClick={onClone}>
-          Usa il MAC di un dispositivo
+          {t.cloneMac}
         </button>
       )}
     </div>
@@ -87,8 +90,8 @@ export function PortalPanel({
   if (!result) {
     return (
       <>
-        <h2>Uscita verso Internet</h2>
-        <p class="muted">Non ancora verificata.</p>
+        <h2>{t.exit}</h2>
+        <p class="muted">{t.notChecked}</p>
         {verify}
         {error && <p class="alert alert--error alert--code">{error}</p>}
       </>
@@ -99,7 +102,7 @@ export function PortalPanel({
 
   return (
     <>
-      <h2>Uscita verso Internet</h2>
+      <h2>{t.exit}</h2>
       <Row
         label={portalLabel(result.state)}
         value={[portalAt(result), result.http ? `HTTP ${result.http}` : '']
@@ -109,9 +112,7 @@ export function PortalPanel({
 
       {result.state === 'portal' && (
         <>
-          <p class="alert alert--warn">
-            Questa rete ha un <strong>portale di accesso</strong>: serve il login.
-          </p>
+          <p class="alert alert--warn">{t.portal}</p>
           {/* Un link vero e non una chiamata: il login deve avvenire nel
               browser di chi guarda, con i suoi cookie e la sua sessione. Il
               router non puo' farlo al posto suo, e fingere di poterlo fare
@@ -123,25 +124,23 @@ export function PortalPanel({
               target="_blank"
               rel="noreferrer"
             >
-              Apri la pagina di accesso
+              {t.openLogin}
             </a>
           )}
-          <p class="muted">
-            Se la pagina non si apre, visita un indirizzo qualsiasi in <strong>http://</strong>.
-          </p>
+          <p class="muted">{t.anyHttp}</p>
         </>
       )}
 
       {result.state === 'blocked' && (
         <p class="alert alert--error">
-          La WAN ha un indirizzo ma <strong>non esce niente</strong>.
+          {t.blocked}
           {reason ? ` ${reason}` : ''}
         </p>
       )}
 
       {result.state === 'unknown' && (
         <p class="alert alert--warn">
-          {reason || 'La verifica non ha potuto dire niente.'}
+          {reason || t.unknown}
         </p>
       )}
 
@@ -170,6 +169,8 @@ export function MacCloneSheet({
   wan: DashWan;
   onClose: (changed: boolean) => void;
 }) {
+  const t = portalScreenText();
+  const actions = commonText().actions;
   const apply = useApply();
   const [clients, setClients] = useState<LanClient[] | null>(null);
   const [chosen, setChosen] = useState<string>('');
@@ -235,18 +236,16 @@ export function MacCloneSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>MAC da usare su {wan.ssid || wan.network}</h2>
+        <h2>{t.macFor(wan.ssid || wan.network)}</h2>
 
         {apply.phase === 'idle' && (
           <>
-            <p class="muted">
-              Adesso il router si presenta come <code>{current || '—'}</code>.
-            </p>
+            <p class="muted">{t.currentMac(current || '—')}</p>
 
-            {clients === null && <p class="muted">Leggo i dispositivi collegati…</p>}
+            {clients === null && <p class="muted">{t.loadingClients}</p>}
 
             {clients !== null && clients.length === 0 && (
-              <p class="muted">Nessun dispositivo collegato.</p>
+              <p class="muted">{t.noClients}</p>
             )}
 
             {clients !== null && clients.length > 0 && (
@@ -264,7 +263,7 @@ export function MacCloneSheet({
                           {[
                             clientDetail(client),
                             clientLink(client),
-                            client.source === 'arp' ? 'senza lease DHCP' : '',
+                            client.source === 'arp' ? t.noLease : '',
                           ]
                             .filter(Boolean)
                             .join(' · ')}
@@ -272,7 +271,7 @@ export function MacCloneSheet({
                       </span>
                       <span class="net__side">
                         {chosen === client.mac.toLowerCase() && (
-                          <span class="badge badge--ok">scelto</span>
+                          <span class="badge badge--ok">{t.chosen}</span>
                         )}
                       </span>
                     </button>
@@ -281,14 +280,11 @@ export function MacCloneSheet({
               </ul>
             )}
 
-            <p class="alert alert--warn">
-              Quel dispositivo non deve restare collegato <strong>direttamente</strong> alla
-              stessa rete.
-            </p>
+            <p class="alert alert--warn">{t.cloneWarn}</p>
 
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               {current && (
                 <button
@@ -298,7 +294,7 @@ export function MacCloneSheet({
                     void go('');
                   }}
                 >
-                  MAC della scheda
+                  {t.cardMac}
                 </button>
               )}
               <button
@@ -306,7 +302,7 @@ export function MacCloneSheet({
                 disabled={!chosen}
                 onClick={() => void go(chosen)}
               >
-                Usa questo MAC
+                {t.useMac}
               </button>
             </div>
           </>
@@ -316,12 +312,10 @@ export function MacCloneSheet({
 
         {done && (
           <>
-            <p class="alert alert--ok">
-              Fatto.
-            </p>
+            <p class="alert alert--ok">{actions.done}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -364,22 +358,25 @@ export function PortalMemoryCard() {
   };
 
   if (entries.length === 0 && !error) return null;
+  const t = portalScreenText();
 
   return (
     <section class="card">
-      <h2 class="uplink__title">Reti con portale</h2>
+      <h2 class="uplink__title">{t.memory}</h2>
 
       {entries.map((entry) => (
         <div key={entry.section} class="port">
           <div class="port__main">
             <strong>{entry.label || entry.key}</strong>
             <span class="muted">
-              visto {portalWhen(entry.last_seen)} · accesso{' '}
-              {entry.last_login ? portalWhen(entry.last_login) : 'mai riuscito'}
+              {t.seen(
+                portalWhen(entry.last_seen),
+                entry.last_login ? portalWhen(entry.last_login) : t.neverLogged,
+              )}
             </span>
           </div>
           <button class="button button--ghost" onClick={() => void forget(entry.section)}>
-            Dimentica
+            {t.forget}
           </button>
         </div>
       ))}

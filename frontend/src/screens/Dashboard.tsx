@@ -4,7 +4,7 @@ import { usePoll } from '../lib/poll';
 import { useApply } from '../lib/apply';
 import { formatBytes, formatRate, getDashboard, overallState } from '../lib/dashboard';
 import type { Dashboard as DashboardData, DashWan, OverallState } from '../lib/dashboard';
-import { MODE_LABEL, activeInterfaces, getMwan, statusLabel } from '../lib/mwan';
+import { activeInterfaces, getMwan, modeLabel, statusLabel } from '../lib/mwan';
 import { HealthSheet, MwanCard, MwanSheet, RuleSheet, RulesCard } from './MultiWan';
 import type { Mwan, MwanInterface, MwanRule } from '../lib/mwan';
 import {
@@ -19,6 +19,8 @@ import type { SavedNetwork } from '../lib/networks';
 import { HostnamePicker } from '../components/HostnamePicker';
 import { ApplyStatus } from '../components/ApplyStatus';
 import { MacCloneSheet, PortalMemoryCard, PortalPanel } from './Portal';
+import { commonText } from '../i18n/common';
+import { dashboardText } from '../i18n/dashboard';
 
 /**
  * Il sommario in cima, in una riga.
@@ -29,13 +31,13 @@ import { MacCloneSheet, PortalMemoryCard, PortalPanel } from './Portal';
  * stava anche il caso peggiore - una rete d'albergo che ti tiene fuori con una
  * pagina di login mentre tutto sembra a posto.
  */
-const OVERALL: Record<OverallState, { text: string; tone: string }> = {
-  online: { text: 'Internet raggiungibile', tone: 'addressed' },
-  connected: { text: 'Collegato', tone: 'addressed' },
-  portal: { text: 'Serve un login', tone: 'no-address' },
-  'no-internet': { text: 'Collegato, ma non esce niente', tone: 'unassociated' },
-  degraded: { text: 'Degradato', tone: 'no-address' },
-  offline: { text: 'Nessuna connessione', tone: 'unassociated' },
+const OVERALL_TONE: Record<OverallState, string> = {
+  online: 'addressed',
+  connected: 'addressed',
+  portal: 'no-address',
+  'no-internet': 'unassociated',
+  degraded: 'no-address',
+  offline: 'unassociated',
 };
 
 /**
@@ -44,25 +46,26 @@ const OVERALL: Record<OverallState, { text: string; tone: string }> = {
  * il guasto nel posto sbagliato.
  */
 function stateLabel(wan: DashWan): string {
+  const t = dashboardText().state;
   switch (wan.state) {
     case 'addressed':
-      return 'con indirizzo';
+      return t.addressed;
     case 'no-address':
-      if (wan.kind === 'wifi') return 'agganciata, senza indirizzo';
+      if (wan.kind === 'wifi') return t.wifiNoAddress;
       // Sul tethering non c'e' nessun cavo di cui parlare: il telefono e'
       // collegato, ma non sta ancora condividendo la connessione.
-      if (wan.kind === 'usb') return 'collegato, senza indirizzo';
-      return 'cavo collegato, senza indirizzo';
+      if (wan.kind === 'usb') return t.usbNoAddress;
+      return t.cableNoAddress;
     case 'unassociated':
-      return 'non agganciata a nessuna rete';
+      return t.unassociated;
     case 'no-carrier':
       // Zero e "non leggibile" non sono la stessa cosa: nel secondo caso non
       // si puo' affermare che manchi il cavo.
-      return wan.carrier === 0 ? 'nessun cavo collegato' : 'nessun collegamento';
+      return wan.carrier === 0 ? t.noCable : t.noLink;
     case 'disabled':
-      return 'disattivata';
+      return t.disabled;
     default:
-      return wan.kind === 'wifi' ? 'nessuna rete configurata' : 'non configurata';
+      return wan.kind === 'wifi' ? t.wifiNone : t.none;
   }
 }
 
@@ -76,12 +79,13 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function wanTitle(wan: DashWan): string {
-  if (wan.kind === 'wifi') return `WiFi ${wan.band || wan.radio} GHz`;
+  const t = dashboardText();
+  if (wan.kind === 'wifi') return t.wifi(wan.band || wan.radio);
   // Il nome fisico della porta, non il suo ruolo: OpenWrt le chiama col ruolo
   // di fabbrica (`wan`, `lan1`), che dopo una commutazione dice il contrario
   // di com'e' messa. Il device identifica sempre la stessa presa.
-  if (wan.kind === 'usb') return 'Tethering USB';
-  if (wan.kind === 'ethernet') return wan.device ? `Porta ${wan.device}` : 'Porta ethernet';
+  if (wan.kind === 'usb') return t.usb;
+  if (wan.kind === 'ethernet') return wan.device ? t.port(wan.device) : t.ethernet;
   return wan.network;
 }
 
@@ -103,6 +107,7 @@ function WanCard({
   onClone: () => void;
   onPortal: () => void;
 }) {
+  const t = dashboardText();
   return (
     <section class={`card uplink uplink--${wan.state}`}>
       <header class="radio__head">
@@ -114,8 +119,8 @@ function WanCard({
             {mwan ? ` · mwan3: ${statusLabel(mwan.status)}` : ''}
           </p>
         </div>
-        {wan.active && <span class="badge badge--ok">porta il traffico</span>}
-        {wan.portal?.state === 'portal' && <span class="badge badge--warn">login</span>}
+        {wan.active && <span class="badge badge--ok">{t.carriesTraffic}</span>}
+        {wan.portal?.state === 'portal' && <span class="badge badge--warn">{t.login}</span>}
       </header>
 
       {/* La verifica dell'uscita sta in alto, prima dei dettagli: e' la
@@ -130,10 +135,7 @@ function WanCard({
           sopra il traffico. Dirlo qui e' l'unico modo di spiegare perche' la
           rete "funziona" e le pagine non si aprono. */}
       {mwan && mwan.status === 'online' && wan.portal?.state === 'portal' && (
-        <p class="alert alert--warn">
-          Per mwan3 questa WAN è <strong>online</strong>, ma finché non fai il login il
-          traffico non passa.
-        </p>
+        <p class="alert alert--warn">{t.mwanOnlinePortal}</p>
       )}
 
       {/* Il controllo di salute per singolo IP: e' quello che spiega PERCHE'
@@ -141,42 +143,42 @@ function WanCard({
       {mwan && mwan.enabled && mwan.tracking.length > 0 && (
         <>
           <header class="radio__head">
-            <h2>Controllo di salute</h2>
+            <h2>{t.health}</h2>
             <button class="button button--ghost" onClick={onHealth}>
-              Modifica
+              {t.edit}
             </button>
           </header>
-          {mwan.tracking.map((t) => (
+          {mwan.tracking.map((track) => (
             <Row
-              key={t.ip}
-              label={t.ip}
+              key={track.ip}
+              label={track.ip}
               value={
-                t.status === 'up'
-                  ? `${t.latency} ms · ${t.packetloss}% persi`
-                  : `irraggiungibile · ${t.packetloss}% persi`
+                track.status === 'up'
+                  ? t.trackUp(track.latency, track.packetloss)
+                  : t.trackDown(track.packetloss)
               }
             />
           ))}
           <Row
-            label="Priorità / peso"
+            label={t.priorityWeight}
             value={`${mwan.priority} / ${mwan.weight}`}
           />
         </>
       )}
       {mwan && !mwan.enabled && (
-        <p class="muted">Esclusa dal multi-WAN: mwan3 non la usa e non la controlla.</p>
+        <p class="muted">{t.excluded}</p>
       )}
 
       {/* Impostazione, non stato: si mostra anche quando la WAN e' giu', ed e'
           proprio li' che serve poterla cambiare prima di riprovare. */}
       <header class="radio__head">
-        <h2>Richiesta DHCP</h2>
+        <h2>{t.dhcp}</h2>
         <button class="button button--ghost" onClick={onHostname}>
-          Modifica
+          {t.edit}
         </button>
       </header>
       <Row
-        label="Nome inviato"
+        label={t.sentName}
         value={hostnameLabel(hostnameFromUci(wan.hostname), deviceHostname)}
       />
 
@@ -184,36 +186,36 @@ function WanCard({
         <>
           {/* Vedi Wifi.tsx: su un uplink v6-only "nessuno" sarebbe falso. */}
           <Row
-            label={wan.ipv6.length > 0 ? 'Indirizzo IPv4' : 'Indirizzo'}
-            value={wan.ipv4 || (wan.ipv6.length > 0 ? '—' : 'nessuno')}
+            label={wan.ipv6.length > 0 ? t.address4 : t.address}
+            value={wan.ipv4 || (wan.ipv6.length > 0 ? '—' : t.none)}
           />
-          <Row label="Gateway" value={wan.gateway || '—'} />
-          <Row label="DNS" value={wan.dns?.length ? wan.dns.join('  ') : '—'} />
+          <Row label={t.gateway} value={wan.gateway || '—'} />
+          <Row label={t.dns} value={wan.dns?.length ? wan.dns.join('  ') : '—'} />
           {/* Solo dove IPv6 c'e': vedi la stessa scelta in Wifi.tsx. */}
           {wan.ipv6.length > 0 && (
             <>
-              <Row label="Indirizzo IPv6" value={wan.ipv6.join('  ')} />
+              <Row label={t.address6} value={wan.ipv6.join('  ')} />
               {/* Vedi Wifi.tsx: senza rotta predefinita IPv6 non esce dalla
                   rete locale, e un trattino farebbe sospettare un guasto che
                   non c'e'. Di IPv4 non si dice niente, perche' questa riga non
                   lo sa. */}
               <Row
-                label="Gateway IPv6"
-                value={wan.gateway6 || 'nessuno'}
+                label={t.gateway6}
+                value={wan.gateway6 || t.none}
               />
-              {wan.dns6.length > 0 && <Row label="DNS IPv6" value={wan.dns6.join('  ')} />}
-              {wan.prefix6 && <Row label="Prefisso delegato" value={wan.prefix6} />}
+              {wan.dns6.length > 0 && <Row label={t.dns6} value={wan.dns6.join('  ')} />}
+              {wan.prefix6 && <Row label={t.prefix6} value={wan.prefix6} />}
             </>
           )}
-          <Row label="MAC in uso" value={wan.mac || '—'} />
+          <Row label={t.mac} value={wan.mac || '—'} />
           {wan.kind === 'usb' && (
             <>
               <Row
-                label="Dispositivo"
+                label={t.device}
                 value={
                   wan.device
                     ? `${wan.device}${wan.driver ? ` · ${wan.driver}` : ''}`
-                    : 'nessuno collegato'
+                    : t.noDevice
                 }
               />
             </>
@@ -221,24 +223,24 @@ function WanCard({
           {wan.kind === 'wifi' && (
             <>
               <Row
-                label="Segnale"
+                label={t.signal}
                 value={typeof wan.signal === 'number' ? `${wan.signal} dBm` : '—'}
               />
               <Row
-                label="Canale e rate"
+                label={t.channelRate}
                 value={`ch ${wan.channel || '—'}${wan.bitrate ? ` · ${Math.round(wan.bitrate / 1000)} Mbit/s` : ''}`}
               />
               <Row label="BSSID" value={wan.bssid || '—'} />
             </>
           )}
 
-          <h2>Traffico</h2>
+          <h2>{t.traffic}</h2>
           <Row
-            label="Adesso"
+            label={t.now}
             value={`↓ ${formatRate(wan.rx_rate)}   ↑ ${formatRate(wan.tx_rate)}`}
           />
           <Row
-            label="Da questa sessione"
+            label={t.session}
             value={`↓ ${formatBytes(wan.rx_session)}   ↑ ${formatBytes(wan.tx_session)}`}
           />
         </>
@@ -268,6 +270,7 @@ function HostnameSheet({
   deviceHostname: string;
   onClose: (changed: boolean) => void;
 }) {
+  const actions = commonText().actions;
   const apply = useApply();
   const [choice, setChoice] = useState<HostnameChoice>(() => hostnameFromUci(wan.hostname));
   const [saved, setSaved] = useState<SavedNetwork | null>(null);
@@ -322,10 +325,10 @@ function HostnameSheet({
 
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               <button class="button button--primary" disabled={!valid} onClick={go}>
-                Salva
+                {actions.save}
               </button>
             </div>
           </>
@@ -335,10 +338,10 @@ function HostnameSheet({
 
         {done && (
           <>
-            <p class="alert alert--ok">Fatto.</p>
+            <p class="alert alert--ok">{actions.done}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -350,6 +353,7 @@ function HostnameSheet({
 
 
 export function Dashboard({ onLogout }: { onLogout: () => void }) {
+  const t = dashboardText();
   // Due secondi come previsto dal budget di polling, e il timer si ferma
   // quando la scheda non e' visibile: sul router il costo scende a zero.
   const poll = usePoll<DashboardData>(() => getDashboard(), 2000);
@@ -375,13 +379,13 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     return (
       <main class="screen">
         <header class="topbar">
-          <h1>Internet</h1>
+          <h1>{t.title}</h1>
         </header>
         {poll.loading ? (
-          <p class="muted">Caricamento…</p>
+          <p class="muted">{t.loading}</p>
         ) : (
           <section class="card">
-            <p class="muted">travelD non risponde.</p>
+            <p class="muted">{t.noDaemon}</p>
             {poll.error && <p class="alert alert--warn alert--code">{poll.error.message}</p>}
           </section>
         )}
@@ -389,14 +393,15 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     );
   }
 
-  const overall = OVERALL[overallState(data.wans)];
+  const overallKey = overallState(data.wans);
+  const overall = { text: t.overall[overallKey], tone: OVERALL_TONE[overallKey] };
   const active = data.wans.find((w) => w.active);
   return (
     <main class="screen">
       <header class="topbar">
-        <h1>Internet</h1>
+        <h1>{t.title}</h1>
         <button class="button button--ghost" onClick={onLogout}>
-          Esci
+          {commonText().actions.logout}
         </button>
       </header>
 
@@ -404,24 +409,26 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
         <h2 class="uplink__title">{overall.text}</h2>
         <p class="muted">
           {active
-            ? `Il traffico esce da ${wanTitle(active)}${active.ssid ? ` · ${active.ssid}` : ''}.`
-            : 'Nessuna WAN sta portando traffico.'}
+            ? t.exitsVia(`${wanTitle(active)}${active.ssid ? ` · ${active.ssid}` : ''}`)
+            : t.noActive}
         </p>
         <p class="muted">
-          Riconnessione automatica {data.autoreconnect ? 'attiva' : 'spenta'}.{' '}
-          {data.portal_check === false ? 'Verifica dei portali spenta. ' : ''}
+          {t.autoreconnect(data.autoreconnect)}{' '}
+          {data.portal_check === false ? t.portalOff : ''}
           {mwan === null
-            ? 'Multi-WAN: lettura in corso.'
+            ? t.mwanReading
             : !mwan.installed
-              ? 'Multi-WAN non installato.'
+              ? t.mwanMissing
               : !mwan.running
-                ? 'Multi-WAN installato ma mwan3 non risponde.'
-                : `Multi-WAN in ${MODE_LABEL[mwan.mode].toLowerCase()}` +
+                ? t.mwanDown
+                : t.mwanMode(modeLabel(mwan.mode).toLowerCase()) +
                   (activeInterfaces(mwan).length > 0
-                    ? `, online: ${activeInterfaces(mwan)
-                        .map((i) => i.network)
-                        .join(', ')}.`
-                    : ', nessuna WAN online.')}
+                    ? t.mwanOnline(
+                        activeInterfaces(mwan)
+                          .map((i) => i.network)
+                          .join(', '),
+                      )
+                    : t.mwanNoneOnline)}
         </p>
       </section>
 
@@ -432,8 +439,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
           sarebbe il momento sbagliato. */}
       {data.killswitch?.on && data.killswitch.resume_at > 0 && (
         <p class="alert alert--warn">
-          Kill switch <strong>sospeso</strong>: il traffico esce in chiaro. Si riarma da solo
-          fra {Math.max(0, Math.ceil((data.killswitch.resume_at - data.at) / 60))} min.
+          {t.killSwitch(Math.max(0, Math.ceil((data.killswitch.resume_at - data.at) / 60)))}
         </p>
       )}
 
@@ -462,7 +468,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
       {data.wans.length === 0 && (
         <section class="card">
-          <p class="muted">Nessuna WAN configurata nella zona firewall.</p>
+          <p class="muted">{t.noWans}</p>
         </section>
       )}
 

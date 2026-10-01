@@ -19,6 +19,7 @@
  * quella rete.
  */
 
+import { hostnameText } from '../i18n/hostname';
 import { call } from './ubus';
 
 export type HostnameMode = 'none' | 'device' | 'custom';
@@ -32,11 +33,14 @@ export interface HostnameChoice {
 /** Il default del progetto: niente nome nella richiesta DHCP. */
 export const HOSTNAME_OFF: HostnameChoice = { mode: 'none', value: '' };
 
-export const HOSTNAME_MODES: Array<{ mode: HostnameMode; label: string }> = [
-  { mode: 'none', label: 'Non inviarlo' },
-  { mode: 'device', label: 'Nome del router' },
-  { mode: 'custom', label: 'Nome scelto' },
-];
+export const HOSTNAME_MODES: Array<{ mode: HostnameMode; label: string }> = (
+  ['none', 'device', 'custom'] as const
+).map((mode) => ({
+  mode,
+  get label() {
+    return hostnameText().mode[mode];
+  },
+}));
 
 /**
  * Nome valido per DNS e DHCP (RFC 1123): lettere, cifre e trattini, non in
@@ -71,9 +75,11 @@ export function hostnameToUci(choice: HostnameChoice): string | null {
 export function hostnameLabel(choice: HostnameChoice, deviceHostname?: string): string {
   switch (choice.mode) {
     case 'none':
-      return 'non inviato';
+      return hostnameText().notSent;
     case 'device':
-      return deviceHostname ? `nome del router (${deviceHostname})` : 'nome del router';
+      return deviceHostname
+        ? hostnameText().routerNamed(deviceHostname)
+        : hostnameText().routerName;
     default:
       return choice.value || '—';
   }

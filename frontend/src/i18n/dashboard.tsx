@@ -1,0 +1,164 @@
+import { defineText } from '.';
+import type { OverallState } from '../lib/dashboard';
+
+/** La scheda Internet (`screens/Dashboard.tsx`). */
+export const dashboardText = defineText({
+  it: {
+    overall: {
+      online: 'Internet raggiungibile',
+      connected: 'Collegato',
+      portal: 'Serve un login',
+      'no-internet': 'Collegato, ma non esce niente',
+      degraded: 'Degradato',
+      offline: 'Nessuna connessione',
+    } as Record<OverallState, string>,
+    state: {
+      addressed: 'con indirizzo',
+      wifiNoAddress: 'agganciata, senza indirizzo',
+      usbNoAddress: 'collegato, senza indirizzo',
+      cableNoAddress: 'cavo collegato, senza indirizzo',
+      unassociated: 'non agganciata a nessuna rete',
+      noCable: 'nessun cavo collegato',
+      noLink: 'nessun collegamento',
+      disabled: 'disattivata',
+      wifiNone: 'nessuna rete configurata',
+      none: 'non configurata',
+    },
+    wifi: (band: string) => `WiFi ${band} GHz`,
+    usb: 'Tethering USB',
+    port: (device: string) => `Porta ${device}`,
+    ethernet: 'Porta ethernet',
+    carriesTraffic: 'porta il traffico',
+    login: 'login',
+    mwanOnlinePortal: (
+      <>
+        Per mwan3 questa WAN è <strong>online</strong>, ma finché non fai il login il traffico non
+        passa.
+      </>
+    ),
+    health: 'Controllo di salute',
+    edit: 'Modifica',
+    trackUp: (latency: number, loss: number) => `${latency} ms · ${loss}% persi`,
+    trackDown: (loss: number) => `irraggiungibile · ${loss}% persi`,
+    priorityWeight: 'Priorità / peso',
+    excluded: 'Esclusa dal multi-WAN: mwan3 non la usa e non la controlla.',
+    dhcp: 'Richiesta DHCP',
+    sentName: 'Nome inviato',
+    address: 'Indirizzo',
+    address4: 'Indirizzo IPv4',
+    none: 'nessuno',
+    gateway: 'Gateway',
+    dns: 'DNS',
+    address6: 'Indirizzo IPv6',
+    gateway6: 'Gateway IPv6',
+    dns6: 'DNS IPv6',
+    prefix6: 'Prefisso delegato',
+    mac: 'MAC in uso',
+    device: 'Dispositivo',
+    noDevice: 'nessuno collegato',
+    signal: 'Segnale',
+    channelRate: 'Canale e rate',
+    traffic: 'Traffico',
+    now: 'Adesso',
+    session: 'Da questa sessione',
+    title: 'Internet',
+    loading: 'Caricamento…',
+    noDaemon: 'travelD non risponde.',
+    exitsVia: (wan: string) => `Il traffico esce da ${wan}.`,
+    noActive: 'Nessuna WAN sta portando traffico.',
+    autoreconnect: (on: boolean) => `Riconnessione automatica ${on ? 'attiva' : 'spenta'}.`,
+    portalOff: 'Verifica dei portali spenta. ',
+    mwanReading: 'Multi-WAN: lettura in corso.',
+    mwanMissing: 'Multi-WAN non installato.',
+    mwanDown: 'Multi-WAN installato ma mwan3 non risponde.',
+    mwanMode: (mode: string) => `Multi-WAN in ${mode}`,
+    mwanOnline: (list: string) => `, online: ${list}.`,
+    mwanNoneOnline: ', nessuna WAN online.',
+    killSwitch: (minutes: number) => (
+      <>
+        Kill switch <strong>sospeso</strong>: il traffico esce in chiaro. Si riarma da solo fra{' '}
+        {minutes} min.
+      </>
+    ),
+    noWans: 'Nessuna WAN configurata nella zona firewall.',
+  },
+  en: {
+    overall: {
+      online: 'Internet reachable',
+      connected: 'Connected',
+      portal: 'Login required',
+      'no-internet': 'Connected, but nothing gets out',
+      degraded: 'Degraded',
+      offline: 'No connection',
+    },
+    state: {
+      addressed: 'with address',
+      wifiNoAddress: 'associated, no address',
+      usbNoAddress: 'connected, no address',
+      cableNoAddress: 'cable plugged in, no address',
+      unassociated: 'not associated with any network',
+      noCable: 'no cable plugged in',
+      noLink: 'no link',
+      disabled: 'disabled',
+      wifiNone: 'no network configured',
+      none: 'not configured',
+    },
+    wifi: (band: string) => `WiFi ${band} GHz`,
+    usb: 'USB tethering',
+    port: (device: string) => `Port ${device}`,
+    ethernet: 'Ethernet port',
+    carriesTraffic: 'carries traffic',
+    login: 'login',
+    mwanOnlinePortal: (
+      <>
+        For mwan3 this WAN is <strong>online</strong>, but until you log in no traffic gets
+        through.
+      </>
+    ),
+    health: 'Health check',
+    edit: 'Edit',
+    trackUp: (latency: number, loss: number) => `${latency} ms · ${loss}% lost`,
+    trackDown: (loss: number) => `unreachable · ${loss}% lost`,
+    priorityWeight: 'Priority / weight',
+    excluded: 'Excluded from multi-WAN: mwan3 neither uses nor checks it.',
+    dhcp: 'DHCP request',
+    sentName: 'Name sent',
+    address: 'Address',
+    address4: 'IPv4 address',
+    none: 'none',
+    gateway: 'Gateway',
+    dns: 'DNS',
+    address6: 'IPv6 address',
+    gateway6: 'IPv6 gateway',
+    dns6: 'IPv6 DNS',
+    prefix6: 'Delegated prefix',
+    mac: 'MAC in use',
+    device: 'Device',
+    noDevice: 'none connected',
+    signal: 'Signal',
+    channelRate: 'Channel and rate',
+    traffic: 'Traffic',
+    now: 'Now',
+    session: 'This session',
+    title: 'Internet',
+    loading: 'Loading…',
+    noDaemon: 'travelD is not responding.',
+    exitsVia: (wan: string) => `Traffic goes out via ${wan}.`,
+    noActive: 'No WAN is carrying traffic.',
+    autoreconnect: (on: boolean) => `Auto-reconnect ${on ? 'on' : 'off'}.`,
+    portalOff: 'Portal check off. ',
+    mwanReading: 'Multi-WAN: reading.',
+    mwanMissing: 'Multi-WAN not installed.',
+    mwanDown: 'Multi-WAN installed but mwan3 is not responding.',
+    mwanMode: (mode: string) => `Multi-WAN in ${mode}`,
+    mwanOnline: (list: string) => `, online: ${list}.`,
+    mwanNoneOnline: ', no WAN online.',
+    killSwitch: (minutes: number) => (
+      <>
+        Kill switch <strong>paused</strong>: traffic goes out unencrypted. It re-arms by itself in{' '}
+        {minutes} min.
+      </>
+    ),
+    noWans: 'No WAN configured in the firewall zone.',
+  },
+});

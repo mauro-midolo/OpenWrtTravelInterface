@@ -6,6 +6,7 @@
  * (online, offline, ping persi). `travel.mwan` le compone sul router.
  */
 
+import { mwanText } from '../i18n/mwan';
 import { call } from './ubus';
 import { parseCidr } from './ip';
 import type { IpFamily } from './ip';
@@ -85,24 +86,21 @@ export function getMwan(): Promise<Mwan> {
   return call<Mwan>('travel', 'mwan');
 }
 
-export const MODE_LABEL: Record<MwanMode, string> = {
-  failover: 'Failover',
-  balance: 'Bilanciamento',
-  off: 'Nessuna politica',
-};
+/** Il nome della modalita', nella lingua dell'interfaccia. */
+export function modeLabel(mode: MwanMode): string {
+  return mwanText().mode[mode];
+}
 
 export function statusLabel(status: string): string {
+  const labels = mwanText().status;
   switch (status) {
     case 'online':
-      return 'online';
     case 'offline':
-      return 'offline';
     case 'disabled':
-      return 'esclusa';
     case 'notracking':
-      return 'senza controllo';
+      return labels[status];
     default:
-      return 'stato ignoto';
+      return labels.unknown;
   }
 }
 
@@ -335,9 +333,7 @@ export function ruleFamily(input: { src_ip?: string; dest_ip?: string }): IpFami
 function ruleValues(input: RuleInput): Record<string, string> {
   const family = ruleFamily(input);
   if (family === null) {
-    throw new Error(
-      'La regola mescola IPv4 e IPv6: mwan3 ne accetta una famiglia sola per regola.',
-    );
+    throw new Error(mwanText().mixedFamilies);
   }
 
   const values: Record<string, string> = {
