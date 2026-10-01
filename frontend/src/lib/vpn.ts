@@ -14,6 +14,7 @@
  * strada per fare la stessa cosa, con un secondo modo di sbagliarla.
  */
 
+import { vpnText } from '../i18n/vpn';
 import { call } from './ubus';
 import { parseIp } from './ip';
 
@@ -216,7 +217,22 @@ export function blocked(policy: VpnPolicy | undefined, what: PolicyHolder): bool
 
 /** Perche' e' bloccata, gia' pronta da mostrare. Vuota se non lo e'. */
 export function blockReason(policy: VpnPolicy | undefined, what: PolicyHolder): string {
-  return policy?.reason?.[what] ?? '';
+  const backend = policy?.reason?.[what] ?? '';
+  // La frase la scrive il router, in italiano; qui si riscrive nella lingua
+  // dell'interfaccia partendo da chi blocca. Il nome del profilo WireGuard sta
+  // solo nella frase, fra virgolette. Un occupante che non conosciamo (un
+  // router piu' nuovo del frontend) si mostra com'e'.
+  const t = vpnText().lib.policy;
+  switch (policy?.blocked_by?.[what]) {
+    case 'balance':
+      return t.balance;
+    case 'ts_exit':
+      return t.ts_exit;
+    case 'wireguard':
+      return t.wireguard(/"([^"]*)"/.exec(backend)?.[1] ?? '');
+    default:
+      return backend;
+  }
 }
 
 // --- WireGuard (Fase 6b) -----------------------------------------------------
@@ -479,11 +495,12 @@ export function formatWgBytes(bytes: number): string {
 
 /** Da quanto tempo l'ultimo handshake, secondo l'orologio del router. */
 export function handshakeAge(status: WgStatus): string {
-  if (!status.last_handshake) return 'mai';
+  const t = vpnText().lib;
+  if (!status.last_handshake) return t.never;
   const seconds = Math.max(0, status.now - status.last_handshake);
-  if (seconds < 60) return `${seconds} s fa`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min fa`;
-  return `${Math.round(seconds / 3600)} h fa`;
+  if (seconds < 60) return t.secondsAgo(seconds);
+  if (seconds < 3600) return t.minutesAgo(Math.round(seconds / 60));
+  return t.hoursAgo(Math.round(seconds / 3600));
 }
 
 /**
@@ -534,11 +551,11 @@ export function wgEndpointProblem(host: string): string {
   // ci si e' attaccata la porta. Vale la pena dirlo, perche' e' l'errore che
   // questa fase esiste per rendere visibile.
   if (bare.includes(':')) {
-    return 'sembra un indirizzo IPv6 incompleto: la porta va nel campo accanto';
+    return vpnText().lib.endpointV6;
   }
 
   const hostname = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
-  return hostname.test(bare) ? '' : 'non è un nome di host né un indirizzo';
+  return hostname.test(bare) ? '' : vpnText().lib.endpointBad;
 }
 
 export function wgRoutingSteps(
@@ -546,28 +563,29 @@ export function wgRoutingSteps(
 ): Array<{ ok: boolean; label: string; fix: string; advisory?: boolean }> {
   const r = wg.routing;
   if (!r) return [];
+  const t = vpnText().lib.steps;
   return [
     {
       ok: r.device_up,
       // Con il nome vero dell'interfaccia: i profili sono tanti, e chi va a
       // guardare in `ip link` deve sapere quale cercare.
-      label: `Interfaccia del tunnel (${wg.active || 'travel_wg'})`,
-      fix: 'l’interfaccia non esiste: netifd non l’ha alzata',
+      label: t.device(wg.active || 'travel_wg'),
+      fix: t.deviceFix,
     },
     {
       ok: r.route,
-      label: 'Rotta dentro il tunnel (tabella 53)',
-      fix: 'manca la rotta nella tabella del tunnel',
+      label: t.route,
+      fix: t.routeFix,
     },
     {
       ok: r.rule,
-      label: 'Regola che ci manda il traffico (pref 901)',
-      fix: 'manca la regola di instradamento — da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+      label: t.rule,
+      fix: t.ruleFix,
     },
     {
       ok: r.in_zone,
-      label: 'Nella zona firewall del tunnel',
-      fix: 'l’interfaccia non è nella zona vpn: reimporta la configurazione',
+      label: t.zone,
+      fix: t.zoneFix,
     },
     // Le due righe IPv6 compaiono solo se il profilo instrada IPv6. Un tunnel
     // v4-only non ha niente da instradare in v6, e segnarlo come mancante
@@ -580,14 +598,14 @@ export function wgRoutingSteps(
       ? [
           {
             ok: r.route6 === true,
-            label: 'Rotta IPv6 dentro il tunnel (tabella 53)',
-            fix: 'manca la rotta IPv6: il traffico IPv6 esce dalla WAN in chiaro',
+            label: t.route6,
+            fix: t.route6Fix,
             advisory: true,
           },
           {
             ok: r.rule6 === true,
-            label: 'Regola IPv6 che ci manda il traffico (pref 901)',
-            fix: 'manca la regola IPv6 — da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+            label: t.rule6,
+            fix: t.rule6Fix,
             advisory: true,
           },
         ]
@@ -809,17 +827,8 @@ export async function resumeKillSwitch(): Promise<void> {
   await call('uci', 'apply', {});
 }
 
-export const TS_STATE_LABEL: Record<string, string> = {
-  Running: 'connesso',
-  Starting: 'in avvio',
-  Stopped: 'disconnesso',
-  NeedsLogin: 'serve l’accesso',
-  NeedsMachineAuth: 'in attesa di approvazione',
-  NoState: 'non avviato',
-};
-
 export function tsStateLabel(state: string): string {
-  return TS_STATE_LABEL[state] ?? (state || 'sconosciuto');
+  return vpnText().lib.tsState[state] ?? (state || vpnText().lib.unknown);
 }
 
 /**
@@ -893,7 +902,7 @@ export function exitNodeOf(vpn: VpnState): TailNode | null {
 
 /** Come chiamare l'uscita scelta: il nome corto se lo conosciamo, altrimenti il valore grezzo. */
 export function exitNodeLabel(vpn: VpnState): string {
-  if (!vpn.settings.exit_node) return 'nessuno';
+  if (!vpn.settings.exit_node) return vpnText().lib.none;
   return exitNodeOf(vpn)?.short ?? vpn.settings.exit_node;
 }
 

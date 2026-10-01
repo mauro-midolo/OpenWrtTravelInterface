@@ -29,6 +29,8 @@ import { getWg } from '../lib/vpn';
 import { safeHttpUrl } from '../lib/portal';
 import type { WgState } from '../lib/vpn';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { commonText } from '../i18n/common';
+import { vpnText } from '../i18n/vpn';
 
 /** Per quanto si apre il varco per il login a un portale. */
 const SUSPEND_MINUTES = 10;
@@ -54,15 +56,16 @@ function Row({ label, value }: { label: string; value: string }) {
  * non parte nessun ping.
  */
 function Node({ node }: { node: TailNode }) {
+  const t = vpnText();
   return (
     <div class="node">
       <span
         class={node.online ? 'dot dot--on' : 'dot'}
         role="img"
-        aria-label={node.online ? 'in linea' : 'non in linea'}
+        aria-label={node.online ? t.online : t.offline}
       />
       <span class="node__name">{node.short}</span>
-      {node.exit && <span class="badge">uscita</span>}
+      {node.exit && <span class="badge">{t.exitBadge}</span>}
       <span class="node__ip">{node.ip || '—'}</span>
     </div>
   );
@@ -81,47 +84,48 @@ function Node({ node }: { node: TailNode }) {
 function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
   const check = ts.exit_check;
   if (!check) return null;
+  const t = vpnText().check;
 
   const steps: Array<{ ok: boolean; label: string; fix: string }> = [
     {
       ok: check.iface_present,
-      label: 'Interfaccia del tunnel (tailscale0)',
-      fix: 'Non c’è: tailscaled non l’ha creata. Riprova l’accesso.',
+      label: t.iface,
+      fix: t.ifaceFix,
     },
     {
       ok: ts.ip_forward !== false,
-      label: 'Inoltro IP del kernel',
-      fix: `Spento${ts.ip_forward_raw ? ` (vale "${ts.ip_forward_raw}")` : ''}. Da SSH: sh /usr/share/travel/vpn-setup.sh forwarding`,
+      label: t.forward,
+      fix: t.forwardFix(ts.ip_forward_raw ?? ''),
     },
     {
       ok: check.iface_forward,
-      label: 'Inoltro sull’interfaccia del tunnel',
-      fix: 'Spento su tailscale0: è quello che conta, perché il pacchetto entra da lì. Salva di nuovo le impostazioni Tailscale — lo riscrive.',
+      label: t.ifaceForward,
+      fix: t.ifaceForwardFix,
     },
     {
       ok: check.fw_out,
-      label: 'Inoltro del firewall verso la WAN',
-      fix: 'La sezione travel_vpn_out è spenta. Salva di nuovo le impostazioni Tailscale con l’annuncio attivo.',
+      label: t.fwOut,
+      fix: t.fwOutFix,
     },
     {
       ok: check.fw_loaded,
-      label: 'Regole fw4 caricate per tailscale0',
-      fix: 'Il firewall in esecuzione non conosce il tunnel. Da SSH: /etc/init.d/firewall reload',
+      label: t.fwLoaded,
+      fix: t.fwLoadedFix,
     },
     {
       ok: check.route_present,
-      label: 'Rotta verso il tailnet (100.64.0.0/10 via tailscale0)',
-      fix: 'Manca: senza, il router non raggiunge nessun peer e le risposte non hanno da dove rientrare nel tunnel. Salva di nuovo le impostazioni Tailscale, o da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+      label: t.route,
+      fix: t.routeFix,
     },
     {
       ok: check.route_rule,
-      label: 'Risposte instradate nel tunnel (sopra mwan3)',
-      fix: 'Manca la regola di instradamento: mwan3 manda le risposte ai nodi del tailnet fuori dalla WAN. Salva di nuovo le impostazioni Tailscale, o da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+      label: t.routeRule,
+      fix: t.routeRuleFix,
     },
     {
       ok: ts.self_exit_node,
-      label: 'Autorizzato dal tailnet',
-      fix: 'Va approvato dalla console di Tailscale, fra le rotte del nodo.',
+      label: t.approved,
+      fix: t.approvedFix,
     },
   ];
 
@@ -133,18 +137,18 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
     steps.push(
       {
         ok: check.wg_fw,
-        label: 'Uscita del tailnet dentro WireGuard',
-        fix: 'La sezione travel_vpn_wg è spenta: il pacchetto viene instradato nel tunnel e lì il firewall lo rifiuta, perché i due tunnel stanno nella stessa zona. Salva di nuovo le impostazioni Tailscale con l’annuncio attivo.',
+        label: t.wgFw,
+        fix: t.wgFwFix,
       },
       {
         ok: check.wg_fw_loaded,
-        label: 'Regola fw4 caricata (travel-exit-via-wg)',
-        fix: 'Scritta in uci ma assente dal firewall in esecuzione. Da SSH: /etc/init.d/firewall reload, e se non compare nemmeno così è fw4 che scarta la regola — allora serve un’altra strada.',
+        label: t.wgFwLoaded,
+        fix: t.wgFwLoadedFix,
       },
       {
         ok: check.wg_route_rule,
-        label: 'Traffico instradato in WireGuard (pref 901)',
-        fix: 'Manca la regola: il traffico esce lo stesso, ma dalla WAN — l’indirizzo finale sarebbe quello di qui, non quello della VPN. Da SSH: sh /usr/share/travel/vpn-setup.sh runtime',
+        label: t.wgRule,
+        fix: t.wgRuleFix,
       },
     );
   }
@@ -153,7 +157,7 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
 
   return (
     <>
-      <h2>Uscita per gli altri</h2>
+      <h2>{t.title}</h2>
 
       {/* La lista compare solo quando c'e' un anello rotto.
           Tutta verde non dice niente che la riga qui sotto non dica meglio:
@@ -166,7 +170,7 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
             <span
               class={step.ok ? 'dot dot--on' : 'dot'}
               role="img"
-              aria-label={step.ok ? 'a posto' : 'manca'}
+              aria-label={step.ok ? t.ok : t.missing}
             />
             <span class="node__name">{step.label}</span>
           </div>
@@ -174,22 +178,17 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
 
       {broken.length === 0 ? (
         <>
-          <p class="alert alert--ok">
-            Uscita per gli altri funzionante{check.wg_up ? ', dentro WireGuard' : ''}.
-          </p>
+          <p class="alert alert--ok">{t.working(check.wg_up === true)}</p>
           {/* Il buco va detto proprio qui, dove qualcuno ha appena letto che
               va tutto bene: il kill switch guarda i client della LAN, non chi
               arriva dal tailnet. */}
           {check.wg_up && (
-            <p class="muted">
-              Se WireGuard cade, chi ti usa come uscita esce in chiaro: il kill switch non lo
-              blocca.
-            </p>
+            <p class="muted">{t.wgDrops}</p>
           )}
         </>
       ) : (
         <p class="alert alert--warn">
-          {broken.length === 1 ? 'Manca un anello' : `Mancano ${broken.length} anelli`}:{' '}
+          {t.broken(broken.length)}:{' '}
           {broken.map((s) => `${s.label} — ${s.fix}`).join(' · ')}
         </p>
       )}
@@ -206,6 +205,7 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
  * browser sul sito di Tailscale, ed e' un segreto: si scrive e non si rilegge.
  */
 function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
+  const t = vpnText();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [withKey, setWithKey] = useState(false);
@@ -239,7 +239,7 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
           {/* Un link vero: l'accesso avviene nel browser di chi guarda, con la
               sua sessione Tailscale. Il router non puo' farlo al posto suo. */}
           <a class="button button--primary" href={authUrl} target="_blank" rel="noreferrer">
-            Autorizza il router
+            {t.authorize}
           </a>
         </>
       )}
@@ -251,17 +251,17 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
             disabled={busy}
             onClick={() => void go('')}
           >
-            {busy ? 'Avvio…' : 'Accedi'}
+            {busy ? t.starting : t.signIn}
           </button>
           <button class="button button--ghost" onClick={() => setWithKey(!withKey)}>
-            {withKey ? 'Annulla' : 'Ho una auth key'}
+            {withKey ? commonText().actions.cancel : t.haveKey}
           </button>
         </div>
       )}
 
       {withKey && !authUrl && (
         <label class="field">
-          <span>Auth key</span>
+          <span>{t.authKey}</span>
           <input
             type="password"
             value={authkey}
@@ -276,13 +276,13 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
             disabled={busy || authkey.trim() === ''}
             onClick={() => void go(authkey.trim())}
           >
-            {busy ? 'Collego…' : 'Collega con la chiave'}
+            {busy ? t.linking : t.linkWithKey}
           </button>
         </label>
       )}
 
       {busy && !authUrl && (
-        <p class="muted">Avvio Tailscale…</p>
+        <p class="muted">{t.startingTs}</p>
       )}
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -298,6 +298,8 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
  * nessuna parte.
  */
 function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean) => void }) {
+  const t = vpnText();
+  const actions = commonText().actions;
   const [exitNode, setExitNode] = useState(vpn.settings.exit_node);
   const [acceptRoutes, setAcceptRoutes] = useState(vpn.settings.accept_routes);
   const [acceptDns, setAcceptDns] = useState(vpn.settings.accept_dns);
@@ -332,28 +334,26 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Impostazioni Tailscale</h2>
+        <h2>{t.settingsTitle}</h2>
 
         {/* Un elenco e non dei chip: gli exit node possono essere parecchi, e
             in fila orizzontale finiscono fuori dallo schermo con i nomi
             tagliati a meta'. In colonna ci sta anche l'indirizzo, che e' cio'
             che distingue due nodi chiamati quasi uguale. */}
         {exitBlocked && (
-          <p class="alert alert--info">
-            L'exit node non è selezionabile: {blockReason(vpn.policy, 'ts_exit')}.
-          </p>
+          <p class="alert alert--info">{t.exitBlocked(blockReason(vpn.policy, 'ts_exit'))}</p>
         )}
 
         <div class="field">
-          <span>Exit node</span>
+          <span>{t.exitNode}</span>
           <ul class="list list--flush">
             <li>
               <button class="net" type="button" onClick={() => setExitNode('')}>
                 <span class="net__main">
-                  <span class="net__ssid">Nessuno</span>
+                  <span class="net__ssid">{t.none}</span>
                 </span>
                 <span class="net__side">
-                  {exitNode === '' && <span class="badge badge--ok">scelto</span>}
+                  {exitNode === '' && <span class="badge badge--ok">{t.chosen}</span>}
                 </span>
               </button>
             </li>
@@ -377,15 +377,15 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
                       <span class="net__ssid">{node.short}</span>
                       <span class="net__meta">
                         {node.ip}
-                        {node.online ? '' : ' · non in linea'}
+                        {node.online ? '' : t.offlineSuffix}
                       </span>
                     </span>
                     <span class="net__side">
-                      {chosen && <span class="badge badge--ok">scelto</span>}
+                      {chosen && <span class="badge badge--ok">{t.chosen}</span>}
                       <span
                         class={node.online ? 'dot dot--on' : 'dot'}
                         role="img"
-                        aria-label={node.online ? 'in linea' : 'non in linea'}
+                        aria-label={node.online ? t.online : t.offline}
                       />
                     </span>
                   </button>
@@ -394,7 +394,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             })}
           </ul>
           {nodes.length === 0 && (
-            <span class="muted">Nessun exit node disponibile nel tailnet.</span>
+            <span class="muted">{t.noExitNodes}</span>
           )}
         </div>
 
@@ -407,13 +407,11 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={advertiseExit}
             onChange={(e) => setAdvertiseExit((e.target as HTMLInputElement).checked)}
           />
-          <span>Offri questo router come exit node</span>
+          <span>{t.offerExit}</span>
         </label>
 
         {advertiseExit && (
-          <p class="alert alert--info">
-            Va <strong>autorizzato dalla console di Tailscale</strong>.
-          </p>
+          <p class="alert alert--info">{t.approveInConsole}</p>
         )}
 
         <label class="check">
@@ -422,7 +420,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={acceptRoutes}
             onChange={(e) => setAcceptRoutes((e.target as HTMLInputElement).checked)}
           />
-          <span>Accetta le rotte annunciate dagli altri nodi</span>
+          <span>{t.acceptRoutes}</span>
         </label>
 
         <label class="check">
@@ -431,7 +429,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={acceptDns}
             onChange={(e) => setAcceptDns((e.target as HTMLInputElement).checked)}
           />
-          <span>Usa il DNS del tailnet (MagicDNS)</span>
+          <span>{t.acceptDns}</span>
         </label>
 
         <label class="check">
@@ -441,7 +439,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             onChange={(e) => setAdvertiseLan((e.target as HTMLInputElement).checked)}
           />
           <span>
-            Annuncia la LAN del router
+            {t.advertiseLan}
             {/* Entrambe le famiglie, se ci sono: sapere che cosa viene
                 annunciato e' la meta' del motivo per cui questa riga esiste,
                 e con IPv6 le sottoreti sono due. */}
@@ -456,10 +454,10 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
 
         <div class="sheet__actions">
           <button class="button button--ghost" disabled={busy} onClick={() => onClose(false)}>
-            Annulla
+            {actions.cancel}
           </button>
           <button class="button button--primary" disabled={busy} onClick={() => void save()}>
-            {busy ? 'Applico…' : 'Salva'}
+            {busy ? t.applying : actions.save}
           </button>
         </div>
       </div>
@@ -482,6 +480,8 @@ function KillSwitchSheet({
   on: boolean;
   onClose: (changed: boolean) => void;
 }) {
+  const t = vpnText();
+  const actions = commonText().actions;
   const apply = useApply();
   const [done, setDone] = useState(false);
 
@@ -492,21 +492,21 @@ function KillSwitchSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>{on ? 'Accendi il kill switch' : 'Spegni il kill switch'}</h2>
+        <h2>{on ? t.ksOnTitle : t.ksOffTitle}</h2>
 
         {apply.phase === 'idle' && (
           <>
             <p class="alert alert--warn">
               {on
-                ? 'I dispositivi collegati usciranno solo dentro il tunnel: se cade, restano senza Internet.'
-                : 'I dispositivi potranno uscire anche senza tunnel.'}
+                ? t.ksOnWarn
+                : t.ksOffWarn}
             </p>
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Annulla
+                {actions.cancel}
               </button>
               <button class="button button--primary" onClick={() => void go()}>
-                Procedi
+                {actions.proceed}
               </button>
             </div>
           </>
@@ -516,10 +516,10 @@ function KillSwitchSheet({
 
         {done && (
           <>
-            <p class="alert alert--ok">Fatto.</p>
+            <p class="alert alert--ok">{actions.done}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -530,6 +530,7 @@ function KillSwitchSheet({
 }
 
 export function Vpn({ onLogout }: { onLogout: () => void }) {
+  const t = vpnText();
   // Leggere lo stato costa un `tailscale status`: quattro secondi bastano a far
   // sembrare vivo il login interattivo senza pesare, e il timer si ferma da solo
   // quando la scheda non e' visibile.
@@ -566,13 +567,13 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
     return (
       <main class="screen">
         <header class="topbar">
-          <h1>VPN</h1>
+          <h1>{t.title}</h1>
         </header>
         {poll.loading ? (
-          <p class="muted">Caricamento…</p>
+          <p class="muted">{t.loading}</p>
         ) : (
           <section class="card">
-            <p class="muted">Il router non ha risposto.</p>
+            <p class="muted">{t.noAnswer}</p>
             {poll.error && <p class="alert alert--warn alert--code">{poll.error.message}</p>}
           </section>
         )}
@@ -598,9 +599,9 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
   return (
     <main class="screen">
       <header class="topbar">
-        <h1>VPN</h1>
+        <h1>{t.title}</h1>
         <button class="button button--ghost" onClick={poll.refresh}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
@@ -609,22 +610,20 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
           <div>
             <h2 class="uplink__title">Tailscale</h2>
             <p class="muted">
-              {!ts.installed ? 'non installato' : tsStateLabel(ts.state)}
+              {!ts.installed ? t.notInstalled : tsStateLabel(ts.state)}
               {ts.self_short ? ` · ${ts.self_short}` : ''}
             </p>
           </div>
           {ts.state === 'Running' && ts.exit_node_id !== '' && (
-            <span class="badge badge--ok">esce dal tunnel</span>
+            <span class="badge badge--ok">{t.viaTunnel}</span>
           )}
           {ts.state === 'Running' && ts.self_exit_node && (
-            <span class="badge badge--ok">uscita per gli altri</span>
+            <span class="badge badge--ok">{t.exitForOthers}</span>
           )}
         </header>
 
         {!ts.installed && (
-          <p class="alert alert--warn">
-            Il pacchetto <code>tailscale</code> non è installato.
-          </p>
+          <p class="alert alert--warn">{t.missingPackage}</p>
         )}
 
         {/* Giu' ma non fuori: l'account c'e' ancora, il tunnel no. Qui non si
@@ -632,9 +631,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             manca solo riaccendere, e l'interruttore sta con gli altri comandi
             in fondo alla scheda, dove sta anche quello di WireGuard. */}
         {ts.installed && ts.state !== 'Running' && authed && (
-          <p class="muted">
-            Tunnel spento{ts.self_short ? <> · <strong>{ts.self_short}</strong></> : ''}.
-          </p>
+          <p class="muted">{t.tunnelOff(ts.self_short)}</p>
         )}
 
         {ts.installed && ts.state !== 'Running' && !authed && (
@@ -642,42 +639,38 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
         )}
 
         {ts.installed && ts.state === 'NeedsMachineAuth' && (
-          <p class="alert alert--warn">
-            Il nodo va autorizzato dalla console di Tailscale.
-          </p>
+          <p class="alert alert--warn">{t.needsMachineAuth}</p>
         )}
 
         {ts.state === 'Running' && (
           <>
-            <Row label="Nome nel tailnet" value={ts.self_short || '—'} />
-            <Row label="Indirizzo" value={ts.self_ip || '—'} />
+            <Row label={t.tailnetName} value={ts.self_short || '—'} />
+            <Row label={t.address} value={ts.self_ip || '—'} />
             <Row
-              label="Exit node"
+              label={t.exitNode}
               value={
                 vpn.settings.exit_node
-                  ? `${exitNodeLabel(vpn)}${ts.exit_node_id ? '' : ' · non attivo'}`
-                  : 'nessuno'
+                  ? `${exitNodeLabel(vpn)}${ts.exit_node_id ? '' : t.notActive}`
+                  : t.noneLower
               }
             />
             <Row
-              label="Offerto come uscita"
+              label={t.offered}
               value={
                 !vpn.settings.advertise_exit
-                  ? 'no'
+                  ? t.no
                   : ts.self_exit_node
-                    ? 'sì, autorizzato'
-                    : 'sì, da autorizzare'
+                    ? t.yesApproved
+                    : t.yesPending
               }
             />
-            <Row label="Versione" value={ts.version || '—'} />
+            <Row label={t.version} value={ts.version || '—'} />
 
             {/* Annunciato ma non ancora visibile agli altri: e' quasi sempre
                 l'approvazione che manca, ed e' il passaggio che non sta nel
                 router e quindi non si puo' fare da qui. */}
             {vpn.settings.advertise_exit && !ts.self_exit_node && (
-              <p class="alert alert--warn">
-                L'exit node va <strong>approvato dalla console di Tailscale</strong>.
-              </p>
+              <p class="alert alert--warn">{t.exitNeedsApproval}</p>
             )}
 
             {/* La catena che fa funzionare l'exit node, un anello per riga.
@@ -689,16 +682,10 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             )}
 
             {!ts.boot && (
-              <p class="alert alert--warn">
-                Il servizio non è abilitato all'avvio: dopo un riavvio la VPN non torna su da
-                sola.
-              </p>
+              <p class="alert alert--warn">{t.noBoot}</p>
             )}
             {vpn.settings.exit_node !== '' && ts.exit_node_id === '' && (
-              <p class="alert alert--warn">
-                L'exit node <strong>{exitNodeLabel(vpn)}</strong> è impostato ma non è in
-                uso.
-              </p>
+              <p class="alert alert--warn">{t.exitUnused(exitNodeLabel(vpn))}</p>
             )}
           </>
         )}
@@ -706,11 +693,11 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
         {ts.installed && (
           <div class="radio__actions">
             <button class="button button--ghost" onClick={() => setEditing(true)}>
-              Impostazioni
+              {t.settings}
             </button>
             {ts.state === 'Running' && (
               <button class="button button--ghost" disabled={busy} onClick={() => void run(tsDown)}>
-                Disconnetti
+                {t.disconnect}
               </button>
             )}
             {/* La coppia accendi/spegni di WireGuard, con le stesse parole: da
@@ -723,12 +710,12 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
                 disabled={busy || ts.state === 'Starting'}
                 onClick={() => void run(tsUp)}
               >
-                {busy ? 'Accendo…' : 'Accendi'}
+                {busy ? t.turningOn : t.turnOn}
               </button>
             )}
             {ts.installed && ts.state !== 'NoState' && (
               <button class="button button--ghost" disabled={busy} onClick={() => void run(tsLogout)}>
-                Esci dall'account
+                {t.signOut}
               </button>
             )}
           </div>
@@ -740,9 +727,9 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             nodo spento in mezzo agli altri si fa cercare. */}
         {ts.state === 'Running' && (
           <>
-            <h2>Dispositivi</h2>
+            <h2>{t.devices}</h2>
             {allNodes(vpn).length === 0 ? (
-              <p class="muted">Nessun altro dispositivo nel tailnet.</p>
+              <p class="muted">{t.noDevices}</p>
             ) : (
               allNodes(vpn).map((node) => <Node key={node.id} node={node} />)
             )}
@@ -769,18 +756,16 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
       <section class={`card uplink uplink--${ks.on ? (suspended ? 'no-address' : 'addressed') : 'unassociated'}`}>
         <header class="radio__head">
           <div>
-            <h2 class="uplink__title">Kill switch</h2>
+            <h2 class="uplink__title">{t.ks}</h2>
             <p class="muted">
-              {!ks.on ? 'spento' : suspended ? `sospeso, si riarma fra ${left} min` : 'attivo'}
+              {!ks.on ? t.ksOff : suspended ? t.ksSuspended(left) : t.ksOn}
             </p>
           </div>
-          {ks.on && !suspended && <span class="badge badge--ok">blocca</span>}
+          {ks.on && !suspended && <span class="badge badge--ok">{t.ksBlocks}</span>}
         </header>
 
         {!ks.ready && (
-          <p class="alert alert--warn">
-            La regola di firewall del kill switch non c'è.
-          </p>
+          <p class="alert alert--warn">{t.ksMissing}</p>
         )}
 
         {/* Il caso che rende un kill switch peggio che inutile: acceso, e con
@@ -790,17 +775,11 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             due: WireGuard da solo basta e avanza, e dirgli di no mentre lavora
             è il modo più rapido di insegnare a ignorare gli avvisi. */}
         {ks.on && knowTunnels && !protecting && (
-          <p class="alert alert--warn">
-            <strong>Nessun tunnel porta il traffico</strong>: i client sono senza Internet.
-            Scegli un exit node Tailscale oppure accendi WireGuard.
-          </p>
+          <p class="alert alert--warn">{t.ksNoTunnel}</p>
         )}
 
         {suspended && (
-          <p class="alert alert--warn">
-            Sospeso: il traffico esce in chiaro. Si riarma da solo fra{' '}
-            <strong>{left} min</strong>.
-          </p>
+          <p class="alert alert--warn">{t.ksSuspendedWarn(left)}</p>
         )}
 
         <div class="radio__actions">
@@ -809,7 +788,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             disabled={!ks.ready}
             onClick={() => setKillSwitch(!ks.on)}
           >
-            {ks.on ? 'Spegni' : 'Accendi'}
+            {ks.on ? t.turnOff : t.turnOn}
           </button>
 
           {ks.on && !suspended && (
@@ -818,13 +797,13 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
               disabled={busy}
               onClick={() => void run(() => suspendKillSwitch(SUSPEND_MINUTES))}
             >
-              Sospendi {SUSPEND_MINUTES} min
+              {t.suspend(SUSPEND_MINUTES)}
             </button>
           )}
 
           {suspended && (
             <button class="button button--ghost" disabled={busy} onClick={() => void run(resumeKillSwitch)}>
-              Riarma adesso
+              {t.resume}
             </button>
           )}
         </div>
