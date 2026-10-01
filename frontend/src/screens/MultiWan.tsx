@@ -53,10 +53,6 @@ export function MwanCard({
     return (
       <section class="card">
         <h2 class="uplink__title">Multi-WAN non installato</h2>
-        <p class="muted">
-          mwan3 non c'è. Si installa da solo al prossimo <code>deploy</code> fatto con una
-          connessione a Internet attiva: serve a scaricare il pacchetto.
-        </p>
       </section>
     );
   }
@@ -66,16 +62,7 @@ export function MwanCard({
   return (
     <section class={`card uplink uplink--${mwan.running ? 'addressed' : 'no-address'}`}>
       <header class="radio__head">
-        <div>
-          <h2 class="uplink__title">Multi-WAN · {MODE_LABEL[mwan.mode]}</h2>
-          <p class="muted">
-            {mwan.mode === 'failover'
-              ? 'Usa la prima WAN disponibile in ordine di priorità.'
-              : mwan.mode === 'balance'
-                ? 'Distribuisce le connessioni fra le WAN online.'
-                : 'Nessuna politica attiva: il traffico segue le rotte di sistema.'}
-          </p>
-        </div>
+        <h2 class="uplink__title">Multi-WAN · {MODE_LABEL[mwan.mode]}</h2>
         <button class="button button--ghost" onClick={onEdit}>
           Modifica
         </button>
@@ -83,7 +70,7 @@ export function MwanCard({
 
       {!mwan.running && (
         <p class="alert alert--warn">
-          mwan3 è installato ma non risponde. Le WAN funzionano con le rotte di sistema.
+          mwan3 è installato ma non risponde.
         </p>
       )}
 
@@ -101,18 +88,9 @@ export function MwanCard({
         </div>
       ))}
 
-      {mwan.mode === 'balance' && (
-        <p class="alert alert--info">
-          Il bilanciamento distribuisce le <strong>connessioni</strong>, non somma la banda:
-          un singolo scaricamento resta alla velocità di una sola WAN. Serve ad avere più
-          capacità totale con molte connessioni insieme, non a rendere veloce un download.
-        </p>
-      )}
-
       <p class="muted">
         Sticky sul traffico generale:{' '}
-        {mwan.default_sticky ? `attivo, ${mwan.default_timeout}s` : 'disattivo'}. Riguarda
-        tutto ciò che non ha una regola sua qui sotto.
+        {mwan.default_sticky ? `attivo, ${mwan.default_timeout}s` : 'disattivo'}
       </p>
     </section>
   );
@@ -197,27 +175,12 @@ export function MwanSheet({
                 <option value="balance">Bilanciamento — tutte insieme</option>
               )}
             </select>
-            <span class="muted">
-              {mode === 'failover'
-                ? 'Usa la WAN più in alto fra quelle disponibili; scende di uno quando cade.'
-                : 'Distribuisce le connessioni sulle WAN online, in proporzione al peso.'}
-            </span>
           </label>
 
           {balanceBlocked && (
             <p class="alert alert--info">
               Il <strong>bilanciamento</strong> non è disponibile:{' '}
-              {blockReason(mwan.policy, 'balance')}. Un tunnel è una connessione sola: il
-              bilanciamento non la può distribuire, e spostandola cambierebbe l'indirizzo di
-              partenza costringendo a un handshake nuovo su tutto il traffico. Spegni il
-              tunnel dalla scheda VPN per poter tornare al bilanciamento.
-            </p>
-          )}
-
-          {mode === 'balance' && (
-            <p class="alert alert--info">
-              Il bilanciamento distribuisce le <strong>connessioni</strong>, non somma la
-              banda: un singolo scaricamento resta alla velocità di una sola WAN.
+              {blockReason(mwan.policy, 'balance')}.
             </p>
           )}
 
@@ -227,12 +190,7 @@ export function MwanSheet({
               checked={sticky}
               onChange={(e) => setSticky((e.target as HTMLInputElement).checked)}
             />
-            <span>
-              Sticky sul traffico generale: tieni ogni dispositivo sulla stessa WAN per un
-              po', anche in bilanciamento. Vale per tutto ciò che non ha una regola sua fra
-              quelle di instradamento qui sotto; evita che una sessione già aperta cambi
-              indirizzo di uscita a metà.
-            </span>
+            <span>Sticky sul traffico generale</span>
           </label>
 
           {sticky && (
@@ -320,25 +278,17 @@ export function MwanSheet({
                     })
                   }
                 />
-                <span>
-                  {wanLabel(iface.network, iface.device)} — se la togli, mwan3 smette di usarla e di
-                  controllarla, ma l'interfaccia resta su.
-                </span>
+                <span>{wanLabel(iface.network, iface.device)}</span>
               </label>
             ))}
             {!anyEnabled && (
               <span class="alert alert--error">
-                Almeno una WAN deve restare inclusa, altrimenti nessun traffico esce.
+                Almeno una WAN deve restare inclusa.
               </span>
             )}
           </div>
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
-
-          <p class="muted">
-            Applicando, mwan3 riparte e le interfacce rinnovano l'indirizzo. Le
-            associazioni WiFi non vengono toccate.
-          </p>
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
@@ -412,22 +362,14 @@ export function RulesCard({
   return (
     <section class="card">
       <header class="radio__head">
-        <div>
-          <h2 class="uplink__title">Regole di instradamento</h2>
-          <p class="muted">
-            Mandano traffico specifico su una WAN fissa, scavalcando la modalità. Vince la
-            prima che combacia.
-          </p>
-        </div>
+        <h2 class="uplink__title">Regole di instradamento</h2>
         <button class="button button--ghost" onClick={onAdd}>
           Aggiungi
         </button>
       </header>
 
       {mwan.rules.length === 0 ? (
-        <p class="muted">
-          Nessuna regola: tutto il traffico segue la modalità {MODE_LABEL[mwan.mode]}.
-        </p>
+        <p class="muted">Nessuna regola.</p>
       ) : (
         mwan.rules.map((rule, index) => (
           <button key={rule.section} class="net" onClick={() => onEdit(rule)}>
@@ -521,10 +463,6 @@ export function RuleSheet({
         <h2>{rule ? 'Modifica regola' : 'Nuova regola'}</h2>
 
         <form onSubmit={save}>
-          <p class="muted">
-            Serve almeno un criterio. Quelli lasciati vuoti valgono come "qualsiasi".
-          </p>
-
           <label class="field">
             <span>Dispositivo di partenza</span>
             <input
@@ -597,8 +535,7 @@ export function RuleSheet({
             />
             <span>
               Se questa WAN non è disponibile, <strong>ferma</strong> il traffico invece di
-              mandarlo sulle altre. Serve quando il punto della regola è non uscire mai da
-              un'altra parte; senza, il traffico devia e la regola diventa una preferenza.
+              mandarlo sulle altre
             </span>
           </label>
 
@@ -608,11 +545,7 @@ export function RuleSheet({
               checked={sticky}
               onChange={(e) => setSticky((e.target as HTMLInputElement).checked)}
             />
-            <span>
-              Sticky: tieni lo stesso dispositivo sulla stessa WAN per un po', anche in
-              bilanciamento. Evita che una sessione già aperta cambi indirizzo di uscita a
-              metà.
-            </span>
+            <span>Sticky</span>
           </label>
 
           {sticky && (
@@ -629,10 +562,7 @@ export function RuleSheet({
           )}
 
           {!hasCriteria && (
-            <p class="muted">
-              Senza nessun criterio la regola prenderebbe tutto il traffico, sostituendo di
-              fatto la modalità.
-            </p>
+            <p class="muted">Serve almeno un criterio.</p>
           )}
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -720,11 +650,6 @@ export function HealthSheet({
         <h2>Controllo di salute · {wanLabel(iface.network, iface.device)}</h2>
 
         <form onSubmit={save}>
-          <p class="muted">
-            mwan3 verifica questa WAN mandando ping a indirizzi noti. Quando smettono di
-            rispondere, la considera giù e passa alla successiva.
-          </p>
-
           <label class="field">
             <span>Indirizzo da controllare</span>
             <input
@@ -747,11 +672,6 @@ export function HealthSheet({
               spellcheck={false}
               onInput={(e) => setTwo((e.target as HTMLInputElement).value)}
             />
-            <span class="muted">
-              Tienili <strong>diversi</strong> da quelli delle altre WAN: se controllassero
-              tutte lo stesso indirizzo e quello avesse un problema, sembrerebbero cadute
-              tutte insieme.
-            </span>
           </label>
 
           {!ipsOk && <span class="muted">Serve almeno un indirizzo IPv4 valido.</span>}
@@ -803,10 +723,8 @@ export function HealthSheet({
               />
             </div>
             <span class="muted">
-              Con {interval}s di intervallo, una caduta viene rilevata in circa{' '}
-              {Number(interval) * Number(down) || '—'} secondi e il ritorno in{' '}
-              {Number(interval) * Number(up) || '—'}. Valori bassi reagiscono prima ma
-              scambiano per guasto una rete solo lenta.
+              Caduta rilevata in circa {Number(interval) * Number(down) || '—'} s, ritorno in{' '}
+              {Number(interval) * Number(up) || '—'} s.
             </span>
           </div>
 

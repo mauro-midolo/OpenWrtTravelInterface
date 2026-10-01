@@ -35,17 +35,10 @@ export function AutoCard({
     return (
       <section class="card">
         <h2 class="uplink__title">Riconnessione automatica</h2>
-        <p class="muted">
-          travelD non risponde. Le connessioni manuali funzionano lo stesso: il servizio
-          serve solo alla riconnessione automatica.
-        </p>
+        <p class="muted">travelD non risponde.</p>
         {/* Il motivo esatto: "permesso negato" e "oggetto non trovato" hanno
             rimedi opposti, e senza il codice si tira a indovinare. */}
         {error && <p class="alert alert--warn alert--code">{error}</p>}
-        <p class="muted">
-          Dal terminale: <code>/etc/init.d/travel restart</code> e poi{' '}
-          <code>logread | grep traveld</code>.
-        </p>
       </section>
     );
   }
@@ -85,17 +78,10 @@ export function AutoCard({
         </button>
       </header>
 
-      {daemon.enabled ? (
+      {daemon.enabled && (
         <p class="muted">
-          Sceglie fra le reti salvate quella con priorità più alta fra le visibili sopra i{' '}
-          {daemon.settings.rssi_min} dBm.{' '}
-          {daemon.settings.roam_mode === 'best'
-            ? 'Passa a una rete migliore se ne compare una.'
-            : 'Una volta connessa non cambia rete da sola.'}
-        </p>
-      ) : (
-        <p class="muted">
-          Nessuna connessione viene fatta o cambiata da sola. Accendila dalle impostazioni.
+          Segnale minimo {daemon.settings.rssi_min} dBm ·{' '}
+          {daemon.settings.roam_mode === 'best' ? 'passa alla migliore' : 'resta sulla rete attuale'}
         </p>
       )}
 
@@ -200,10 +186,7 @@ export function AutoSheet({
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>
-              Riconnettiti da solo alla rete salvata migliore fra quelle visibili. Gli
-              access point non vengono mai toccati.
-            </span>
+            <span>Riconnessione automatica</span>
           </label>
 
           <label class="field">
@@ -214,10 +197,6 @@ export function AutoSheet({
               <option value="-78">-78 dBm · consigliato</option>
               <option value="-85">-85 dBm · anche deboli</option>
             </select>
-            <span class="muted">
-              Una rete sotto questa soglia viene ignorata: agganciarla darebbe una
-              connessione che cade in continuazione.
-            </span>
           </label>
 
           <label class="field">
@@ -226,9 +205,6 @@ export function AutoSheet({
               <option value="stay">Resta su quella attuale</option>
               <option value="best">Passa alla migliore</option>
             </select>
-            <span class="muted">
-              "Resta" evita che la connessione si interrompa mentre la stai usando.
-            </span>
           </label>
 
           <label class="field">

@@ -199,8 +199,7 @@ describe('la scheda dell’access point', () => {
       render(<ApCard aps={aps} onEdit={() => {}} />, host);
     });
 
-    expect(host.textContent).toContain('2.4 GHz: lo comanda l’interruttore fisico');
-    // L'altra banda si riaccende ancora da li', quindi il consiglio resta.
-    expect(host.textContent).toContain('Riaccendilo dalla scheda della radio.');
+    expect(host.textContent).toContain('2.4 GHz: comandato dall’interruttore fisico');
+    expect(host.textContent).not.toContain('Riaccendilo');
   });
 });

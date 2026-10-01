@@ -175,18 +175,15 @@ function ExitChecklist({ ts }: { ts: VpnState['tailscale'] }) {
       {broken.length === 0 ? (
         <>
           <p class="alert alert--ok">
-            Tutta la catena è a posto: dal telefono il router deve comparire fra le uscite.
-            {check.wg_up &&
-              ' Il traffico esce dentro WireGuard: l’indirizzo che vede Internet è quello del tunnel, non quello di questa rete.'}
+            Uscita per gli altri funzionante{check.wg_up ? ', dentro WireGuard' : ''}.
           </p>
           {/* Il buco va detto proprio qui, dove qualcuno ha appena letto che
               va tutto bene: il kill switch guarda i client della LAN, non chi
               arriva dal tailnet. */}
           {check.wg_up && (
             <p class="muted">
-              Se il tunnel WireGuard cade, chi ti usa come uscita torna a uscire da questa
-              rete in chiaro: il kill switch ferma i dispositivi collegati al router, non
-              quelli che arrivano dal tailnet.
+              Se WireGuard cade, chi ti usa come uscita esce in chiaro: il kill switch non lo
+              blocca.
             </p>
           )}
         </>
@@ -239,10 +236,6 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
     <>
       {authUrl && (
         <>
-          <p class="alert alert--info">
-            Apri questa pagina e autorizza il router. Quando hai finito torna qui: lo stato
-            cambia da solo.
-          </p>
           {/* Un link vero: l'accesso avviene nel browser di chi guarda, con la
               sua sessione Tailscale. Il router non puo' farlo al posto suo. */}
           <a class="button button--primary" href={authUrl} target="_blank" rel="noreferrer">
@@ -278,10 +271,6 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
             spellcheck={false}
             onInput={(e) => setAuthkey((e.target as HTMLInputElement).value)}
           />
-          <span class="muted">
-            La generi dalla console di Tailscale. Viene usata una volta e non viene salvata
-            né riletta: come la password del WiFi, esce dal browser e non torna più indietro.
-          </span>
           <button
             class="button button--primary"
             disabled={busy || authkey.trim() === ''}
@@ -293,10 +282,7 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
       )}
 
       {busy && !authUrl && (
-        <p class="muted">
-          Avvio il servizio e chiedo l'indirizzo di autorizzazione: può richiedere una
-          ventina di secondi.
-        </p>
+        <p class="muted">Avvio Tailscale…</p>
       )}
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -354,8 +340,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             che distingue due nodi chiamati quasi uguale. */}
         {exitBlocked && (
           <p class="alert alert--info">
-            L'exit node non è selezionabile: {blockReason(vpn.policy, 'ts_exit')}. Resta
-            possibile scegliere <strong>Nessuno</strong>, che è come toglierlo.
+            L'exit node non è selezionabile: {blockReason(vpn.policy, 'ts_exit')}.
           </p>
         )}
 
@@ -366,7 +351,6 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
               <button class="net" type="button" onClick={() => setExitNode('')}>
                 <span class="net__main">
                   <span class="net__ssid">Nessuno</span>
-                  <span class="net__meta">il traffico esce dalla rete a cui sei collegato</span>
                 </span>
                 <span class="net__side">
                   {exitNode === '' && <span class="badge badge--ok">scelto</span>}
@@ -409,15 +393,9 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
               );
             })}
           </ul>
-          <span class="muted">
-            Con un exit node <strong>tutto</strong> il traffico dei client esce da quel nodo
-            invece che dalla rete a cui sei collegato. È la modalità che rende utile il kill
-            switch: senza, Tailscale serve solo a raggiungere i tuoi dispositivi.
-            {exitBlocked &&
-              ' Non è selezionabile adesso: al massimo una cosa alla volta può decidere da dove esce il traffico.'}
-            {nodes.length === 0 &&
-              ' Nel tuo tailnet non ce n’è nessuno: va abilitato sul nodo che vuoi usare, e poi autorizzato dalla console.'}
-          </span>
+          {nodes.length === 0 && (
+            <span class="muted">Nessun exit node disponibile nel tailnet.</span>
+          )}
         </div>
 
         {/* Il rovescio dell'exit node: non "esco da un'altra parte" ma "faccio
@@ -429,28 +407,12 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={advertiseExit}
             onChange={(e) => setAdvertiseExit((e.target as HTMLInputElement).checked)}
           />
-          <span>
-            <strong>Offri questo router come exit node</strong>: gli altri tuoi dispositivi
-            possono far uscire tutto il loro traffico da qui. In viaggio è il modo per avere
-            un'uscita <em>vicina</em> — il telefono fuori dall'albergo passa dal router in
-            camera invece che da casa, con la latenza di qui e non di mezz'Europa.
-          </span>
+          <span>Offri questo router come exit node</span>
         </label>
 
         {advertiseExit && (
           <p class="alert alert--info">
-            Va <strong>autorizzato dalla console di Tailscale</strong>: finché non lo
-            approvi, il router si annuncia e nessuno lo vede fra le uscite disponibili. È il
-            passaggio che salta sempre.
-          </p>
-        )}
-
-        {advertiseExit && (
-          <p class="muted">
-            Il traffico degli altri nodi esce sulla rete a cui è collegato il router: li
-            protegge dalla rete in cui si trovano <em>loro</em>, non dall'albergo dove sei
-            tu. Se non ti fidi della rete d'albergo, quello che serve è un exit node altrove
-            — le due cose si accendono insieme senza darsi fastidio.
+            Va <strong>autorizzato dalla console di Tailscale</strong>.
           </p>
         )}
 
@@ -460,10 +422,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={acceptRoutes}
             onChange={(e) => setAcceptRoutes((e.target as HTMLInputElement).checked)}
           />
-          <span>
-            <strong>Accetta le rotte annunciate</strong> dagli altri nodi: serve per
-            raggiungere la rete di casa, non solo i dispositivi con Tailscale installato.
-          </span>
+          <span>Accetta le rotte annunciate dagli altri nodi</span>
         </label>
 
         <label class="check">
@@ -472,11 +431,7 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             checked={acceptDns}
             onChange={(e) => setAcceptDns((e.target as HTMLInputElement).checked)}
           />
-          <span>
-            <strong>Usa il DNS del tailnet</strong> (MagicDNS). Comodo per chiamare i tuoi
-            dispositivi per nome; cambia però il resolver del router, quindi se la
-            risoluzione dei nomi smette di funzionare è il primo posto dove guardare.
-          </span>
+          <span>Usa il DNS del tailnet (MagicDNS)</span>
         </label>
 
         <label class="check">
@@ -486,16 +441,14 @@ function TailscaleSheet({ vpn, onClose }: { vpn: VpnState; onClose: (c: boolean)
             onChange={(e) => setAdvertiseLan((e.target as HTMLInputElement).checked)}
           />
           <span>
-            <strong>Annuncia la LAN del router</strong>
+            Annuncia la LAN del router
             {/* Entrambe le famiglie, se ci sono: sapere che cosa viene
                 annunciato e' la meta' del motivo per cui questa riga esiste,
                 e con IPv6 le sottoreti sono due. */}
             {[vpn.settings.lan_cidr, vpn.settings.lan_cidr6].filter(Boolean).length > 0
               ? ` (${[vpn.settings.lan_cidr, vpn.settings.lan_cidr6].filter(Boolean).join(', ')})`
               : ''}
-            : gli altri nodi possono raggiungere i dispositivi collegati qui. Va poi
-            approvata dalla console di Tailscale, altrimenti resta annunciata e
-            inutilizzata.
+
           </span>
         </label>
 
@@ -545,12 +498,8 @@ function KillSwitchSheet({
           <>
             <p class="alert alert--warn">
               {on
-                ? 'Da adesso i dispositivi collegati al router escono su Internet solo dentro il tunnel. Se il tunnel cade non passa più niente, ed è il punto: meglio senza rete che in chiaro su una rete d’albergo.'
-                : 'I dispositivi torneranno a uscire direttamente sulla rete a cui sei collegato, tunnel o non tunnel.'}
-            </p>
-            <p class="muted">
-              L'accesso al router non viene toccato: questa schermata resta raggiungibile in
-              ogni caso.
+                ? 'I dispositivi collegati usciranno solo dentro il tunnel: se cade, restano senza Internet.'
+                : 'I dispositivi potranno uscire anche senza tunnel.'}
             </p>
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
@@ -674,9 +623,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
 
         {!ts.installed && (
           <p class="alert alert--warn">
-            Il pacchetto <code>tailscale</code> non è sul router. Si installa da solo al
-            prossimo deploy fatto con Internet funzionante — oppure a mano, con{' '}
-            <code>apk add tailscale</code>.
+            Il pacchetto <code>tailscale</code> non è installato.
           </p>
         )}
 
@@ -686,9 +633,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             in fondo alla scheda, dove sta anche quello di WireGuard. */}
         {ts.installed && ts.state !== 'Running' && authed && (
           <p class="muted">
-            L'accesso {ts.self_short ? <>a nome <strong>{ts.self_short}</strong></> : ''} è
-            ancora valido: il tunnel è soltanto staccato. Con <strong>Accendi</strong> torna
-            su senza rifare il login.
+            Tunnel spento{ts.self_short ? <> · <strong>{ts.self_short}</strong></> : ''}.
           </p>
         )}
 
@@ -698,8 +643,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
 
         {ts.installed && ts.state === 'NeedsMachineAuth' && (
           <p class="alert alert--warn">
-            Il nodo è registrato ma aspetta l'approvazione di un amministratore del tailnet:
-            va autorizzato dalla console di Tailscale.
+            Il nodo va autorizzato dalla console di Tailscale.
           </p>
         )}
 
@@ -732,10 +676,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
                 router e quindi non si puo' fare da qui. */}
             {vpn.settings.advertise_exit && !ts.self_exit_node && (
               <p class="alert alert--warn">
-                Il router si annuncia come exit node ma il tailnet non lo offre ancora agli
-                altri dispositivi: va <strong>approvato dalla console di Tailscale</strong>,
-                fra le rotte del nodo. Finché non lo fai, dal telefono non comparirà fra le
-                uscite disponibili.
+                L'exit node va <strong>approvato dalla console di Tailscale</strong>.
               </p>
             )}
 
@@ -749,15 +690,14 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
 
             {!ts.boot && (
               <p class="alert alert--warn">
-                Il servizio non è abilitato all'avvio: dopo un riavvio del router la VPN non
-                torna su da sola. Rifai l'accesso da qui per rimetterlo a posto.
+                Il servizio non è abilitato all'avvio: dopo un riavvio la VPN non torna su da
+                sola.
               </p>
             )}
             {vpn.settings.exit_node !== '' && ts.exit_node_id === '' && (
               <p class="alert alert--warn">
                 L'exit node <strong>{exitNodeLabel(vpn)}</strong> è impostato ma non è in
-                uso: di solito è spento, oppure non è più autorizzato come uscita dalla
-                console di Tailscale.
+                uso.
               </p>
             )}
           </>
@@ -802,10 +742,7 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
           <>
             <h2>Dispositivi</h2>
             {allNodes(vpn).length === 0 ? (
-              <p class="muted">
-                Nessun altro dispositivo nel tailnet. Installa Tailscale su un telefono o su un
-                computer e comparirà qui.
-              </p>
+              <p class="muted">Nessun altro dispositivo nel tailnet.</p>
             ) : (
               allNodes(vpn).map((node) => <Node key={node.id} node={node} />)
             )}
@@ -840,17 +777,9 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
           {ks.on && !suspended && <span class="badge badge--ok">blocca</span>}
         </header>
 
-        <p class="muted">
-          Quando è acceso, i dispositivi collegati al router escono su Internet
-          <strong> solo dentro il tunnel</strong>. Se il tunnel cade non passa più niente:
-          è il modo per non ritrovarsi in chiaro sulla rete di un albergo senza accorgersene.
-          Il router resta raggiungibile in ogni caso.
-        </p>
-
         {!ks.ready && (
           <p class="alert alert--warn">
-            La regola di firewall non c'è: rilancia il deploy, che la crea. Finché manca,
-            l'interruttore qui sotto non avrebbe niente da accendere.
+            La regola di firewall del kill switch non c'è.
           </p>
         )}
 
@@ -862,21 +791,15 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
             è il modo più rapido di insegnare a ignorare gli avvisi. */}
         {ks.on && knowTunnels && !protecting && (
           <p class="alert alert--warn">
-            Attenzione: <strong>non c'è nessun tunnel che porti il traffico</strong>. Senza
-            un exit node, Tailscale serve a raggiungere i tuoi dispositivi e il traffico
-            normale esce comunque dalla WAN — che adesso è bloccata. Il risultato è che i
-            client non hanno Internet e non stanno guadagnando nessuna protezione.
-            {ts.state === 'Running'
-              ? ' Scegli un exit node dalle impostazioni qui sopra, oppure accendi WireGuard.'
-              : ' Collega Tailscale con un exit node, oppure accendi WireGuard.'}
+            <strong>Nessun tunnel porta il traffico</strong>: i client sono senza Internet.
+            Scegli un exit node Tailscale oppure accendi WireGuard.
           </p>
         )}
 
         {suspended && (
           <p class="alert alert--warn">
-            Sospeso per il login a un portale: il traffico esce in chiaro. Si riarma da solo
-            fra <strong>{left} min</strong>, e il router lo rimette a posto anche se chiudi
-            questa pagina.
+            Sospeso: il traffico esce in chiaro. Si riarma da solo fra{' '}
+            <strong>{left} min</strong>.
           </p>
         )}
 
@@ -906,13 +829,6 @@ export function Vpn({ onLogout }: { onLogout: () => void }) {
           )}
         </div>
 
-        {ks.on && !suspended && (
-          <p class="muted">
-            La sospensione serve per il login a un captive portal, che attraverso un kill
-            switch non si può fare: la pagina non si carica. Apre davvero, per il tempo
-            dichiarato, e poi si richiude da sola.
-          </p>
-        )}
       </section>
 
       {editing && (

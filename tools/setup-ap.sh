@@ -71,7 +71,7 @@ apply_config "sae-mixed"
 
 if [ "$(count_ap)" -eq 0 ]; then
 	head2 "WPA3 non disponibile, ripiego su WPA2"
-	say "Il wpad installato non supporta SAE. In Fase 4 lo rileveremo prima."
+	say "Il wpad installato non supporta SAE."
 	apply_config "psk2"
 fi
 

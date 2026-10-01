@@ -86,11 +86,7 @@ function DeviceNameSheet({
             spellcheck={false}
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
           />
-          <span class="muted">
-            Solo lettere, cifre e trattini, non all'inizio né alla fine. È il nome che
-            compare nel prompt della shell e nelle pagine di gestione, ed è anche quello che
-            le WAN impostate su “nome del router” mandano alla rete a monte.
-          </span>
+          <span class="muted">Solo lettere, cifre e trattini.</span>
         </label>
 
         {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -142,8 +138,7 @@ function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<strin
       <p class="alert alert--warn">
         Collegato, ma non sta offrendo nessuna funzione di rete
         {offered.length > 0 ? `: espone ${offered.join(', ')}` : ''}. Se è un telefono,
-        accendi la <strong>condivisione tramite USB</strong> dalle sue impostazioni: finché
-        resta in trasferimento file non c'è niente che il router possa agganciare.
+        attiva la <strong>condivisione tramite USB</strong>.
       </p>
     );
   }
@@ -152,11 +147,7 @@ function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<strin
     return (
       <p class="alert alert--error">
         Sta offrendo <strong>{net.label}</strong>, ma sul router manca il modulo{' '}
-        <code>{net.module}</code>: nessuno può agganciarlo, ed è per questo che non compare
-        fra le WAN mentre il telefono mostra la condivisione accesa. Con il router connesso
-        a Internet, installalo con{' '}
-        <code>apk add kmod-usb-net-{net.module.replace(/_/g, '-')}</code> — oppure rilancia
-        il deploy, che ora lo fa da sé.
+        <code>kmod-usb-net-{net.module.replace(/_/g, '-')}</code>.
       </p>
     );
   }
@@ -169,17 +160,13 @@ function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<strin
     return (
       <p class="alert alert--error">
         Sta offrendo <strong>{net.label}</strong> e <code>{net.module}</code> è sul disco,
-        ma <strong>non è caricato</strong>: per questo non aggancia niente.{' '}
+        ma <strong>non è caricato</strong>.
         {base && base !== 'caricato' ? (
           <>
-            La causa è a monte: <code>usbnet</code>, da cui dipende, è{' '}
-            <strong>{base}</strong>. Finché non si carica lui non si carica nessuno dei
-            driver di tethering.{' '}
+            {' '}
+            <code>usbnet</code>, da cui dipende, è <strong>{base}</strong>.
           </>
         ) : null}
-        Il motivo esatto lo dice <code>modprobe {net.module}</code> via SSH: di solito è un
-        modulo compilato per un kernel diverso da quello in esecuzione, e si risolve
-        reinstallando i kmod dopo un <code>apk update</code>.
       </p>
     );
   }
@@ -187,8 +174,7 @@ function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<strin
   return (
     <p class="alert alert--warn">
       Sta offrendo <strong>{net.label}</strong> e il modulo <code>{net.module}</code> è
-      caricato, ma non lo ha agganciato. Stacca e riattacca il cavo; se non basta, il log
-      dice cosa è successo: <code>logread | grep -i usb</code>.
+      caricato, ma non lo ha agganciato. Stacca e riattacca il cavo.
     </p>
   );
 }
@@ -241,8 +227,7 @@ function UsbDevicesCard() {
               <p class="alert alert--warn">
                 Il driver <strong>{dev.driver || '—'}</strong> lo ha agganciato come{' '}
                 <code>{dev.netdev}</code>, ma l'interfaccia <code>wan_usb</code> è rimasta
-                disattivata: per questo non compare fra le WAN. Stacca e riattacca il cavo;
-                se non basta, il log dice cosa è successo.
+                disattivata. Stacca e riattacca il cavo.
               </p>
             )}
           </div>
@@ -298,10 +283,7 @@ function UsbSpeed() {
   // mostrare una scelta che non produce nessun effetto.
   if (state?.mode === 'unsupported') {
     return (
-      <p class="muted">
-        Questo kernel non permette di spegnere le porte SuperSpeed: la velocità della
-        porta USB non è regolabile da qui.
-      </p>
+      <p class="muted">Velocità della porta USB non regolabile.</p>
     );
   }
 
@@ -329,13 +311,7 @@ function UsbSpeed() {
         </div>
       </div>
 
-      <p class="muted">
-        {state === null
-          ? 'Leggo lo stato della porta…'
-          : state.force_usb2
-            ? 'La SuperSpeed è spenta: i dispositivi si collegano in USB 2.0. Per il tethering non cambia niente, un telefono sta ben sotto i 480 Mbit/s.'
-            : 'Il dispositivo negozia la velocità che sa fare. Se il tethering si accende e si spegne da solo dopo una decina di secondi, prova a limitare a USB 2.0: su questo SoC il link SuperSpeed si è già visto cadere così.'}
-      </p>
+      {state === null && <p class="muted">Leggo lo stato della porta…</p>}
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
     </>
@@ -367,15 +343,9 @@ function UsbReset() {
       <button class="button button--ghost" disabled={busy} onClick={run}>
         {busy ? 'Riavvio in corso…' : 'Riavvia la porta USB'}
       </button>
-      <p class="muted">
-        Se il telefono non viene più rilevato nemmeno riattaccandolo, questo rimette in
-        sesto la porta. Stacca per qualche secondo <strong>qualunque</strong> periferica
-        USB collegata. Se non basta, riavvia il telefono: anche il suo stack USB può
-        restare incantato, e da lì il router non può farci niente.
-      </p>
       {done && (
         <p class="alert alert--ok">
-          {done}. Riattacca il telefono e riabilita la condivisione.
+          {done}.
         </p>
       )}
       {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -495,10 +465,6 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
         <a class="button button--ghost" href="/cgi-bin/luci/" target="_blank" rel="noreferrer">
           Apri LuCI
         </a>
-        <p class="muted">
-          L'interfaccia completa di OpenWrt, intatta: tutto quello che questa interfaccia non
-          copre si fa da lì. È anche la via di riserva se qui qualcosa non funziona.
-        </p>
       </section>
 
       {editingName && (

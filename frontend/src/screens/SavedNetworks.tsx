@@ -296,19 +296,10 @@ export function SavedNetworksScreen({
 
       {saved.length === 0 ? (
         <section class="card">
-          <p class="muted">
-            Nessuna rete salvata. Quando ti colleghi a una rete puoi salvarla, e la ritrovi
-            qui la volta dopo senza ridigitare la password.
-          </p>
+          <p class="muted">Nessuna rete salvata.</p>
         </section>
       ) : (
         <>
-          <p class="muted">
-            Una lista sola, in ordine di priorità: le radio scelgono da qui, ciascuna fra
-            le reti abilitate sulla propria banda. Le targhette dicono su quali bande vale
-            ogni rete; si cambiano aprendola.
-          </p>
-
           {searchable && (
             <label class="field">
               <input
@@ -551,8 +542,7 @@ export function SavedSheet({
 
             {!hasAnyBand(net.bands) && (
               <p class="alert alert--warn">
-                Questa rete non è abilitata su nessuna banda, quindi nessuna radio la usa.
-                Aprila con <strong>Modifica</strong> e scegli 2.4 GHz, 5 GHz o entrambe.
+                Questa rete non è abilitata su nessuna banda.
               </p>
             )}
 
@@ -579,9 +569,7 @@ export function SavedSheet({
             )}
 
             {candidates.length === 1 && target && (
-              <p class="muted">
-                Si collegherà usando la radio {bandLabel(target.band ?? target.name)}.
-              </p>
+              <p class="muted">Radio {bandLabel(target.band ?? target.name)}</p>
             )}
 
             <p class="muted">
@@ -659,10 +647,6 @@ export function SavedSheet({
                   spellcheck={false}
                   onInput={(e) => setSsid((e.target as HTMLInputElement).value)}
                 />
-                <span class="muted">
-                  Il router cerca questo nome sondando, non leggendolo da un elenco: deve
-                  essere esatto, maiuscole comprese.
-                </span>
               </label>
             )}
 
@@ -688,24 +672,18 @@ export function SavedSheet({
                   </label>
                 ))}
               </div>
-              <span class="muted">
-                Almeno una. Su una banda che accendi adesso, la rete parte con la stessa
-                password e le stesse impostazioni: cambia solo il MAC, che è della radio.
-              </span>
             </div>
 
             {!hasAnyBand(bands) && (
               <p class="alert alert--error">
-                Scegli almeno una banda: senza, nessuna radio userebbe questa rete.
+                Scegli almeno una banda.
               </p>
             )}
 
             {conflicts.map(({ band, net: other }) => (
               <p class="alert alert--error" key={band}>
                 «{other.ssid}» è già salvata a {bandLabel(band)} in un'altra voce
-                {other.note ? ` (${other.note})` : ''}. Due configurazioni con lo stesso nome
-                sulla stessa radio si escludono a vicenda: togli quella banda là, oppure
-                elimina la voce doppia.
+                {other.note ? ` (${other.note})` : ''}.
               </p>
             ))}
 
@@ -720,9 +698,6 @@ export function SavedSheet({
                 }
                 onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
               />
-              <span class="muted">
-                La password salvata non viene mostrata: non esce mai dal router.
-              </span>
             </label>
 
             {/* Un MAC per banda, e solo per quelle accese: e' l'indirizzo della
@@ -733,7 +708,6 @@ export function SavedSheet({
                 key={band}
                 choice={mac[band]}
                 label={`Indirizzo MAC a ${bandLabel(band)}`}
-                deviceNote="Quello della radio, così com'è di fabbrica."
                 onChange={(choice) => setMac({ ...mac, [band]: choice })}
               />
             ))}
@@ -749,7 +723,7 @@ export function SavedSheet({
               <input
                 type="text"
                 value={note}
-                placeholder="es. hotel di Berlino, chiedere codice alla reception"
+                placeholder="es. hotel di Berlino"
                 onInput={(e) => setNote((e.target as HTMLInputElement).value)}
               />
             </label>
@@ -795,49 +769,36 @@ export function SavedSheet({
             <ApplyStatus apply={apply} onClose={() => onClose(true)} />
 
             {checking && (
-              <p class="muted">
-                Configurazione applicata. Aspetto che la radio si agganci e prenda un
-                indirizzo: fino a {CONNECT_WAIT_SECONDS} secondi.
-              </p>
+              <p class="muted">Connessione in corso…</p>
             )}
 
             {outcome === 'ok' && (
               <p class="alert alert--ok">
-                Connessa a «{net.ssid}». L'indirizzo e lo stato dell'uscita li trovi nella
-                scheda WiFi.
+                Connessa a «{net.ssid}».
               </p>
             )}
 
             {outcome === 'no-address' && (
               <p class="alert alert--warn">
-                Agganciata a «{net.ssid}», ma la rete non ha assegnato nessun indirizzo. La
-                password è giusta: a non rispondere è il DHCP della rete. La configurazione
-                resta salvata.
+                Agganciata a «{net.ssid}», ma la rete non ha assegnato nessun indirizzo.
               </p>
             )}
 
             {outcome === 'wrong-key' && (
               <p class="alert alert--error">
-                «{net.ssid}» ha rifiutato la password. La configurazione resta salvata:
-                correggi la password con <strong>Modifica</strong> e riprova.
+                «{net.ssid}» ha rifiutato la password.
               </p>
             )}
 
             {outcome === 'not-found' && (
               <p class="alert alert--warn">
                 «{net.ssid}» non è stata trovata.
-                {net.hidden
-                  ? ' Su una rete nascosta il nome deve essere esatto, maiuscole comprese, e la banda deve essere quella giusta: il router lo cerca sondando, non leggendolo da un elenco.'
-                  : ' Può essere spenta, fuori portata, oppure non esserci su questa banda.'}{' '}
-                La configurazione resta salvata.
               </p>
             )}
 
             {outcome === 'unassociated' && (
               <p class="alert alert--warn">
-                Non si è agganciata a «{net.ssid}» e il router non ha saputo dire perché.
-                Può essere fuori portata, oppure rifiutare questo dispositivo. La
-                configurazione resta salvata.
+                Non si è agganciata a «{net.ssid}».
               </p>
             )}
 
@@ -846,9 +807,7 @@ export function SavedSheet({
                 visto - il router potrebbe essersi agganciato benissimo. */}
             {outcome === 'unknown' && (
               <p class="alert alert--warn">
-                Il router non ha risposto mentre verificavo, quindi non so come sia
-                andata. Guarda lo stato della radio nella scheda WiFi: la configurazione
-                resta salvata in ogni caso.
+                Il router non ha risposto durante la verifica: esito sconosciuto.
               </p>
             )}
 
