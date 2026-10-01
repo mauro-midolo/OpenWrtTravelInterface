@@ -91,9 +91,11 @@ sessione scaduta. Il timeout ordinario è 10 secondi; login, scansione, VPN e
 altre operazioni lente possono impostarne uno specifico.
 
 Gli ACL installati in `/usr/share/rpcd/acl.d/travel.json` elencano i metodi
-consentiti. Per UCI autorizzano lettura di `wireless`, `network`, `firewall`,
-`dhcp`, `system`, `travel`, e scrittura anche di `mwan3`. La UI legge lo stato
-mwan3 tramite `travel.mwan`. Il progetto non pubblica un metodo di esecuzione
+consentiti. Per UCI autorizzano lettura e scrittura di `wireless`, `network`,
+`firewall`, `dhcp`, `system`, `travel` e `mwan3`. La UI legge lo stato mwan3 tramite `travel.mwan`;
+la lettura UCI di `mwan3` serve solo a sapere se esistono le sezioni gemelle
+IPv6 (`<wan>6`, `<wan>6_f`, `travel_default6`) prima di allinearle: senza,
+`uci get` veniva rifiutato e le gemelle non venivano mai aggiornate. Il progetto non pubblica un metodo di esecuzione
 shell generico. Ogni metodo di `traveld` dichiara esplicitamente
 `ubus_rpc_session` nella firma per le richieste inoltrate da uhttpd.
 

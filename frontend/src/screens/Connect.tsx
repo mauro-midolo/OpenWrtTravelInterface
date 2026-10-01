@@ -31,7 +31,7 @@ import {
 import type { BandSet, MacByBand, SavedNetwork } from '../lib/networks';
 import { HOSTNAME_OFF, getSystem, isValidHostname, stageWanHostname } from '../lib/hostname';
 import type { HostnameChoice } from '../lib/hostname';
-import { checkPortal, portalReason } from '../lib/portal';
+import { checkPortal, portalLoginUrl, portalReason } from '../lib/portal';
 import type { PortalResult } from '../lib/portal';
 import { HostnamePicker } from '../components/HostnamePicker';
 import { MacPicker } from '../components/MacPicker';
@@ -256,10 +256,22 @@ export function ConnectSheet({
         // Solo l'uplink di questa radio: l'altra puo' essere collegata a
         // un'altra rete e il suo esito non dice niente su questa.
         const found = (await getUplinks()).find((u) => u.radio === plan.staRadio.name);
-        if (found) {
+        // Cambiando rete sulla stessa radio, nei primi secondi l'uplink puo'
+        // riportare ancora l'associazione di prima, con il suo indirizzo:
+        // prenderla per buona darebbe per riuscita - e salverebbe come
+        // funzionante - una connessione che non e' nemmeno cominciata. Conta
+        // solo la rete chiesta; senza SSID la radio non e' agganciata a niente,
+        // ed e' uno stato di questo tentativo. E' lo stesso controllo di
+        // `awaitConnection`.
+        const stale =
+          found !== undefined && net.ssid !== '' && Boolean(found.ssid) && found.ssid !== net.ssid;
+        if (found && !stale) {
           last = found;
           setUplink(found);
           if (uplinkState(found) === 'addressed') break;
+        } else if (stale) {
+          last = null;
+          setUplink(null);
         }
       } catch {
         // Il reload della rete puo' far cadere una chiamata: si riprova.
@@ -622,9 +634,16 @@ function Outcome({
             La rete ha un <strong>portale di accesso</strong>: finché non fai il login non
             passa niente. Aprilo adesso, dal telefono.
           </p>
-          <a class="button button--primary" href={portal.url} target="_blank" rel="noreferrer">
-            Apri la pagina di accesso
-          </a>
+          {portalLoginUrl(portal) && (
+            <a
+              class="button button--primary"
+              href={portalLoginUrl(portal)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Apri la pagina di accesso
+            </a>
+          )}
         </>
       )}
 

@@ -26,6 +26,7 @@ import {
 } from '../lib/vpn';
 import type { TailNode, VpnState } from '../lib/vpn';
 import { getWg } from '../lib/vpn';
+import { safeHttpUrl } from '../lib/portal';
 import type { WgState } from '../lib/vpn';
 import { ApplyStatus } from '../components/ApplyStatus';
 
@@ -216,7 +217,9 @@ function Login({ vpn, onDone }: { vpn: VpnState; onDone: () => void }) {
 
   // Quello appena ottenuto vince su quello dello stato finche' il polling non
   // ricicla: altrimenti il link sfarfallerebbe appena premuto il pulsante.
-  const authUrl = url || vpn.tailscale.auth_url;
+  // Anche questo finisce in un link: passa dallo stesso filtro dei portali,
+  // perche' un indirizzo che non e' http(s) in un `href` e' codice eseguito.
+  const authUrl = safeHttpUrl(url || vpn.tailscale.auth_url);
 
   const go = async (key: string) => {
     setBusy(true);

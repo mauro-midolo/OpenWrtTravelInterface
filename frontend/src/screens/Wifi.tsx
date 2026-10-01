@@ -31,7 +31,7 @@ import { ApCard, ApSheet } from './AccessPoint';
 import { SavedEntryCard, SavedNetworksScreen } from './SavedNetworks';
 import { HiddenSheet } from './HiddenNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
-import { PORTAL_LABEL, getPortals } from '../lib/portal';
+import { PORTAL_LABEL, getPortals, portalLoginUrl } from '../lib/portal';
 import type { PortalResult, PortalStatus } from '../lib/portal';
 
 function Signal({ dbm }: { dbm: number }) {
@@ -94,10 +94,10 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
       {state === 'addressed' && portal && (
         <p class={portal.state === 'online' ? 'alert alert--ok' : 'alert alert--warn'}>
           {PORTAL_LABEL[portal.state]}
-          {portal.state === 'portal' && (
+          {portal.state === 'portal' && portalLoginUrl(portal) && (
             <>
               {' — '}
-              <a href={portal.url} target="_blank" rel="noreferrer">
+              <a href={portalLoginUrl(portal)} target="_blank" rel="noreferrer">
                 apri la pagina di accesso
               </a>
             </>

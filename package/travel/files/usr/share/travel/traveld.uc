@@ -580,8 +580,13 @@ function evaluate() {
 		// una rete migliore solo se e' stato chiesto esplicitamente.
 		if (state == 'addressed') {
 			let last = lastAction[radio.name];
-			if (last && last.key)
+			if (last && last.key) {
 				recordSuccess(last.key);
+				// Il tentativo ha avuto il suo esito: una caduta di domani non
+				// e' un fallimento di questa connessione, e non va addebitata a
+				// lei.
+				last.key = null;
+			}
 
 			if (g.roam_mode == 'best')
 				considerRoam(radio, u, saved, g, now);
@@ -597,9 +602,15 @@ function evaluate() {
 				continue;
 		}
 
+		// Un tentativo fallisce una volta sola. Senza togliere la chiave dopo
+		// averlo contato, ogni giro successivo - dieci secondi - lo ricontava:
+		// il backoff non serviva a niente e la rete finiva nella blacklist in
+		// una ventina di secondi invece che dopo `blacklist_after` tentativi.
 		let last = lastAction[radio.name];
-		if (last && last.key && (now - last.at) >= SETTLE_SECONDS)
+		if (last && last.key && (now - last.at) >= SETTLE_SECONDS) {
 			recordFailure(last.key, g);
+			last.key = null;
+		}
 
 		let choice = bestCandidate(radio, saved, g, now, true);
 		if (!choice) {
