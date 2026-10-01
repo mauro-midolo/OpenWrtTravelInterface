@@ -80,29 +80,6 @@ completare l'accesso al portale e continuare a usare la tua rete personale.
 Se hai configurato una seconda connessione, il failover permette di usarla
 quando quella principale non è più disponibile.
 
-## Stato del progetto e limiti attuali
-
-Le funzioni elencate sono implementate; il progetto è in sviluppo e richiede
-verifiche sul dispositivo per i diversi scenari di rete.
-
-- **IPv6** è gestito su tutto il percorso: WAN dual-stack, annunci RA/DHCPv6
-  sulla LAN, firewall, VPN, WireGuard e failover multi-WAN. Non c'è un
-  interruttore globale, e la scelta si fa per WAN. Il **captive portal** resta
-  l'unica parte solo IPv4, per scelta: i portali sono un meccanismo IPv4.
-  Dettagli e tabelle nell'architettura.
-- Bilanciamento multi-WAN, uso di un exit node Tailscale remoto e WireGuard
-  attivo sono modalità alternative fra loro. La UI applica questi vincoli.
-- WireGuard salva più configurazioni, ognuna con un peer, e ne tiene attiva
-  una alla volta; non offre split tunneling né più tunnel attivi insieme.
-- Il kill switch blocca l'inoltro dalla LAN alla WAN; il suo ambito e i suoi
-  limiti sono descritti nell'architettura.
-- La UI non configura reti WiFi Enterprise né reti ospiti isolate. Gli SSID
-  nascosti si aggiungono a mano dalla scheda WiFi, indicando nome, bande e tipo
-  di sicurezza.
-- Il simulatore aiuta a provare i flussi, ma non sostituisce le verifiche su
-  OpenWrt. Una suite automatica Vitest copre la logica del frontend, le
-  traduzioni e gli helper shell del router; non c'è ancora una pipeline CI.
-
 Dettagli tecnici, comportamenti di rollback e sviluppi mancanti sono descritti
 in [Architettura e stato dell'implementazione](docs/architettura.md). Per quando
 qualcosa va storto in viaggio c'è la [guida al ripristino](docs/recovery.md).
