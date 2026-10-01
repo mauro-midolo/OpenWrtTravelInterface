@@ -86,15 +86,25 @@ export const mwanText = defineText({
     health: 'Controllo di salute',
     healthOf: (wan: string) => `Controllo di salute · ${wan}`,
     trackIp: 'Indirizzo da controllare',
-    trackIp2: 'Secondo indirizzo (facoltativo)',
+    trackIpN: (n: number) => `Indirizzo ${n}`,
+    addTrackIp: 'Aggiungi un indirizzo',
+    removeTrackIp: (ip: string) => `Rimuovi ${ip}`,
     badTrackIp: 'Serve almeno un indirizzo IPv4 valido.',
     reliability: 'Quando la WAN è su',
-    reliabilityAny: 'Basta che ne risponda uno',
-    reliabilityBoth: 'Devono rispondere entrambi',
-    reliabilityAnyHint:
-      'Il secondo indirizzo fa da riserva: viene controllato solo quando il primo non risponde.',
-    reliabilityBothHint:
-      'Si controllano sempre tutti e due: se uno smette di rispondere, la WAN risulta giù.',
+    reliabilityOption: (needed: number, total: number) =>
+      needed === 1
+        ? 'Basta che ne risponda uno'
+        : needed === total
+          ? total === 2
+            ? 'Devono rispondere entrambi'
+            : `Devono rispondere tutti e ${total}`
+          : `Devono risponderne almeno ${needed} su ${total}`,
+    reliabilityHint: (needed: number, total: number) =>
+      needed === total
+        ? 'Si controllano sempre tutti: se uno smette di rispondere, la WAN risulta giù.'
+        : needed === 1
+          ? 'Gli altri fanno da riserva: si controllano, in ordine, solo quando i primi non rispondono.'
+          : `Si controllano in ordine finché ne rispondono ${needed}: gli altri fanno da riserva.`,
     every: 'Ogni quanto controllare',
     intervalLabel: 'intervallo in secondi',
     secondsTimeout: 'secondi, timeout',
@@ -191,15 +201,25 @@ export const mwanText = defineText({
     health: 'Health check',
     healthOf: (wan: string) => `Health check · ${wan}`,
     trackIp: 'Address to check',
-    trackIp2: 'Second address (optional)',
+    trackIpN: (n: number) => `Address ${n}`,
+    addTrackIp: 'Add an address',
+    removeTrackIp: (ip: string) => `Remove ${ip}`,
     badTrackIp: 'At least one valid IPv4 address is needed.',
     reliability: 'When the WAN is up',
-    reliabilityAny: 'One answering is enough',
-    reliabilityBoth: 'Both must answer',
-    reliabilityAnyHint:
-      'The second address is a backup: it is checked only when the first one does not answer.',
-    reliabilityBothHint:
-      'Both are always checked: if either stops answering, the WAN is marked down.',
+    reliabilityOption: (needed: number, total: number) =>
+      needed === 1
+        ? 'One answering is enough'
+        : needed === total
+          ? total === 2
+            ? 'Both must answer'
+            : `All ${total} must answer`
+          : `At least ${needed} of ${total} must answer`,
+    reliabilityHint: (needed: number, total: number) =>
+      needed === total
+        ? 'All are always checked: if any stops answering, the WAN is marked down.'
+        : needed === 1
+          ? 'The others are backups: they are checked, in order, only when the first ones do not answer.'
+          : `They are checked in order until ${needed} answer: the others are backups.`,
     every: 'How often to check',
     intervalLabel: 'interval in seconds',
     secondsTimeout: 'seconds, timeout',

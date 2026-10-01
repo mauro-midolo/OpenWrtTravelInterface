@@ -853,6 +853,13 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Il campo che prende lo spazio della riga, con un comando accanto: un
+   indirizzo e il suo pulsante per toglierlo. */
+.range__grow {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Comandi in coda a una riga di WAN: frecce o peso, sempre a destra. */
 .wan-controls {
   display: flex;

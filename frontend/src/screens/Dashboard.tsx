@@ -80,11 +80,15 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function trackValue(track: TrackResult): string {
   const t = dashboardText();
+  // Latenza e perdita mwan3track le misura solo con `check_quality`: senza,
+  // arrivano a zero e "0 ms · 0% persi" sembrerebbe una misura ottima invece
+  // di nessuna misura. Zero e zero insieme vuol dire "non misurato".
+  const measured = track.latency > 0 || track.packetloss > 0;
   switch (trackState(track.status)) {
     case 'up':
-      return t.trackUp(track.latency, track.packetloss);
+      return measured ? t.trackUp(track.latency, track.packetloss) : t.trackAnswers;
     case 'down':
-      return t.trackDown(track.packetloss);
+      return measured ? t.trackDown(track.packetloss) : t.trackNoAnswer;
     case 'skipped':
       return t.trackSkipped;
     default:

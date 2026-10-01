@@ -595,6 +595,8 @@ export function RuleSheet({
   );
 }
 
+const MAX_TRACK_IPS = 8;
+
 export function HealthSheet({
   iface,
   onClose,
@@ -604,20 +606,29 @@ export function HealthSheet({
 }) {
   const t = mwanText();
   const actions = commonText().actions;
-  const [one, setOne] = useState(iface.track_ip[0] ?? '');
-  const [two, setTwo] = useState(iface.track_ip[1] ?? '');
+  // Tutti gli indirizzi configurati, non solo i primi due: la scheda li
+  // riscrive per intero, e mostrarne due voleva dire cancellare gli altri al
+  // primo salvataggio.
+  const [entries, setEntries] = useState<string[]>(
+    iface.track_ip.length > 0 ? iface.track_ip : [''],
+  );
   const [interval, setInterval] = useState(String(iface.interval));
   const [timeout, setTimeoutValue] = useState(String(iface.timeout));
   const [down, setDown] = useState(String(iface.down));
   const [up, setUp] = useState(String(iface.up));
   // Quanti IP devono rispondere. mwan3track li pinga in ordine e si ferma
-  // appena ne hanno risposto abbastanza: con 1 il secondo e' una riserva,
-  // pingata solo quando il primo tace; con 2 si pingano sempre tutti e due.
-  const [both, setBoth] = useState(iface.reliability >= 2);
+  // appena ne hanno risposto abbastanza: con 1 gli altri sono riserve, pingate
+  // solo quando i primi tacciono; con tutti si pingano sempre tutti.
+  const [reliability, setReliability] = useState(Math.max(1, iface.reliability));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ips = [one, two].map((s) => s.trim()).filter((s) => s.length > 0);
+  const ips = entries.map((s) => s.trim()).filter((s) => s.length > 0);
+  // Mai piu' di quanti ce ne sono: un valore rimasto alto dopo aver tolto un
+  // indirizzo terrebbe la WAN giu' per sempre.
+  const needed = Math.min(reliability, Math.max(1, ips.length));
+  const editEntry = (index: number, value: string) =>
+    setEntries(entries.map((entry, i) => (i === index ? value : entry)));
   // La lambda non e' rumore: `ips.every(isValidIp)` passerebbe a isValidIp
   // l'INDICE come secondo argomento, cioe' convaliderebbe il primo indirizzo
   // contro la "famiglia 0" e il secondo contro la "famiglia 1", rifiutandoli
@@ -644,7 +655,7 @@ export function HealthSheet({
         count: iface.count,
         up: Number(up),
         down: Number(down),
-        reliability: both && ips.length >= 2 ? 2 : 1,
+        reliability: needed,
       });
       await applyMwan();
       onClose(true);
@@ -660,44 +671,59 @@ export function HealthSheet({
         <h2>{t.healthOf(wanLabel(iface.network, iface.device))}</h2>
 
         <form onSubmit={save}>
-          <label class="field">
-            <span>{t.trackIp}</span>
-            <input
-              type="text"
-              value={one}
-              inputMode="decimal"
-              autocomplete="off"
-              spellcheck={false}
-              onInput={(e) => setOne((e.target as HTMLInputElement).value)}
-            />
-          </label>
+          {entries.map((entry, index) => (
+            <div class="field" key={index}>
+              <span>{index === 0 ? t.trackIp : t.trackIpN(index + 1)}</span>
+              <div class="range">
+                <input
+                  type="text"
+                  class="range__grow"
+                  value={entry}
+                  inputMode="decimal"
+                  autocomplete="off"
+                  spellcheck={false}
+                  aria-label={index === 0 ? t.trackIp : t.trackIpN(index + 1)}
+                  onInput={(e) => editEntry(index, (e.target as HTMLInputElement).value)}
+                />
+                {entries.length > 1 && (
+                  <button
+                    class="button button--ghost"
+                    type="button"
+                    aria-label={t.removeTrackIp(entry || String(index + 1))}
+                    onClick={() => setEntries(entries.filter((_, i) => i !== index))}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
 
-          <label class="field">
-            <span>{t.trackIp2}</span>
-            <input
-              type="text"
-              value={two}
-              inputMode="decimal"
-              autocomplete="off"
-              spellcheck={false}
-              onInput={(e) => setTwo((e.target as HTMLInputElement).value)}
-            />
-          </label>
+          {/* Otto come il backend: `travel.mwan` ne legge al massimo otto, e un
+              indirizzo in piu' sarebbe controllato senza che si veda mai. */}
+          {entries.length < MAX_TRACK_IPS && (
+            <button class="button button--ghost" type="button" onClick={() => setEntries([...entries, ''])}>
+              {t.addTrackIp}
+            </button>
+          )}
 
           {!ipsOk && <span class="muted">{t.badTrackIp}</span>}
 
-          {/* Solo con due indirizzi: con uno la domanda non esiste. */}
+          {/* Solo con piu' indirizzi: con uno la domanda non esiste. */}
           {ips.length >= 2 && (
             <label class="field">
               <span>{t.reliability}</span>
               <select
-                value={both ? 'both' : 'any'}
-                onChange={(e) => setBoth((e.target as HTMLSelectElement).value === 'both')}
+                value={String(needed)}
+                onChange={(e) => setReliability(Number((e.target as HTMLSelectElement).value))}
               >
-                <option value="any">{t.reliabilityAny}</option>
-                <option value="both">{t.reliabilityBoth}</option>
+                {ips.map((_, i) => (
+                  <option key={i} value={String(i + 1)}>
+                    {t.reliabilityOption(i + 1, ips.length)}
+                  </option>
+                ))}
               </select>
-              <span class="muted">{both ? t.reliabilityBothHint : t.reliabilityAnyHint}</span>
+              <span class="muted">{t.reliabilityHint(needed, ips.length)}</span>
             </label>
           )}
 

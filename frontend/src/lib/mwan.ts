@@ -534,5 +534,21 @@ export async function setHealth(network: string, settings: HealthSettings): Prom
   // quindi un indirizzo v4 li' dentro la terrebbe caduta per sempre. Il suo
   // pool lo scrive `mwan3-setup.sh`, ed e' anche il motivo per cui il campo
   // dell'interfaccia continua a chiedere indirizzi IPv4.
-  await setIfPresent('mwan3', `${network}6`, timings);
+  //
+  // E `reliability` va ritagliata sui SUOI indirizzi: "devono rispondere
+  // tutti" su quattro IP v4 diventerebbe 4 su una gemella che ne ha due, cioe'
+  // una v6 dichiarata caduta per sempre senza che nessuno l'abbia chiesto.
+  let twin: { values?: { track_ip?: string | string[] } };
+  try {
+    twin = await call('uci', 'get', { config: 'mwan3', section: `${network}6` });
+  } catch {
+    return;
+  }
+  const twinIps = twin.values?.track_ip;
+  const twinCount = Array.isArray(twinIps) ? twinIps.length : twinIps ? 1 : 0;
+  await call('uci', 'set', {
+    config: 'mwan3',
+    section: `${network}6`,
+    values: { ...timings, reliability: String(Math.min(reliability, Math.max(1, twinCount))) },
+  });
 }
