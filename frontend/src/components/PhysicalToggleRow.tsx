@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getToggle, positionLabel, setToggle, toggleLabel } from '../lib/toggle';
 import type { ToggleAction, ToggleConfig } from '../lib/toggle';
+import { commonText } from '../i18n/common';
+import { componentsText } from '../i18n/components';
 
 /**
  * Stesso passo della riga del LED, e per lo stesso motivo: la levetta si muove
@@ -123,6 +125,7 @@ export function PhysicalToggleRow({ onConfig }: {
   // di esse ci sono le configurazioni WireGuard salvate, una per una. Un'azione
   // che il pacchetto installato non conosce non compare, e il nome di un tunnel
   // lo mette il router perche' l'ha scritto una persona.
+  const t = componentsText();
   const options =
     config && config.actions.map((id) => ({ id, label: toggleLabel(id, config.names) }));
 
@@ -136,13 +139,11 @@ export function PhysicalToggleRow({ onConfig }: {
             non l'ha ancora vista, che sono i due casi in cui non sta facendo
             niente. */}
         <span class="row__label row__label--state">
-          Interruttore fisico
+          {t.toggle.label}
           {config && (
             <span
               class={config.position === 'on' ? 'badge badge--ok' : 'badge badge--muted'}
-              title={config.position === 'unknown'
-                ? 'Il router la rileva al primo movimento della levetta'
-                : 'Posizione attuale della levetta'}
+              title={config.position === 'unknown' ? t.toggle.unknownHint : t.toggle.positionHint}
             >
               {positionLabel(config.position)}
             </span>
@@ -160,14 +161,14 @@ export function PhysicalToggleRow({ onConfig }: {
             ))}
           </select>
         ) : (
-          <span class="row__value">{error ? 'non disponibile' : 'Caricamento…'}</span>
+          <span class="row__value">{error ? t.unavailable : t.loading}</span>
         )}
       </label>
 
       {error && <p class="alert alert--error" role="alert">{error.message}</p>}
       {error && !config && (
         <button class="button button--ghost" disabled={busy} onClick={() => void run()}>
-          Riprova
+          {commonText().actions.retry}
         </button>
       )}
     </>

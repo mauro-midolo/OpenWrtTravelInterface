@@ -1,3 +1,4 @@
+import { componentsText } from '../i18n/components';
 import { call } from './ubus';
 
 /**
@@ -9,10 +10,30 @@ import { call } from './ubus';
  * levetta non si tocca.
  */
 export const TOGGLE_ACTIONS = [
-  { id: 'none', label: 'Non fare nulla' },
-  { id: 'led', label: 'Controllo LED di stato' },
-  { id: 'ap24', label: 'Controllo access point WiFi 2,4 GHz' },
-  { id: 'ap5', label: 'Controllo access point WiFi 5 GHz' },
+  {
+    id: 'none',
+    get label() {
+      return componentsText().toggle.actions.none;
+    },
+  },
+  {
+    id: 'led',
+    get label() {
+      return componentsText().toggle.actions.led;
+    },
+  },
+  {
+    id: 'ap24',
+    get label() {
+      return componentsText().toggle.actions.ap24;
+    },
+  },
+  {
+    id: 'ap5',
+    get label() {
+      return componentsText().toggle.actions.ap5;
+    },
+  },
 ] as const;
 
 /** Le azioni scritte nel registro: quelle che esistono su ogni router. */
@@ -125,7 +146,7 @@ export function toggleLabel(action: ToggleAction, names: Record<string, string>)
 export function positionLabel(position: TogglePosition): string {
   if (position === 'on') return 'ON';
   if (position === 'off') return 'OFF';
-  return 'posizione ignota';
+  return componentsText().toggle.unknown;
 }
 
 /**

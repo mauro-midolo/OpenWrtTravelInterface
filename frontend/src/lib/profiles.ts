@@ -16,6 +16,7 @@
  * uno puo' essere un pulsante e basta.
  */
 
+import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
 
 export interface ProfileWan {
@@ -88,12 +89,13 @@ export async function deleteProfile(section: string): Promise<void> {
 
 /** Cosa cambia questo profilo, in una riga. */
 export function profileSummary(profile: Profile): string {
+  const t = settingsText().profiles.summary;
   const bits: string[] = [];
-  bits.push(profile.mode === 'balance' ? 'bilanciamento' : 'failover');
-  if (profile.autoreconnect) bits.push('riconnessione automatica');
-  if (profile.killswitch) bits.push('kill switch');
-  if (!profile.portal_check) bits.push('senza verifica portali');
+  bits.push(profile.mode === 'balance' ? t.balance : t.failover);
+  if (profile.autoreconnect) bits.push(t.autoreconnect);
+  if (profile.killswitch) bits.push(t.killswitch);
+  if (!profile.portal_check) bits.push(t.noPortal);
   const off = profile.wans.filter((w) => !w.enabled).length;
-  if (off > 0) bits.push(`${off} WAN esclus${off === 1 ? 'a' : 'e'}`);
+  if (off > 0) bits.push(t.excluded(off));
   return bits.join(' · ');
 }

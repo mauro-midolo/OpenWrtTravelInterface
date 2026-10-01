@@ -8,6 +8,7 @@
  * allora che si va a cercare un backup o un riavvio.
  */
 
+import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
 
 // --- Orologio e NTP -----------------------------------------------------------
@@ -67,27 +68,35 @@ export async function setTime(values: {
  * in un posto che qui non c'e' incolla la sua stringa a mano - e' il caso raro,
  * e ha la sua casella.
  */
-export const ZONES: Array<{ name: string; tz: string; label: string }> = [
-  { name: 'Europe/Rome', tz: 'CET-1CEST,M3.5.0,M10.5.0/3', label: 'Italia · Europa centrale' },
-  { name: 'Europe/London', tz: 'GMT0BST,M3.5.0/1,M10.5.0', label: 'Regno Unito · Irlanda' },
-  { name: 'Europe/Lisbon', tz: 'WET0WEST,M3.5.0/1,M10.5.0', label: 'Portogallo' },
-  { name: 'Europe/Athens', tz: 'EET-2EEST,M3.5.0/3,M10.5.0/4', label: 'Grecia · Finlandia' },
-  { name: 'Europe/Moscow', tz: 'MSK-3', label: 'Mosca' },
-  { name: 'UTC', tz: 'UTC0', label: 'UTC · nessun fuso' },
-  { name: 'America/New_York', tz: 'EST5EDT,M3.2.0,M11.1.0', label: 'New York · costa est' },
-  { name: 'America/Chicago', tz: 'CST6CDT,M3.2.0,M11.1.0', label: 'Chicago' },
-  { name: 'America/Denver', tz: 'MST7MDT,M3.2.0,M11.1.0', label: 'Denver' },
-  { name: 'America/Los_Angeles', tz: 'PST8PDT,M3.2.0,M11.1.0', label: 'Los Angeles · costa ovest' },
-  { name: 'America/Sao_Paulo', tz: '<-03>3', label: 'San Paolo' },
-  { name: 'Asia/Dubai', tz: '<+04>-4', label: 'Dubai' },
-  { name: 'Asia/Kolkata', tz: 'IST-5:30', label: 'India' },
-  { name: 'Asia/Bangkok', tz: '<+07>-7', label: 'Bangkok' },
-  { name: 'Asia/Singapore', tz: '<+08>-8', label: 'Singapore' },
-  { name: 'Asia/Shanghai', tz: 'CST-8', label: 'Cina' },
-  { name: 'Asia/Tokyo', tz: 'JST-9', label: 'Giappone' },
-  { name: 'Australia/Sydney', tz: 'AEST-10AEDT,M10.1.0,M4.1.0/3', label: 'Sydney' },
-  { name: 'Australia/Perth', tz: 'AWST-8', label: 'Perth' },
+const ZONE_LIST: Array<{ name: string; tz: string }> = [
+  { name: 'Europe/Rome', tz: 'CET-1CEST,M3.5.0,M10.5.0/3' },
+  { name: 'Europe/London', tz: 'GMT0BST,M3.5.0/1,M10.5.0' },
+  { name: 'Europe/Lisbon', tz: 'WET0WEST,M3.5.0/1,M10.5.0' },
+  { name: 'Europe/Athens', tz: 'EET-2EEST,M3.5.0/3,M10.5.0/4' },
+  { name: 'Europe/Moscow', tz: 'MSK-3' },
+  { name: 'UTC', tz: 'UTC0' },
+  { name: 'America/New_York', tz: 'EST5EDT,M3.2.0,M11.1.0' },
+  { name: 'America/Chicago', tz: 'CST6CDT,M3.2.0,M11.1.0' },
+  { name: 'America/Denver', tz: 'MST7MDT,M3.2.0,M11.1.0' },
+  { name: 'America/Los_Angeles', tz: 'PST8PDT,M3.2.0,M11.1.0' },
+  { name: 'America/Sao_Paulo', tz: '<-03>3' },
+  { name: 'Asia/Dubai', tz: '<+04>-4' },
+  { name: 'Asia/Kolkata', tz: 'IST-5:30' },
+  { name: 'Asia/Bangkok', tz: '<+07>-7' },
+  { name: 'Asia/Singapore', tz: '<+08>-8' },
+  { name: 'Asia/Shanghai', tz: 'CST-8' },
+  { name: 'Asia/Tokyo', tz: 'JST-9' },
+  { name: 'Australia/Sydney', tz: 'AEST-10AEDT,M10.1.0,M4.1.0/3' },
+  { name: 'Australia/Perth', tz: 'AWST-8' },
 ];
+
+/** I fusi con il nome del posto nella lingua dell'interfaccia. */
+export const ZONES: Array<{ name: string; tz: string; label: string }> = ZONE_LIST.map((zone) => ({
+  ...zone,
+  get label() {
+    return settingsText().time.zones[zone.name] ?? zone.name;
+  },
+}));
 
 /** I server NTP di OpenWrt: sono quelli che il router ha di fabbrica. */
 export const DEFAULT_NTP = [
@@ -137,7 +146,7 @@ export async function importBackup(
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
   const total = base64.length;
-  if (total === 0) throw new Error('file vuoto');
+  if (total === 0) throw new Error(settingsText().backup.emptyFile);
 
   for (let offset = 0; offset < total; offset += CHUNK) {
     const chunk = base64.slice(offset, offset + CHUNK);
@@ -156,7 +165,7 @@ export async function importBackup(
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('lettura del file fallita'));
+    reader.onerror = () => reject(new Error(settingsText().backup.readFailed));
     reader.onload = () => {
       const result = String(reader.result);
       // FileReader restituisce "data:<tipo>;base64,<dati>": al router serve
@@ -218,19 +227,18 @@ export async function rebootNow(): Promise<void> {
   if (result.error) throw new Error(result.error);
 }
 
-export const WEEKDAYS: Array<{ value: string; label: string }> = [
-  { value: '*', label: 'ogni giorno' },
-  { value: '1', label: 'lunedì' },
-  { value: '2', label: 'martedì' },
-  { value: '3', label: 'mercoledì' },
-  { value: '4', label: 'giovedì' },
-  { value: '5', label: 'venerdì' },
-  { value: '6', label: 'sabato' },
-  { value: '0', label: 'domenica' },
-];
+export const WEEKDAYS: Array<{ value: string; label: string }> = ['*', '1', '2', '3', '4', '5', '6', '0'].map(
+  (value) => ({
+    value,
+    get label() {
+      return settingsText().reboot.days[value];
+    },
+  }),
+);
 
 export function scheduleLabel(schedule: RebootSchedule): string {
-  const day = WEEKDAYS.find((d) => d.value === schedule.weekday)?.label ?? 'ogni giorno';
+  const t = settingsText().reboot;
+  const day = WEEKDAYS.find((d) => d.value === schedule.weekday)?.label ?? t.days['*'];
   const time = `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`;
-  return `${day} alle ${time}`;
+  return t.dayAt(day, time);
 }

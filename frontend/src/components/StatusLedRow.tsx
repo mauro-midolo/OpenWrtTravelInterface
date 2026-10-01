@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getStatusLed, setStatusLed } from '../lib/led';
 import type { StatusLedState } from '../lib/led';
+import { commonText } from '../i18n/common';
+import { componentsText } from '../i18n/components';
 
 /**
  * Stesso passo della schermata che ospita la riga. Il LED non cambia in fretta,
@@ -118,6 +120,7 @@ export function StatusLedRow({ refresh = 0, locked = false }: {
 
   // Senza LED non c'e' niente da accendere: la riga dice quello che sa, come fa
   // "Temperatura". Finche' la lettura non e' tornata non si dice ancora niente.
+  const t = componentsText();
   const usable = !!state?.supported;
   // Niente da premere: o non c'e' un LED, o non e' piu' questa riga a
   // comandarlo. In tutti e due i casi la riga non deve invitare a cliccarla.
@@ -128,9 +131,9 @@ export function StatusLedRow({ refresh = 0, locked = false }: {
       <label
         class={interactive ? 'row' : 'row row--readonly'}
         aria-busy={busy}
-        title={usable && locked ? "Lo comanda l'interruttore fisico" : undefined}
+        title={usable && locked ? t.led.byToggle : undefined}
       >
-        <span class="row__label">LED di stato</span>
+        <span class="row__label">{t.led.label}</span>
         {usable ? (
           <input
             class="row__toggle"
@@ -140,7 +143,7 @@ export function StatusLedRow({ refresh = 0, locked = false }: {
             onChange={(e) => void run((e.target as HTMLInputElement).checked)}
           />
         ) : (
-          <span class="row__value">{state || error ? 'non disponibile' : 'Caricamento…'}</span>
+          <span class="row__value">{state || error ? t.unavailable : t.loading}</span>
         )}
       </label>
 
@@ -149,7 +152,7 @@ export function StatusLedRow({ refresh = 0, locked = false }: {
       {error && <p class="alert alert--error" role="alert">{error}</p>}
       {error && !state && (
         <button class="button button--ghost" disabled={busy} onClick={() => void run()}>
-          Riprova
+          {commonText().actions.retry}
         </button>
       )}
     </>

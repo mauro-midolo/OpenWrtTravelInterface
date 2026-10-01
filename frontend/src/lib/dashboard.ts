@@ -7,6 +7,7 @@
  * finche' qualcuno sta guardando questa schermata.
  */
 
+import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
 import type { PortalResult } from './portal';
 
@@ -207,7 +208,7 @@ export function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}g ${h}h`;
+  if (d > 0) return `${d}${settingsText().days} ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }

@@ -30,7 +30,11 @@ export interface NetworkPenalty {
 export interface DaemonEvent {
   at: number;
   kind: string;
+  /** La frase del demone, in italiano: resta per i demoni senza `code`. */
   message: string;
+  /** Cosa e' successo, per comporre la frase nella lingua dell'interfaccia. */
+  code?: string;
+  params?: Record<string, string | number | null>;
 }
 
 export interface DaemonStatus {
@@ -42,6 +46,9 @@ export interface DaemonStatus {
   networks: Record<string, NetworkPenalty>;
   events: DaemonEvent[];
   last_error: string;
+  /** Codice e parametri dell'ultimo errore, come per gli eventi. */
+  last_error_code?: string;
+  last_error_params?: Record<string, string | number | null>;
 }
 
 export function getDaemon(): Promise<DaemonStatus> {

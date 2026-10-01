@@ -3,6 +3,7 @@ import { isValidMac, normalizeMac, randomMac } from '../lib/wifi';
 import type { MacChoice, MacMode } from '../lib/wifi';
 import { clientTitle, listClients } from '../lib/lan';
 import type { LanClient } from '../lib/lan';
+import { componentsText } from '../i18n/components';
 
 /**
  * Scelta dell'indirizzo MAC da usare su un'interfaccia.
@@ -20,12 +21,13 @@ import type { LanClient } from '../lib/lan';
 export function MacPicker({
   choice,
   onChange,
-  label = 'Indirizzo MAC da usare',
+  label,
 }: {
   choice: MacChoice;
   onChange: (choice: MacChoice) => void;
   label?: string;
 }) {
+  const t = componentsText().mac;
   const [random, setRandom] = useState(() =>
     choice.mode === 'random' && choice.value ? choice.value : randomMac(),
   );
@@ -64,14 +66,14 @@ export function MacPicker({
 
   return (
     <div class="field">
-      <span>{label}</span>
+      <span>{label ?? t.label}</span>
       <div class="chips">
         {(
           [
-            ['device', 'Della scheda'],
-            ['random', 'Casuale'],
-            ['manual', 'Manuale'],
-            ['clone', 'Di un dispositivo'],
+            ['device', t.device],
+            ['random', t.random],
+            ['manual', t.manual],
+            ['clone', t.clone],
           ] as const
         ).map(([mode, text]) => (
           <button
@@ -97,7 +99,7 @@ export function MacPicker({
               onChange({ mode: 'random', value: clean(next) });
             }}
           >
-            Rigenera
+            {t.regenerate}
           </button>
         </div>
       )}
@@ -126,9 +128,9 @@ export function MacPicker({
           collegarsi se si sa gia' che quella rete lo fa. */}
       {choice.mode === 'clone' && (
         <>
-          {clients === null && <span class="muted">Leggo i dispositivi collegati…</span>}
+          {clients === null && <span class="muted">{t.loadingClients}</span>}
           {clients !== null && clients.length === 0 && (
-            <span class="muted">Nessun dispositivo collegato.</span>
+            <span class="muted">{t.noClients}</span>
           )}
           {clients !== null && clients.length > 0 && (
             <div class="chips">
@@ -149,16 +151,13 @@ export function MacPicker({
             </div>
           )}
           {clone && (
-            <span class="muted">
-              <code>{clone}</code> — quel dispositivo non deve restare collegato direttamente
-              a questa rete.
-            </span>
+            <span class="muted">{t.cloneWarn(clone)}</span>
           )}
         </>
       )}
 
       {invalid && (
-        <span class="muted">Indirizzo MAC non valido.</span>
+        <span class="muted">{t.invalid}</span>
       )}
     </div>
   );
