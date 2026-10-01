@@ -6,6 +6,7 @@
  * di rpcd, lo stesso che usa LuCI, quindi non scriviamo codice di login nostro.
  */
 
+import { commonText } from '../i18n/common';
 import { mockCall } from './mock';
 import { UBUS_OK, UBUS_PERMISSION_DENIED, UbusError } from './ubus-error';
 
@@ -65,14 +66,14 @@ async function rpc(params: unknown[], timeoutMs: number, where: string): Promise
     });
   } catch {
     throw new TransportError(
-      abort.signal.aborted ? 'Il router non ha risposto in tempo' : 'Router non raggiungibile',
+      abort.signal.aborted ? commonText().transport.timeout : commonText().transport.unreachable,
     );
   } finally {
     clearTimeout(timer);
   }
 
   if (!response.ok) {
-    throw new TransportError(`Il router ha risposto ${response.status}`);
+    throw new TransportError(commonText().transport.httpStatus(response.status));
   }
 
   const body = (await response.json()) as RpcResponse;
@@ -89,7 +90,7 @@ async function rpc(params: unknown[], timeoutMs: number, where: string): Promise
   }
 
   if (!Array.isArray(body.result)) {
-    throw new TransportError(`${where}: risposta inattesa dal router`);
+    throw new TransportError(commonText().transport.unexpected(where));
   }
 
   const [status, data] = body.result;
@@ -110,7 +111,7 @@ export async function call<T = unknown>(
 
   const where = `${object}.${method}`;
   if (session === null) {
-    throw new UbusError(UBUS_PERMISSION_DENIED, where, 'nessuna sessione attiva');
+    throw new UbusError(UBUS_PERMISSION_DENIED, where, commonText().transport.noSession);
   }
   return (await rpc([session, object, method, args], timeoutMs, where)) as T;
 }
@@ -136,7 +137,7 @@ export async function login(username: string, password: string): Promise<void> {
   )) as LoginResult;
 
   if (!result.ubus_rpc_session) {
-    throw new UbusError(UBUS_PERMISSION_DENIED, 'session.login', 'password errata');
+    throw new UbusError(UBUS_PERMISSION_DENIED, 'session.login', commonText().transport.wrongPassword);
   }
   setSession(result.ubus_rpc_session);
 }

@@ -1,10 +1,15 @@
 import { useState } from 'preact/hooks';
+import { LanguageSelect } from '../components/LanguageSelect';
+import { commonText } from '../i18n/common';
 import { login, TransportError, USE_MOCK } from '../lib/ubus';
 
 export function Login({ onDone }: { onDone: () => void }) {
+  const t = commonText().login;
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Si ricorda il motivo e non il testo: se si cambia lingua dopo un errore,
+  // anche l'errore cambia lingua.
+  const [error, setError] = useState<{ transport: string } | 'password' | null>(null);
 
   const submit = async (event: Event) => {
     event.preventDefault();
@@ -14,11 +19,7 @@ export function Login({ onDone }: { onDone: () => void }) {
       await login('root', password);
       onDone();
     } catch (err) {
-      setError(
-        err instanceof TransportError
-          ? err.message
-          : 'Password errata. E’ la stessa password di root del router.',
-      );
+      setError(err instanceof TransportError ? { transport: err.message } : 'password');
       setPassword('');
     } finally {
       setBusy(false);
@@ -28,11 +29,14 @@ export function Login({ onDone }: { onDone: () => void }) {
   return (
     <main class="screen screen--centered">
       <form class="card login" onSubmit={submit}>
-        <h1>Travel Router</h1>
-        <p class="muted">Accedi con la password di root del router.</p>
+        <div class="login__head">
+          <h1>{t.title}</h1>
+          <LanguageSelect class="login__lang" />
+        </div>
+        <p class="muted">{t.subtitle}</p>
 
         <label class="field">
-          <span>Password</span>
+          <span>{t.password}</span>
           <input
             type="password"
             value={password}
@@ -43,21 +47,21 @@ export function Login({ onDone }: { onDone: () => void }) {
           />
         </label>
 
-        {error && <p class="alert alert--error">{error}</p>}
+        {error && (
+          <p class="alert alert--error">
+            {error === 'password' ? t.wrongPassword : error.transport}
+          </p>
+        )}
 
         <button class="button button--primary" type="submit" disabled={busy || !password}>
-          {busy ? 'Accesso in corso…' : 'Entra'}
+          {busy ? t.busy : t.submit}
         </button>
 
         <a class="button button--ghost" href="/cgi-bin/luci/">
-          Apri LuCI
+          {t.openLuci}
         </a>
 
-        {USE_MOCK && (
-          <p class="alert alert--info">
-            Simulatore attivo: nessun router collegato, qualsiasi password va bene.
-          </p>
-        )}
+        {USE_MOCK && <p class="alert alert--info">{t.mock}</p>}
       </form>
     </main>
   );
