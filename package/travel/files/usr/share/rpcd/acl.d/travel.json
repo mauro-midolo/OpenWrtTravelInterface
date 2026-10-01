@@ -8,7 +8,7 @@
 				"session": [ "access", "get" ],
 				"uci": [ "get", "changes" ]
 			},
-			"uci": [ "wireless", "network", "firewall", "dhcp", "system", "travel" ]
+			"uci": [ "wireless", "network", "firewall", "dhcp", "system", "travel", "mwan3" ]
 		},
 		"write": {
 			"ubus": {

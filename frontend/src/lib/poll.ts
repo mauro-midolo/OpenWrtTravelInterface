@@ -28,12 +28,20 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number): PollState<
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Una richiesta e' in volo. Il ritorno in primo piano chiama `run` fuori
+    // dal timer: se ne trovasse una gia' partita ne aprirebbe una seconda, e
+    // ciascuna alla fine riprogrammerebbe il proprio giro - due catene di
+    // polling che si moltiplicano a ogni cambio di scheda, proprio quando il
+    // router e' lento a rispondere.
+    let inFlight = false;
 
     const run = async () => {
       if (document.hidden) {
         schedule();
         return;
       }
+      if (inFlight) return;
+      inFlight = true;
       try {
         const result = await fnRef.current();
         if (cancelled) return;
@@ -43,6 +51,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number): PollState<
         if (cancelled) return;
         setError(err instanceof Error ? err : new Error(String(err)));
       } finally {
+        inFlight = false;
         if (!cancelled) {
           setLoading(false);
           schedule();
@@ -53,6 +62,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number): PollState<
     // Il timer riparte solo a richiesta conclusa: niente richieste sovrapposte
     // se il router e' lento o irraggiungibile.
     const schedule = () => {
+      clearTimeout(timer);
       timer = setTimeout(run, intervalMs);
     };
 

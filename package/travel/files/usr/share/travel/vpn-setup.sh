@@ -352,7 +352,10 @@ ensure_wg_routing() {
 	iface=$(wg_active_iface) || iface=""
 
 	if [ -z "$iface" ] || [ ! -e "/sys/class/net/$iface" ]; then
+		# Tutte e due le famiglie: `ip route flush` senza -6 tocca solo IPv4, e
+		# la rotta predefinita v6 del tunnel spento restava in tabella.
 		ip route flush table "$WG_TABLE" 2>/dev/null
+		ip -6 route flush table "$WG_TABLE" 2>/dev/null
 		return 0
 	fi
 

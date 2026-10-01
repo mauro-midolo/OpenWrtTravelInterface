@@ -140,6 +140,38 @@ function hostOf(url: string): string {
   return match ? match[1] : url;
 }
 
+/**
+ * Un indirizzo da mettere in un link, solo se e' http o https.
+ *
+ * L'URL della pagina di accesso arriva dall'header `Location` della rete a cui
+ * ci si e' collegati, cioe' da qualcuno di cui non ci si fida: un hotspot che
+ * rispondesse `javascript:...` avrebbe il suo codice eseguito nella pagina di
+ * amministrazione del router, con la sessione in mano. Preact un `href` cosi'
+ * lo scrive senza obiettare, quindi il filtro sta qui. Stringa vuota se
+ * l'indirizzo non va bene: chi lo mostra non mette il link.
+ */
+export function safeHttpUrl(url: string | null | undefined): string {
+  const text = (url ?? '').trim();
+  if (text === '') return '';
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * La pagina di accesso da aprire, gia' filtrata da `safeHttpUrl`.
+ *
+ * Se quella indicata dal portale non passa il filtro si ripiega sull'endpoint
+ * di verifica, che e' nostro: riaprirlo in http fa ricomparire il portale da
+ * se'. Vuota se nemmeno quello e' un indirizzo http.
+ */
+export function portalLoginUrl(result: Pick<PortalResult, 'url' | 'probe_url'>): string {
+  return safeHttpUrl(result.url) || safeHttpUrl(result.probe_url);
+}
+
 /** Vero quando c'e' una pagina di accesso da aprire. */
 export function needsLogin(result: PortalResult | null | undefined): boolean {
   return result?.state === 'portal';

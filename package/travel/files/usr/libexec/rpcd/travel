@@ -24,9 +24,16 @@
 VERSION_FILE=/usr/share/travel/version
 
 # Legge la prima riga di un file, stringa vuota se assente o illeggibile.
+#
+# `read` esce con errore anche quando la riga l'ha letta, se il file non finisce
+# con un ritorno a capo: e' il caso di /usr/share/travel/version, e con il solo
+# `read && printf` la versione usciva sempre vuota. Conta quindi anche una riga
+# letta senza terminatore. `_line` si azzera prima, perche' e' globale: una
+# lettura fallita non deve restituire la riga del file letto la volta prima.
 first_line() {
+	_line=""
 	[ -r "$1" ] || return 0
-	read -r _line < "$1" 2>/dev/null && printf '%s' "$_line"
+	{ read -r _line || [ -n "$_line" ]; } < "$1" 2>/dev/null && printf '%s' "$_line"
 }
 
 meminfo_kb() {
@@ -506,15 +513,17 @@ radio_of_wwan() {
 
 # Presenza del collegamento fisico: 1 cavo attaccato, 0 scollegato, -1 ignoto.
 carrier_of() {
-	local dev="$1"
+	local dev="$1" value
 	[ -n "$dev" ] || { printf '%s' "-1"; return; }
-	if [ -r "/sys/class/net/$dev/carrier" ]; then
-		# Il kernel rifiuta la lettura quando l'interfaccia e' amministrativamente
-		# giu': in quel caso non si sa, e dirlo e' meglio che inventare uno zero.
-		printf '%s' "$(first_line "/sys/class/net/$dev/carrier")" 2>/dev/null || printf '%s' "-1"
-	else
-		printf '%s' "-1"
-	fi
+	# Il kernel rifiuta la lettura quando l'interfaccia e' amministrativamente
+	# giu': in quel caso non si sa, e dirlo e' meglio che inventare uno zero.
+	# Il controllo va sul valore letto: l'esito di `printf` non dice niente
+	# della lettura, e una stringa vuota finiva in `json_add_int` come 0.
+	value=$(first_line "/sys/class/net/$dev/carrier")
+	case "$value" in
+		0|1) printf '%s' "$value" ;;
+		*)   printf '%s' "-1" ;;
+	esac
 }
 
 # Interfaccia di sistema che porta la rotta predefinita, cioe' quella che sta
@@ -1423,7 +1432,7 @@ method_ethports() {
 	local bridge bridge_section bridge_ports zone zone_networks
 	local port network role entry obj dev_section dev_mac devfile
 
-	devfile="/tmp/travel-ethdev.$"
+	devfile="/tmp/travel-ethdev.$$"
 
 	bridge=$(bridge_info)
 	bridge_section="${bridge%%	*}"
@@ -2586,6 +2595,18 @@ method_portal_probe() {
 	# quello il posto giusto; quando invece serve la propria pagina al posto di
 	# quella richiesta, riaprire l'endpoint di verifica ci riporta esattamente
 	# li'. Fuori dallo stato "portal" non c'e' nessuna pagina da aprire.
+	#
+	# `Location` lo scrive la rete a cui ci si e' collegati, cioe' qualcuno di
+	# cui non ci si fida: finisce in un link della SPA, e un `javascript:` li'
+	# girerebbe con la sessione di amministrazione del router. Passano solo
+	# http e https; un percorso relativo si completa con l'host del probe, che
+	# e' quello a cui il portale ha risposto. Tutto il resto si scarta e si
+	# ricade sull'endpoint di verifica.
+	case "$location" in
+		http://*|https://*) ;;
+		/*) location="http://$PORTAL_HOST$location" ;;
+		*) location="" ;;
+	esac
 	[ "$state" = "portal" ] && [ -z "$location" ] && location="$url"
 	[ "$state" = "portal" ] || location=""
 
@@ -3114,6 +3135,12 @@ method_ts_login() {
 
 	flags=$(ts_flags)
 
+	# L'esito del comando staccato si toglie prima di tutti e due i rami, non
+	# solo di quello interattivo: rimasto da un tentativo precedente, il ramo
+	# con l'auth key lo leggerebbe come proprio - interrompendo l'attesa e, se
+	# `up` non ha stampato niente, dichiarando fallito un login riuscito.
+	rm -f "$TS_UP_LOG" "$TS_UP_RC"
+
 	if [ -n "$authkey" ]; then
 		# La chiave non finisce sulla riga di comando: passa da un file che
 		# solo root puo' leggere e che sparisce subito. Su `ps` comparirebbe in
@@ -3144,7 +3171,6 @@ method_ts_login() {
 		# "Accendo...", il tunnel restava giu' e non lo spiegava niente. E'
 		# cosi' che un errore di una riga - il flag mancante di `ts_flags` - e'
 		# rimasto invisibile.
-		rm -f "$TS_UP_LOG" "$TS_UP_RC"
 		# shellcheck disable=SC2086
 		( ( ts_up_run "$ts" $flags > "$TS_UP_LOG" 2>&1; printf '%s' "$?" > "$TS_UP_RC" ) & )
 		out=""
@@ -4004,11 +4030,15 @@ wg_parse_conf() {
 		value=$(printf '%s' "${line#*=}" | sed 's/^[[:space:]]*//')
 		[ "$key" = "$line" ] && continue
 
+		# Address, DNS e AllowedIPs possono stare su piu' righe - wg-quick le
+		# somma, e c'e' chi mette la v4 su una riga e la v6 sulla successiva.
+		# Si accodano invece di sostituirsi: tenendo solo l'ultima riga, il
+		# tunnel nasceva senza l'indirizzo o le rotte IPv4, senza nessun errore.
 		if [ "$where" = "iface" ]; then
 			case "$key" in
 				privatekey) WGF_PRIV="$value" ;;
-				address)    WGF_ADDR="$value" ;;
-				dns)        WGF_DNS="$value" ;;
+				address)    WGF_ADDR="${WGF_ADDR:+$WGF_ADDR,}$value" ;;
+				dns)        WGF_DNS="${WGF_DNS:+$WGF_DNS,}$value" ;;
 				mtu)        WGF_MTU="$value" ;;
 			esac
 		elif [ "$where" = "peer" ]; then
@@ -4016,7 +4046,7 @@ wg_parse_conf() {
 				publickey)           WGF_PEER="$value" ;;
 				presharedkey)        WGF_PSK="$value" ;;
 				endpoint)            WGF_HOST="$value" ;;
-				allowedips)          WGF_ALLOWED="$value" ;;
+				allowedips)          WGF_ALLOWED="${WGF_ALLOWED:+$WGF_ALLOWED,}$value" ;;
 				persistentkeepalive) WGF_KEEPALIVE="$value" ;;
 			esac
 		fi
@@ -4517,6 +4547,14 @@ method_profile_apply() {
 		mwan_set_mode "$P_MODE"
 		uci set mwan3.travel_default.sticky="$P_STICKY"
 		uci set mwan3.travel_default.timeout="$P_TIMEOUT"
+		# La predefinita IPv6 segue la stessa regola, come quando la scrive
+		# `setDefaultRule` dall'interfaccia: la modalita' gliela da' gia'
+		# `mwan_set_mode`, e sticky e timeout lasciati indietro farebbero
+		# comportare le due famiglie in due modi diversi.
+		if [ -n "$(uci -q get mwan3.travel_default6)" ]; then
+			uci set mwan3.travel_default6.sticky="$P_STICKY"
+			uci set mwan3.travel_default6.timeout="$P_TIMEOUT"
+		fi
 	fi
 
 	for entry in $P_WANS; do

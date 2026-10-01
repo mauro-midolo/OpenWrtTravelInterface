@@ -9,6 +9,7 @@ import {
   forgetPortal,
   listPortalMemory,
   portalAt,
+  portalLoginUrl,
   portalReason,
   portalWhen,
 } from '../lib/portal';
@@ -121,9 +122,16 @@ export function PortalPanel({
               browser di chi guarda, con i suoi cookie e la sua sessione. Il
               router non puo' farlo al posto suo, e fingere di poterlo fare
               sarebbe la promessa peggiore da rompere in una hall d'albergo. */}
-          <a class="button button--primary" href={result.url} target="_blank" rel="noreferrer">
-            Apri la pagina di accesso
-          </a>
+          {portalLoginUrl(result) && (
+            <a
+              class="button button--primary"
+              href={portalLoginUrl(result)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Apri la pagina di accesso
+            </a>
+          )}
           <p class="muted">
             Se la pagina non si apre, prova a visitare un indirizzo qualsiasi in{' '}
             <strong>http://</strong> (non https): è così che il portale si fa vedere.
