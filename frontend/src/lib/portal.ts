@@ -14,6 +14,7 @@
 import { locale } from '../i18n';
 import { portalText } from '../i18n/portal';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 
 /**
  * Esito della verifica di una WAN.
@@ -72,7 +73,7 @@ export async function checkPortal(network: string): Promise<PortalResult> {
     { network },
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return result;
 }
 
@@ -97,7 +98,7 @@ export async function listPortalMemory(): Promise<PortalMemory[]> {
 
 export async function forgetPortal(section: string): Promise<void> {
   const response = await call<{ error?: string }>('travel', 'portal_forget', { section });
-  if (response.error) throw new Error(response.error);
+  if (response.error) throw backendError(response);
 }
 
 /** Il verdetto in due parole, nella lingua dell'interfaccia. */

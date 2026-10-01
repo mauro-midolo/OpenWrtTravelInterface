@@ -13,7 +13,19 @@
 # Qui dentro non si stampa JSON e non si convalida niente che arrivi dal
 # browser: quello resta al plugin, che di questo file e' il primo cliente.
 
-wg_error() { printf '%s\n' "$*" >&2; }
+# Il motivo esce su stderr, com'e' sempre stato: e' quello che finisce nei log.
+# Il primo argomento e' un codice stabile e i seguenti, dopo il messaggio, coppie
+# chiave/valore: se chi chiama ha indicato un file in TRAVEL_ERR_FILE - l'rpcd,
+# per mostrare l'errore nella lingua dell'interfaccia - ci finiscono una per
+# riga, il codice per primo.
+wg_error() {
+	_err_code="$1"
+	shift
+	printf '%s\n' "$1" >&2
+	shift
+	[ -z "${TRAVEL_ERR_FILE:-}" ] || printf '%s\n' "$_err_code" "$@" > "$TRAVEL_ERR_FILE"
+	return 0
+}
 
 # --- I profili WireGuard, elencati --------------------------------------------
 #
@@ -161,6 +173,14 @@ policy_reason() {
 	esac
 }
 
+# Il nome del profilo WireGuard che blocca, per chi la frase la ricompone da se'
+# (l'interfaccia, in un'altra lingua). Vuoto per gli altri occupanti.
+policy_name() {
+	[ "$1" = wireguard ] || return 0
+	_wg_on=$(wg_active) && wg_name "$_wg_on"
+	return 0
+}
+
 # Il pacchetto c'e'? Senza, la configurazione si scrive ma non si alza.
 wg_installed() {
 	[ -x /usr/bin/wg ] && [ -f /lib/netifd/proto/wireguard.sh ]
@@ -242,8 +262,8 @@ wg_switch() {
 	busy=$(wg_active) || busy=""
 
 	if [ "$want" = on ]; then
-		wg_known "$id" || { wg_error "configurazione WireGuard sconosciuta"; return 1; }
-		wg_installed || { wg_error "wireguard-tools non e' installato"; return 1; }
+		wg_known "$id" || { wg_error wg_unknown "configurazione WireGuard sconosciuta"; return 1; }
+		wg_installed || { wg_error wg_not_installed "wireguard-tools non e' installato"; return 1; }
 		# Gia' com'e' richiesta: rialzare la rete per confermare uno stato gia'
 		# giusto vorrebbe dire far cadere il traffico a ogni allineamento, e la
 		# levetta si riallinea a ogni avvio.
@@ -252,8 +272,8 @@ wg_switch() {
 		# Spegnere senza dire quale spegne quello acceso: e' l'unico che possa
 		# esserlo, e chiederne il nome per dire "spegni" sarebbe cerimonia.
 		[ -n "$id" ] || id="$busy"
-		[ -n "$id" ] || { wg_error "nessuna configurazione WireGuard attiva"; return 1; }
-		wg_known "$id" || { wg_error "configurazione WireGuard sconosciuta"; return 1; }
+		[ -n "$id" ] || { wg_error wg_none_active "nessuna configurazione WireGuard attiva"; return 1; }
+		wg_known "$id" || { wg_error wg_unknown "configurazione WireGuard sconosciuta"; return 1; }
 		# Con la levetta in basso non deve restare acceso niente. Quella
 		# associata e' spenta per definizione; un'altra accesa da prima
 		# resterebbe li' a smentire una levetta che dice "no", e l'interfaccia
@@ -270,7 +290,8 @@ wg_switch() {
 
 	if [ "$from" != toggle ]; then
 		owner=$(wg_toggle_owner) && {
-			wg_error "la comanda l'interruttore fisico: \"$(wg_name "$owner")\" segue la levetta. Cambia la funzione dell'interruttore per tornare a decidere da qui"
+			wg_error wg_by_toggle "la comanda l'interruttore fisico: \"$(wg_name "$owner")\" segue la levetta. Cambia la funzione dell'interruttore per tornare a decidere da qui" \
+				name "$(wg_name "$owner")"
 			return 1
 		}
 	fi
@@ -280,14 +301,16 @@ wg_switch() {
 	if [ "$want" = on ]; then
 		if [ -n "$busy" ]; then
 			[ "$from" = toggle ] || {
-				wg_error "e' gia' attiva la configurazione \"$(wg_name "$busy")\": disattivala prima di attivarne un'altra"
+				wg_error wg_busy "e' gia' attiva la configurazione \"$(wg_name "$busy")\": disattivala prima di attivarne un'altra" \
+					name "$(wg_name "$busy")"
 				return 1
 			}
 		fi
 		# Il vincolo generale - al massimo una cosa alla volta decide da dove
 		# esce il traffico - vale anche per la levetta: e' lo stesso traffico.
 		holder=$(policy_holder wireguard) && {
-			wg_error "non posso accendere WireGuard: $(policy_reason "$holder")"
+			wg_error wg_blocked "non posso accendere WireGuard: $(policy_reason "$holder")" \
+				holder "$holder" name "$(policy_name "$holder")"
 			return 1
 		}
 		[ -n "$busy" ] && uci set "network.$busy.disabled=1"

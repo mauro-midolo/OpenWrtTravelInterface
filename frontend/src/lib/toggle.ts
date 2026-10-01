@@ -1,5 +1,6 @@
 import { componentsText } from '../i18n/components';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 
 /**
  * Interruttore fisico del router: quale funzione gli e' associata.
@@ -186,7 +187,7 @@ async function request(method: string, args: Record<string, unknown> = {}): Prom
     // dello scambio - una configurazione da spegnere e una da accendere.
     60_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return normalizeToggle(result);
 }
 

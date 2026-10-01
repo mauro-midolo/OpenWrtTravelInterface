@@ -1,4 +1,5 @@
 import { defineText } from '.';
+import { backendMessage } from './backend';
 
 type Params = Record<string, string | number | null | undefined>;
 const s = (value: Params[string]) => (value == null ? '' : String(value));
@@ -133,5 +134,7 @@ function portalWordsEn(p: Params): string {
  */
 export function daemonMessage(entry: { message: string; code?: string; params?: Params }): string {
   const format = entry.code ? autoText().event[entry.code] : undefined;
-  return format ? format(entry.params ?? {}) : entry.message;
+  if (format) return format(entry.params ?? {});
+  // Gli errori del demone (`last_error`) hanno i codici degli altri errori del router.
+  return backendMessage(entry.message, entry.code, entry.params);
 }

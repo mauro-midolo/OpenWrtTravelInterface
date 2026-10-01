@@ -10,6 +10,8 @@
  */
 
 import { commonText } from '../i18n/common';
+import { backendMessage } from '../i18n/backend';
+import type { BackendParams } from '../i18n/backend';
 
 /** Codici di stato ubus che ci interessa distinguere. */
 export const UBUS_OK = 0;
@@ -36,4 +38,34 @@ export class UbusError extends Error {
   get isAuthError(): boolean {
     return this.code === UBUS_PERMISSION_DENIED;
   }
+}
+
+/** Una risposta del router che puo' contenere un errore, con il suo codice. */
+export interface BackendFailure {
+  error?: string;
+  error_code?: string;
+  error_params?: BackendParams;
+}
+
+/**
+ * L'errore da lanciare per una risposta con `error`.
+ *
+ * Il messaggio e' gia' nella lingua dell'interfaccia (vedi `backendMessage`);
+ * il codice resta sull'errore per chi deve distinguere i casi.
+ */
+export class BackendError extends Error {
+  constructor(
+    readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BackendError';
+  }
+}
+
+export function backendError(result: BackendFailure): BackendError {
+  return new BackendError(
+    result.error_code,
+    backendMessage(result.error ?? '', result.error_code, result.error_params),
+  );
 }

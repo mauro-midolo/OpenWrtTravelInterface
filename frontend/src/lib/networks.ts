@@ -19,6 +19,7 @@
 
 import { networksText } from '../i18n/networks';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 import type { ShareInput } from './share';
 import { HOSTNAME_OFF } from './hostname';
 import type { HostnameChoice, HostnameMode } from './hostname';
@@ -465,7 +466,7 @@ export async function stageConnectSaved(section: string, radio: string): Promise
     'stage_connect_saved',
     { section, radio },
   );
-  if (response.error) throw new Error(response.error);
+  if (response.error) throw backendError(response);
 }
 
 export function markUsed(section: string, result: string): Promise<unknown> {

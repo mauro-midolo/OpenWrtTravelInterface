@@ -16,6 +16,7 @@
 
 import { vpnText } from '../i18n/vpn';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 import { parseIp } from './ip';
 
 /** Gli stati che il backend di Tailscale riporta, piu' il caso "non c'e'". */
@@ -429,7 +430,7 @@ export async function wgToggle(enabled: boolean, id: string): Promise<void> {
     { enabled: enabled ? '1' : '0', id },
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**
@@ -453,7 +454,7 @@ export async function wgImport(
     { config, name, id },
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return { id: result.id ?? '', endpoint: result.endpoint ?? '' };
 }
 
@@ -471,7 +472,7 @@ export async function wgSave(id: string, fields: WgFields): Promise<void> {
     { id, ...fields, drop_preshared: fields.drop_preshared ? '1' : '0' },
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**
@@ -482,7 +483,7 @@ export async function wgSave(id: string, fields: WgFields): Promise<void> {
  */
 export async function wgDelete(id: string): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'wg_delete', { id }, 30_000);
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /** Byte del tunnel. Sta qui e non in dashboard.ts: e' l'unico posto che li usa. */
@@ -667,7 +668,7 @@ export async function tsLogin(authkey = ''): Promise<{ auth_url: string; output:
     { authkey },
     60_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return { auth_url: result.auth_url ?? '', output: result.output ?? '' };
 }
 
@@ -710,7 +711,7 @@ export async function saveTailscale(settings: {
     {},
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**
@@ -747,13 +748,13 @@ export async function tsUp(): Promise<void> {
 /** Stacca il tunnel senza perdere l'autenticazione: si torna su con un tocco. */
 export async function tsDown(): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'ts_down', {}, 30_000);
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /** Esce dall'account e ferma il servizio, anche al boot. */
 export async function tsLogout(): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'ts_logout', {}, 30_000);
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**

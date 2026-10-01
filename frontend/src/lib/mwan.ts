@@ -8,6 +8,7 @@
 
 import { mwanText } from '../i18n/mwan';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 import { parseCidr } from './ip';
 import type { IpFamily } from './ip';
 import type { VpnPolicy } from './vpn';
@@ -131,7 +132,7 @@ export function byPriority(mwan: Mwan): MwanInterface[] {
 export async function applyMwan(): Promise<void> {
   await call('uci', 'apply', {});
   const result = await call<{ applied?: boolean; error?: string }>('travel', 'mwan_apply', {});
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**

@@ -13,6 +13,7 @@
  */
 
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 
 export interface DeviceStatus {
   /** Versione dei file installati sul router. */
@@ -136,7 +137,7 @@ export async function setUsbMode(forceUsb2: boolean): Promise<string> {
     {},
     25_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return result.mode ?? '';
 }
 
@@ -158,6 +159,6 @@ export async function resetUsb(): Promise<{ controller: string; mode: string }> 
     mode?: string;
     error?: string;
   }>('travel', 'usb_reset', {}, 25_000);
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return { controller: result.controller ?? '', mode: result.mode ?? '' };
 }

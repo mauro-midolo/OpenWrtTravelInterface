@@ -10,6 +10,7 @@
 
 import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 
 // --- Orologio e NTP -----------------------------------------------------------
 
@@ -56,7 +57,7 @@ export async function setTime(values: {
     servers: values.servers.join(' '),
     enabled: values.enabled,
   });
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /**
@@ -120,7 +121,7 @@ export async function exportBackup(): Promise<BackupFile> {
     'travel',
     'backup_export',
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return { name: result.name ?? 'backup.tar.gz', size: result.size ?? 0, data: result.data ?? '' };
 }
 
@@ -156,7 +157,7 @@ export async function importBackup(
       first: offset === 0,
       last,
     });
-    if (result.error) throw new Error(result.error);
+    if (result.error) throw backendError(result);
     onProgress?.(Math.min(offset + CHUNK, total), total);
   }
 }
@@ -219,12 +220,12 @@ export async function setReboot(values: {
   weekday: string;
 }): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'reboot_set', values);
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 export async function rebootNow(): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'reboot_now');
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 export const WEEKDAYS: Array<{ value: string; label: string }> = ['*', '1', '2', '3', '4', '5', '6', '0'].map(

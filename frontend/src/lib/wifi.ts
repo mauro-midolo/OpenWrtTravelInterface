@@ -7,6 +7,8 @@
  */
 
 import { networksText } from '../i18n/networks';
+import { backendMessage } from '../i18n/backend';
+import type { BackendFailure } from './ubus-error';
 import { call } from './ubus';
 import { maskToPrefix, prefixToMask } from './ip';
 import { stageWanHostname } from './hostname';
@@ -329,14 +331,17 @@ export function encryptionForSta(net: ScanResult): string {
  * e va fatto li' perche' dal browser non si possono creare interfacce.
  */
 export async function scanRadio(radio: Radio): Promise<ScanResult[]> {
-  const response = await call<{ results?: IwinfoScanEntry[]; error?: string }>(
+  const response = await call<{ results?: IwinfoScanEntry[] } & BackendFailure>(
     'travel',
     'scan',
     { radio: radio.name },
     SCAN_TIMEOUT_MS,
   );
 
-  if (response.error) throw new Error(networksText().scanFailed(radio.band ?? radio.name, response.error));
+  if (response.error) {
+    const detail = backendMessage(response.error, response.error_code, response.error_params);
+    throw new Error(networksText().scanFailed(radio.band ?? radio.name, detail));
+  }
 
   const found = (response.results ?? [])
     // Un'interfaccia temporanea puo' vedere entrambe le bande: qui interessa
