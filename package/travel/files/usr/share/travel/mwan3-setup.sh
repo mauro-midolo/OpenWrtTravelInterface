@@ -179,7 +179,7 @@ for net in $wans; do
 	#
 	# `mwan3.<sezione>` e' MONO-FAMIGLIA, e il nome della sezione deve essere
 	# quello di un'interfaccia netifd vera: e' il motivo per cui questo blocco
-	# non poteva esistere prima della Fase 4, che le sezioni `<net>6` le crea.
+	# dipende dalle sezioni `<net>6` create per IPv6.
 	# Se manca, si salta: un profilo a meta' e' peggio di nessun profilo.
 	if [ -n "$(uci -q get "network.${net}6")" ]; then
 		if [ -z "$(uci -q get "mwan3.${net}6")" ]; then

@@ -55,14 +55,18 @@ const ubus = tryRequire('ubus');
 const uci = tryRequire('uci');
 const fs = tryRequire('fs');
 
-if (!uloop) die("manca il modulo uloop");
-if (!ubus) die("manca il modulo ubus");
-if (!uci) die("manca il modulo uci");
-if (!fs) die("manca il modulo fs");
+if (!uloop) die("missing module uloop");
+if (!ubus) die("missing module ubus");
+if (!uci) die("missing module uci");
+if (!fs) die("missing module fs");
 
 const started = time();
 let ticks = 0;
 let lastError = "";
+// Lo stesso errore in forma di codice e parametri, per l'interfaccia in una
+// lingua diversa dall'italiano. La frase resta per i log e per chi non li legge.
+let lastErrorCode = "";
+let lastErrorParams = {};
 
 // Stato del motore, tutto in RAM: un riavvio del daemon e' anche il modo
 // piu' semplice di azzerare backoff e blacklist.
@@ -74,8 +78,21 @@ let lastAction = {};
 let lastRoamCheck = {};
 let events = [];
 
-function note(kind, message) {
-	unshift(events, { at: time(), kind: kind, message: message });
+function setError(code, message, params) {
+	lastError = message;
+	lastErrorCode = code;
+	lastErrorParams = params ? params : {};
+}
+
+// `code` e `params` sono facoltativi: con quelli l'interfaccia ricompone la
+// frase nella sua lingua invece di mostrare `message` com'e'.
+function note(kind, message, code, params) {
+	let event = { at: time(), kind: kind, message: message };
+	if (code) {
+		event.code = code;
+		event.params = params ? params : {};
+	}
+	unshift(events, event);
 	while (length(events) > MAX_EVENTS)
 		pop(events);
 	warn("traveld: " + kind + ": " + message + "\n");
@@ -120,7 +137,7 @@ function globals() {
 		}
 	}
 	catch (e) {
-		lastError = "lettura di /etc/config/travel fallita: " + e;
+		setError("config_read_failed", "reading /etc/config/travel failed: " + e, { error: "" + e });
 	}
 
 	return g;
@@ -169,7 +186,7 @@ function savedNetworks() {
 		});
 	}
 	catch (e) {
-		lastError = "lettura delle reti salvate fallita: " + e;
+		setError("saved_read_failed", "reading the saved networks failed: " + e, { error: "" + e });
 	}
 
 	// Priorita' decrescente: la prima e' quella preferita.
@@ -188,7 +205,8 @@ function callUbus(object, method, args) {
 		return result;
 	}
 	catch (e) {
-		lastError = "chiamata " + object + "." + method + " fallita: " + e;
+		setError("ubus_call_failed", "call " + object + "." + method + " failed: " + e,
+			{ call: object + "." + method, error: "" + e });
 		return null;
 	}
 }
@@ -298,7 +316,7 @@ function applyHostname(network, net) {
 		ctx.commit('network');
 	}
 	catch (e) {
-		lastError = "scrittura del nome DHCP fallita: " + e;
+		setError("hostname_write_failed", "writing the DHCP name failed: " + e, { error: "" + e });
 		return;
 	}
 
@@ -358,8 +376,9 @@ function applyConnection(radio, net) {
 		ctx.commit('wireless');
 	}
 	catch (e) {
-		lastError = "scrittura di /etc/config/wireless fallita: " + e;
-		note('errore', "non sono riuscito a scrivere la configurazione: " + e);
+		setError("wireless_write_failed", "writing /etc/config/wireless failed: " + e, { error: "" + e });
+		note('errore', "could not write the configuration: " + e,
+			'write_failed', { error: "" + e });
 		return false;
 	}
 
@@ -411,16 +430,17 @@ function recordFailure(key, g) {
 
 	if (count >= g.blacklist_after) {
 		blacklist[key] = time() + g.blacklist_ttl;
-		note('blacklist', key + " messa da parte per " + g.blacklist_ttl + "s dopo " + count + " tentativi falliti");
+		note('blacklist', key + " set aside for " + g.blacklist_ttl + "s after " + count + " failed attempts",
+			'blacklisted', { key: key, ttl: g.blacklist_ttl, count: count });
 	}
 	else {
-		note('fallita', key + ": nuovo tentativo fra " + wait + "s");
+		note('fallita', key + ": next attempt in " + wait + "s", 'retry', { key: key, wait: wait });
 	}
 }
 
 function recordSuccess(key) {
 	if (fails[key])
-		note('connessa', key + " ha funzionato, contatori azzerati");
+		note('connessa', key + " worked, counters reset", 'recovered', { key: key });
 	// Si azzera assegnando null invece di cancellare la chiave: non tutte le
 	// versioni di ucode hanno l'operatore `delete`, e non vale la pena
 	// dipenderne per una cosa che si fa altrettanto bene cosi'.
@@ -466,7 +486,7 @@ function bandMatches(net, radio) {
 function bestCandidate(radio, saved, g, now, allowHidden) {
 	let result = callUbus('travel', 'scan', { radio: radio.name });
 	if (!result || !result.results) {
-		lastError = "scansione di " + radio.name + " senza risultati";
+		setError("scan_empty", "scan of " + radio.name + " returned no results", { radio: radio.name });
 		return null;
 	}
 
@@ -546,9 +566,12 @@ function considerRoam(radio, current, saved, g, now) {
 	if (choice.signal < (g.rssi_min + g.roam_hysteresis))
 		return;
 
-	note('roaming', radio.name + ": passo da " + current.ssid + " a " + choice.net.ssid +
-		" (priorita' " + choice.net.priority + " contro " + currentPriority + ", " +
-		choice.signal + " dBm)");
+	note('roaming', radio.name + ": switching from " + current.ssid + " to " + choice.net.ssid +
+		" (priority " + choice.net.priority + " vs " + currentPriority + ", " +
+		choice.signal + " dBm)", 'roaming', {
+			radio: radio.name, from: current.ssid, to: choice.net.ssid,
+			priority: choice.net.priority, current: currentPriority, signal: choice.signal
+		});
 	applyConnection(radio, choice.net);
 }
 
@@ -618,7 +641,8 @@ function evaluate() {
 		}
 
 		note('connessione', radio.name + " -> " + choice.net.ssid +
-			(choice.signal == null ? " (nascosta)" : " (" + choice.signal + " dBm)"));
+			(choice.signal == null ? " (hidden)" : " (" + choice.signal + " dBm)"),
+			'connecting', { radio: radio.name, ssid: choice.net.ssid, signal: choice.signal });
 		applyConnection(radio, choice.net);
 	}
 }
@@ -795,10 +819,10 @@ let portals = {};      // network -> ultimo esito del probe
 let portalSeen = {};   // network -> ultimo stato dell'uplink, per il probe su evento
 
 function portalWords(result) {
-	if (result.state == 'online') return "Internet raggiungibile";
-	if (result.state == 'portal') return "portale di accesso rilevato";
-	if (result.state == 'blocked') return "indirizzo si', ma niente esce";
-	return "non verificabile" + (result.reason ? " (" + result.reason + ")" : "");
+	if (result.state == 'online') return "Internet reachable";
+	if (result.state == 'portal') return "captive portal detected";
+	if (result.state == 'blocked') return "address yes, but nothing gets out";
+	return "cannot be checked" + (result.reason ? " (" + result.reason + ")" : "");
 }
 
 function probePortal(network) {
@@ -812,7 +836,8 @@ function probePortal(network) {
 	// Solo i cambi di stato finiscono negli eventi: un probe ogni minuto che
 	// conferma quello di prima riempirebbe l'elenco e nasconderebbe il resto.
 	if (!before || before.state != result.state)
-		note('portale', network + ": " + portalWords(result));
+		note('portale', network + ": " + portalWords(result), 'portal',
+			{ network: network, state: result.state, reason: result.reason ? result.reason : "" });
 
 	return result;
 }
@@ -917,7 +942,7 @@ function killswitchState() {
 		state.resume_at = num(ctx.get('travel', 'vpn', 'resume_at'), 0);
 	}
 	catch (e) {
-		lastError = "lettura delle impostazioni VPN fallita: " + e;
+		setError("vpn_read_failed", "reading the VPN settings failed: " + e, { error: "" + e });
 	}
 
 	return state;
@@ -943,8 +968,8 @@ function killswitchRound() {
 		ctx.commit('travel');
 	}
 	catch (e) {
-		lastError = "riarmo del kill switch fallito: " + e;
-		note('errore', lastError);
+		setError("killswitch_failed", "re-arming the kill switch failed: " + e, { error: "" + e });
+		note('errore', lastError, lastErrorCode, lastErrorParams);
 		return;
 	}
 
@@ -958,7 +983,7 @@ function killswitchRound() {
 		system("/etc/init.d/firewall reload");
 	}
 
-	note('killswitch', "sospensione scaduta: kill switch riarmato");
+	note('killswitch', "pause expired: kill switch re-armed", 'killswitch_rearmed');
 }
 
 // --- Interfaccia ubus --------------------------------------------------------
@@ -989,7 +1014,7 @@ function engineState() {
 uloop.init();
 
 conn = ubus.connect();
-if (!conn) die("connessione a ubus fallita");
+if (!conn) die("connection to ubus failed");
 
 conn.publish('traveld', {
 	status: {
@@ -1003,7 +1028,9 @@ conn.publish('traveld', {
 				settings: g,
 				networks: engineState(),
 				events: events,
-				last_error: lastError
+				last_error: lastError,
+				last_error_code: lastErrorCode,
+				last_error_params: lastErrorParams
 			};
 		},
 		// `ubus_rpc_session` va DICHIARATO, non solo tollerato.
@@ -1038,10 +1065,12 @@ conn.publish('traveld', {
 		call: function(request) {
 			let network = request.args.network;
 			if (!network || network === "")
-				return { error: "manca il nome della WAN" };
+				return { error: "missing WAN name", error_code: "missing_wan" };
 
 			let result = probePortal(network);
-			return result ? result : { error: lastError ? lastError : "probe fallito" };
+			return result ? result : (lastError
+				? { error: lastError, error_code: lastErrorCode, error_params: lastErrorParams }
+				: { error: "probe failed", error_code: "probe_failed" });
 		},
 		args: { network: "", ubus_rpc_session: "" }
 	},
@@ -1051,7 +1080,7 @@ conn.publish('traveld', {
 			fails = {};
 			nextTry = {};
 			blacklist = {};
-			note('reset', "contatori e blacklist azzerati a mano");
+			note('reset', "counters and blacklist reset by hand", 'reset');
 			return { reset: true };
 		},
 		args: { scope: "", ubus_rpc_session: "" }
@@ -1121,7 +1150,9 @@ conn.publish('traveld', {
 				// vuole ritrovare sotto gli occhi mentre si guarda altro.
 				killswitch: killswitchState(),
 				events: events,
-				last_error: lastError
+				last_error: lastError,
+				last_error_code: lastErrorCode,
+				last_error_params: lastErrorParams
 			};
 		},
 		args: { detail: "", ubus_rpc_session: "" }
@@ -1135,7 +1166,7 @@ uloop.timer(SAMPLE_MS, function() {
 		sampleTraffic();
 	}
 	catch (e) {
-		lastError = "campionamento fallito: " + e;
+		setError("sample_failed", "sampling failed: " + e, { error: "" + e });
 	}
 
 	this.set(SAMPLE_MS);
@@ -1149,7 +1180,7 @@ uloop.timer(PORTAL_TICK_MS, function() {
 		portalRound();
 	}
 	catch (e) {
-		lastError = "verifica dei portali interrotta: " + e;
+		setError("portal_loop_failed", "portal check interrupted: " + e, { error: "" + e });
 	}
 
 	this.set(PORTAL_TICK_MS);
@@ -1163,7 +1194,7 @@ uloop.timer(KILLSWITCH_TICK_MS, function() {
 		killswitchRound();
 	}
 	catch (e) {
-		lastError = "controllo del kill switch interrotto: " + e;
+		setError("killswitch_check_failed", "kill switch check interrupted: " + e, { error: "" + e });
 	}
 
 	this.set(KILLSWITCH_TICK_MS);
@@ -1176,8 +1207,8 @@ uloop.timer(TICK_MS, function() {
 		evaluate();
 	}
 	catch (e) {
-		lastError = "giro di controllo interrotto: " + e;
-		note('errore', lastError);
+		setError("loop_failed", "control loop interrupted: " + e, { error: "" + e });
+		note('errore', lastError, lastErrorCode, lastErrorParams);
 	}
 
 	this.set(TICK_MS);

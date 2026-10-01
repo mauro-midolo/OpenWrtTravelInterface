@@ -19,6 +19,8 @@ import {
 } from '../lib/vpn';
 import type { WgFields, WgProfile, WgState } from '../lib/vpn';
 import { hostPortJoin } from '../lib/ip';
+import { commonText } from '../i18n/common';
+import { wgText } from '../i18n/wireguard';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -38,7 +40,7 @@ function summary(profile: WgProfile): string {
   // diverso e valido. La funzione e' idempotente sulle parentesi apposta.
   const endpoint = config.endpoint
     ? hostPortJoin(config.endpoint, config.port || '51820')
-    : 'senza endpoint';
+    : wgText().noEndpoint;
   return config.addresses ? `${endpoint} · ${config.addresses.trim()}` : endpoint;
 }
 
@@ -60,6 +62,7 @@ function FieldsForm({
   hasPreshared: boolean;
   onChange: (patch: Partial<WgFields>) => void;
 }) {
+  const t = wgText();
   const text = (
     key: keyof WgFields,
     label: string,
@@ -92,45 +95,45 @@ function FieldsForm({
 
   return (
     <>
-      {text('name', 'Nome', 'es. casa, ufficio, provider svizzero')}
-      {text('addresses', 'Indirizzi dell’interfaccia', '10.66.0.2/32')}
-      {text('peer_key', 'Chiave pubblica del peer', 'PublicKey del [Peer]')}
+      {text('name', t.name, t.namePlaceholder)}
+      {text('addresses', t.addresses, '10.66.0.2/32')}
+      {text('peer_key', t.peerKey, t.peerKeyPlaceholder)}
       {text(
         'endpoint',
-        'Endpoint',
+        t.endpoint,
         'vpn.example.com',
         undefined,
         wgEndpointProblem(fields.endpoint),
       )}
-      {text('port', 'Porta', '51820')}
-      {text('allowed_ips', 'Instradato nel tunnel', '0.0.0.0/0')}
-      {text('dns', 'DNS', 'vuoto per non cambiarli')}
-      {text('mtu', 'MTU', 'vuoto per il valore automatico')}
-      {text('keepalive', 'Keepalive (secondi)', '25')}
+      {text('port', t.port, '51820')}
+      {text('allowed_ips', t.allowedIps, '0.0.0.0/0')}
+      {text('dns', t.dns, t.dnsPlaceholder)}
+      {text('mtu', t.mtu, t.mtuPlaceholder)}
+      {text('keepalive', t.keepalive, '25')}
 
       {/* I segreti non escono mai dal router, quindi il campo parte vuoto e
           vuoto vuol dire "lascia quello che c'è": è la stessa regola della
           password del WiFi, e per la stessa ragione. */}
       <label class="field">
-        <span>Chiave privata</span>
+        <span>{t.privateKey}</span>
         <input
           type="password"
           value={fields.private_key}
           autocomplete="new-password"
-          placeholder={hasPrivateKey ? 'lascia vuoto per non cambiarla' : 'obbligatoria'}
+          placeholder={hasPrivateKey ? t.keepKey : t.required}
           onInput={(e) => onChange({ private_key: (e.target as HTMLInputElement).value })}
         />
-        {!hasPrivateKey && <span class="muted">Manca: senza, il tunnel non può salire.</span>}
+        {!hasPrivateKey && <span class="muted">{t.missingKey}</span>}
       </label>
 
       <label class="field">
-        <span>Chiave precondivisa</span>
+        <span>{t.presharedKey}</span>
         <input
           type="password"
           value={fields.preshared_key}
           autocomplete="new-password"
           disabled={fields.drop_preshared}
-          placeholder={hasPreshared ? 'lascia vuoto per non cambiarla' : 'facoltativa'}
+          placeholder={hasPreshared ? t.keepKey : t.optional}
           onInput={(e) => onChange({ preshared_key: (e.target as HTMLInputElement).value })}
         />
       </label>
@@ -147,7 +150,7 @@ function FieldsForm({
             checked={fields.drop_preshared}
             onChange={(e) => onChange({ drop_preshared: (e.target as HTMLInputElement).checked })}
           />
-          <span>Togli la chiave precondivisa</span>
+          <span>{t.dropPreshared}</span>
         </label>
       )}
     </>
@@ -194,6 +197,8 @@ function ImportSheet({
   profile: WgProfile | null;
   onClose: (changed: boolean) => void;
 }) {
+  const t = wgText();
+  const actions = commonText().actions;
   const [name, setName] = useState(profile?.named ? profile.name : '');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -214,14 +219,14 @@ function ImportSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>{profile ? `Reimporta «${profile.name}»` : 'Nuova configurazione'}</h2>
+        <h2>{profile ? t.reimportTitle(profile.name) : t.newConfig}</h2>
 
         <label class="field">
-          <span>Nome</span>
+          <span>{t.name}</span>
           <input
             type="text"
             value={name}
-            placeholder="es. casa, ufficio, provider svizzero"
+            placeholder={t.namePlaceholder}
             autocapitalize="none"
             autocomplete="off"
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
@@ -229,7 +234,7 @@ function ImportSheet({
         </label>
 
         <label class="field">
-          <span>Incolla il file .conf del provider</span>
+          <span>{t.paste}</span>
           <textarea
             rows={10}
             value={text}
@@ -245,14 +250,14 @@ function ImportSheet({
 
         <div class="sheet__actions">
           <button class="button button--ghost" disabled={busy} onClick={() => onClose(false)}>
-            Annulla
+            {actions.cancel}
           </button>
           <button
             class="button button--primary"
             disabled={busy || name.trim() === '' || text.trim() === ''}
             onClick={() => void go()}
           >
-            {busy ? 'Importo…' : profile ? 'Sostituisci' : 'Salva'}
+            {busy ? t.importing : profile ? t.replace : actions.save}
           </button>
         </div>
       </div>
@@ -286,6 +291,8 @@ function ToggleSheet({
   on: boolean;
   onClose: (c: boolean) => void;
 }) {
+  const t = wgText();
+  const actions = commonText().actions;
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -306,26 +313,24 @@ function ToggleSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>
-          {on ? 'Attiva' : 'Disattiva'} «{profile.name}»
-        </h2>
+        <h2>{t.toggleTitle(on, profile.name)}</h2>
 
         {!done && (
           <>
             <p class="alert alert--warn">
               {on
-                ? 'Tutto il traffico dei client uscirà da questo tunnel.'
-                : 'Il traffico tornerà a uscire direttamente dalla rete a cui sei collegato.'}
+                ? t.onWarn
+                : t.offWarn}
             </p>
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
             <div class="sheet__actions">
               <button class="button button--ghost" disabled={busy} onClick={() => onClose(false)}>
-                {error ? 'Chiudi' : 'Annulla'}
+                {error ? actions.close : actions.cancel}
               </button>
               <button class="button button--primary" disabled={busy} onClick={() => void go()}>
-                {busy ? 'Applico…' : 'Procedi'}
+                {busy ? t.applying : actions.proceed}
               </button>
             </div>
           </>
@@ -333,10 +338,10 @@ function ToggleSheet({
 
         {done && (
           <>
-            <p class="alert alert--ok">Fatto.</p>
+            <p class="alert alert--ok">{actions.done}</p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -365,6 +370,8 @@ function ProfileSheet({
   wg: WgState;
   onClose: (changed: boolean) => void;
 }) {
+  const t = wgText();
+  const actions = commonText().actions;
   const [mode, setMode] = useState<Mode>('menu');
   const [fields, setFields] = useState<WgFields>(() => fieldsOf(profile));
   const [busy, setBusy] = useState(false);
@@ -422,25 +429,19 @@ function ProfileSheet({
           <>
             <p class="muted">{summary(profile)}</p>
 
-            {profile.active && <p class="alert alert--ok">È la configurazione attiva.</p>}
+            {profile.active && <p class="alert alert--ok">{t.isActive}</p>}
 
             {!profile.named && (
-              <p class="alert alert--info">
-                Questa configurazione non ha un nome: dagliene uno da Modifica.
-              </p>
+              <p class="alert alert--info">{t.unnamed}</p>
             )}
 
             {/* Il vincolo, detto prima che si provi. Il router lo rifiuterebbe
                 comunque, ma scoprirlo dopo aver premuto è un giro a vuoto. */}
             {!profile.active && other && !locked && (
-              <p class="alert alert--info">
-                Per attivare questa devi prima disattivare «{other.name}».
-              </p>
+              <p class="alert alert--info">{t.deactivateFirst(other.name)}</p>
             )}
             {!profile.active && !other && !locked && isBlocked && (
-              <p class="alert alert--info">
-                Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}.
-              </p>
+              <p class="alert alert--info">{t.blocked(blockReason(wg.policy, 'wireguard'))}</p>
             )}
 
             {/* Il divieto della levetta viene prima di tutti gli altri: quando
@@ -448,8 +449,8 @@ function ProfileSheet({
             {locked && (
               <p class="alert alert--info">
                 {byToggle?.id === profile.id
-                  ? 'Questa configurazione segue l’interruttore fisico.'
-                  : `L’interruttore fisico comanda «${byToggle?.name ?? 'una configurazione'}».`}
+                  ? t.followsSwitch
+                  : t.switchControls(byToggle?.name ?? t.aConfig)}
               </p>
             )}
 
@@ -466,34 +467,34 @@ function ProfileSheet({
                 }
                 onClick={() => setMode('toggle')}
               >
-                {profile.active ? 'Disattiva' : 'Attiva'}
+                {profile.active ? t.deactivate : t.activate}
               </button>
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('edit')}>
-                Modifica
+                {t.edit}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy}
                 onClick={() => setMode('reimport')}
               >
-                Reimporta
+                {t.reimport}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy || profile.active}
                 onClick={() => setMode('delete')}
               >
-                Elimina
+                {t.remove}
               </button>
             </div>
 
             {profile.active && (
-              <p class="muted">Per eliminarla, disattivala prima.</p>
+              <p class="muted">{t.deactivateToDelete}</p>
             )}
 
             <div class="sheet__actions">
               <button class="button button--ghost" disabled={busy} onClick={() => onClose(false)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -509,16 +510,14 @@ function ProfileSheet({
             />
 
             {profile.active && (
-              <p class="alert alert--warn">
-                Configurazione attiva: salvando, il traffico si interrompe per qualche secondo.
-              </p>
+              <p class="alert alert--warn">{t.activeSaveWarn}</p>
             )}
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
             <div class="sheet__actions">
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('menu')}>
-                Indietro
+                {actions.back}
               </button>
               <button
                 class="button button--primary"
@@ -527,7 +526,7 @@ function ProfileSheet({
                   void guard(() => wgSave(profile.id, { ...fields, name: fields.name.trim() }))
                 }
               >
-                {busy ? 'Salvo…' : 'Salva'}
+                {busy ? t.saving : actions.save}
               </button>
             </div>
           </>
@@ -535,22 +534,20 @@ function ProfileSheet({
 
         {mode === 'delete' && (
           <>
-            <p class="alert alert--warn">
-              Elimini «{profile.name}» e la sua chiave privata?
-            </p>
+            <p class="alert alert--warn">{t.confirmDelete(profile.name)}</p>
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
             <div class="sheet__actions">
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('menu')}>
-                Indietro
+                {actions.back}
               </button>
               <button
                 class="button button--primary"
                 disabled={busy}
                 onClick={() => void guard(() => wgDelete(profile.id))}
               >
-                {busy ? 'Elimino…' : 'Elimina'}
+                {busy ? t.deleting : t.remove}
               </button>
             </div>
           </>
@@ -579,6 +576,7 @@ export function WireGuardCard({
   wg: WgState;
   onChanged: () => void;
 }) {
+  const t = wgText();
   const [adding, setAdding] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
 
@@ -605,18 +603,12 @@ export function WireGuardCard({
   // quante ce ne sono. L'ordine non è casuale — la prima è quella che cambia
   // cosa sta succedendo adesso.
   const subtitle = !wg.installed
-    ? 'non installato'
+    ? t.notInstalled
     : profiles.length === 0
-      ? 'nessuna configurazione salvata'
+      ? t.noneSaved
       : active
-        ? `${active.name} · ${
-            carrying
-              ? 'attiva'
-              : alive
-                ? 'attiva, ma il traffico non ci entra'
-                : 'attiva, ma il peer non risponde'
-          }`
-        : `nessuna attiva · ${profiles.length} salvat${profiles.length === 1 ? 'a' : 'e'}`;
+        ? `${active.name} · ${carrying ? t.active : alive ? t.activeNoTraffic : t.activeNoPeer}`
+        : t.noneActive(profiles.length);
 
   const openProfile = picked ? (profiles.find((p) => p.id === picked) ?? null) : null;
 
@@ -627,34 +619,28 @@ export function WireGuardCard({
           <h2 class="uplink__title">WireGuard</h2>
           <p class="muted">{subtitle}</p>
         </div>
-        {carrying && <span class="badge badge--ok">porta il traffico</span>}
+        {carrying && <span class="badge badge--ok">{t.carries}</span>}
       </header>
 
       {!wg.installed && (
-        <p class="alert alert--warn">
-          Il pacchetto <code>wireguard-tools</code> non è installato.
-        </p>
+        <p class="alert alert--warn">{t.missingPackage}</p>
       )}
 
       {/* Il vincolo esterno, detto una volta sola sulla scheda: dentro al
           foglio di un profilo si ripete solo quando lì si sta per premere. */}
       {!active && isBlocked && !locked && profiles.length > 0 && (
-        <p class="alert alert--info">
-          Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}.
-        </p>
+        <p class="alert alert--info">{t.blocked(blockReason(wg.policy, 'wireguard'))}</p>
       )}
 
       {/* Chi comanda si dice qui, non solo dentro al foglio di un profilo: chi
           apre la scheda per capire perché il tunnel si è acceso da solo deve
           trovarne la ragione senza doverla cercare. */}
       {locked && (
-        <p class="alert alert--info">
-          <strong>{byToggle?.name ?? wg.toggle}</strong> segue l’interruttore fisico.
-        </p>
+        <p class="alert alert--info">{t.lockedBy(byToggle?.name ?? wg.toggle ?? '')}</p>
       )}
 
       {profiles.length === 0 ? (
-        <p class="muted">Nessuna configurazione.</p>
+        <p class="muted">{t.noConfigs}</p>
       ) : (
         <ul class="list list--flush">
           {profiles.map((profile) => (
@@ -665,7 +651,7 @@ export function WireGuardCard({
                   <span class="net__meta">{summary(profile)}</span>
                 </span>
                 <span class="net__side">
-                  {profile.active && <span class="badge badge--ok">attiva</span>}
+                  {profile.active && <span class="badge badge--ok">{t.active}</span>}
                 </span>
               </button>
             </li>
@@ -679,9 +665,9 @@ export function WireGuardCard({
       {active && (
         <>
           <h3 class="group__title">{active.name}</h3>
-          <Row label="Ultimo handshake" value={handshakeAge(wg.status)} />
+          <Row label={t.lastHandshake} value={handshakeAge(wg.status)} />
           <Row
-            label="Traffico"
+            label={t.traffic}
             value={`↓ ${formatWgBytes(wg.status.rx)}   ↑ ${formatWgBytes(wg.status.tx)}`}
           />
 
@@ -691,20 +677,19 @@ export function WireGuardCard({
               c'è qualcosa che non va: quando la catena è intera, non serve. */}
           {wg.routing && broken.length > 0 && (
             <>
-              <h3 class="group__title">Il traffico entra nel tunnel?</h3>
+              <h3 class="group__title">{t.entersTunnel}</h3>
               {steps.map((step) => (
                 <div key={step.label} class="node">
                   <span
                     class={step.ok ? 'dot dot--on' : 'dot'}
                     role="img"
-                    aria-label={step.ok ? 'a posto' : 'manca'}
+                    aria-label={step.ok ? t.ok : t.missing}
                   />
                   <span class="node__name">{step.label}</span>
                 </div>
               ))}
               <p class="alert alert--warn">
-                Il tunnel è su ma <strong>il traffico dei client non ci entra</strong>:{' '}
-                {broken.map((s) => s.fix).join(' · ')}
+                {t.notEntering(broken.map((s) => s.fix).join(' · '))}
               </p>
             </>
           )}
@@ -715,8 +700,7 @@ export function WireGuardCard({
               dell'interfaccia. */}
           {!alive && (
             <p class="alert alert--warn">
-              Il tunnel è acceso ma <strong>l'ultimo handshake non è recente</strong>: il peer
-              non sta rispondendo.
+              {t.staleHandshake}
             </p>
           )}
         </>
@@ -724,7 +708,7 @@ export function WireGuardCard({
 
       <div class="radio__actions">
         <button class="button button--ghost" onClick={() => setAdding(true)}>
-          Aggiungi configurazione
+          {t.add}
         </button>
       </div>
 

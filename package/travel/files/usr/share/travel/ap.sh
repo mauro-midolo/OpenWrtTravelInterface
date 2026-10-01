@@ -11,7 +11,19 @@
 # Qui dentro non si stampa JSON e non si convalida niente che arrivi dal
 # browser: quello resta al plugin, che di questo file e' il primo cliente.
 
-ap_error() { printf '%s\n' "$*" >&2; }
+# Il motivo esce su stderr, com'e' sempre stato: e' quello che finisce nei log.
+# Il primo argomento e' un codice stabile e i seguenti, dopo il messaggio, coppie
+# chiave/valore: se chi chiama ha indicato un file in TRAVEL_ERR_FILE - l'rpcd,
+# per mostrare l'errore nella lingua dell'interfaccia - ci finiscono una per
+# riga, il codice per primo.
+ap_error() {
+	_err_code="$1"
+	shift
+	printf '%s\n' "$1" >&2
+	shift
+	[ -z "${TRAVEL_ERR_FILE:-}" ] || printf '%s\n' "$_err_code" "$@" > "$TRAVEL_ERR_FILE"
+	return 0
+}
 
 # --- Dove sta l'access point --------------------------------------------------
 
@@ -125,11 +137,11 @@ ap_switch() {
 
 	case "$want" in
 		on|off) ;;
-		*) ap_error "stato dell'access point non valido"; return 1 ;;
+		*) ap_error ap_bad_state "invalid access point state"; return 1 ;;
 	esac
 
 	section=$(ap_section_of_band "$band") || {
-		ap_error "nessun access point configurato sulla banda $band GHz"
+		ap_error ap_none "no access point configured on the $band GHz band" band "$band"
 		return 1
 	}
 
@@ -147,7 +159,8 @@ ap_switch() {
 		# Spegnere invece resta sempre lecito - il verso pericoloso e' uno solo.
 		case "$(uci -q get "wireless.$section.encryption")" in
 			''|none)
-				ap_error "l'access point $section sulla banda $band GHz e' senza password: non lo accendo. Configuralo con tools/setup-ap.sh"
+				ap_error ap_open "the access point $section on the $band GHz band has no password: not turning it on. Configure it with tools/setup-ap.sh" \
+					section "$section" band "$band"
 				return 1
 				;;
 		esac

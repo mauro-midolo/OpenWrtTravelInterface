@@ -101,7 +101,7 @@ fi
 #
 # Due STA agganciate alla stessa interfaccia logica si contendono lo stesso
 # indirizzo e una delle due resta senza: sono due uplink distinti, con IP,
-# gateway, DNS e - in Fase 3 - metrica di route separati.
+# gateway, DNS e metrica di route separati.
 #
 # Non hanno un device proprio: e' la wifi-iface in modo sta che si aggancia
 # tramite `option network <nome>`.
@@ -510,7 +510,7 @@ if [ "$NEED_TRAVEL_COMMIT" = "1" ]; then
 fi
 
 # Porta USB alla massima velocita' che il dispositivo collegato sa negoziare
-# (Fase 3d). La limitazione a USB 2.0 esiste ancora come interruttore nella
+# La limitazione a USB 2.0 esiste ancora come interruttore nella
 # scheda Dispositivo, ma non e' piu' il default: nella sessione in cui era nata,
 # lo stack USB del telefono era incantato e a risolvere e' stato un suo riavvio.
 # Con il telefono sano la SuperSpeed non e' mai stata riprovata, e non si paga
@@ -599,7 +599,7 @@ else
 	say "driver per il tethering USB caricati"
 fi
 
-# Multi-WAN (Fase 3): installazione e configurazione generata. Non blocca il
+# Multi-WAN: installazione e configurazione generata. Non blocca il
 # resto se manca Internet: lo script lo dice e si esce puliti.
 chmod 0755 /usr/share/travel/mwan3-setup.sh
 say "multi-WAN"
@@ -691,7 +691,7 @@ if [ "$NEED_IPV6_NETWORK_RELOAD" = "1" ]; then
 	/etc/init.d/network reload >/dev/null 2>&1
 fi
 
-# VPN (Fase 6a): tailscale e la regola del kill switch. Come per il multi-WAN,
+# VPN: tailscale e la regola del kill switch. Come per il multi-WAN,
 # la mancanza di Internet non blocca il resto: lo script lo dice ed esce.
 say "VPN"
 sh /usr/share/travel/vpn-setup.sh

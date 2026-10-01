@@ -58,8 +58,6 @@ nelle Impostazioni, purché rete e uhttpd funzionino.
 
 ## Frontend e funzionalità implementate
 
-<a id="fasi"></a>
-
 Il frontend usa Preact 10, TypeScript e Vite 5. `src/app.tsx` gestisce login e
 navigazione con stato locale, montando solo la schermata selezionata. La scheda
 iniziale è WiFi. Le cinque schede nella barra inferiore sono:
@@ -76,6 +74,39 @@ iniziale è WiFi. Le cinque schede nella barra inferiore sono:
 di scrittura UCI. `src/screens/` contiene schermate e pannelli;
 `src/components/` raccoglie i controlli condivisi per hostname e stato di
 apply. Lo stile è in `src/style.css`.
+
+### Lingue
+
+L'interfaccia è in italiano e in inglese. `src/i18n/index.ts` tiene la lingua
+corrente: al primo accesso è la prima di `navigator.languages` che sia `it` o
+`en`, altrimenti l'inglese; una scelta fatta dal menu (pagina di accesso o
+Impostazioni) si salva in `localStorage` (`travel.lang`) e vince sul browser.
+Il cambio aggiorna `<html lang>` e fa ridisegnare l'albero da `main.tsx`, senza
+perdere lo stato delle schermate. Date e orari usano il locale della lingua
+scelta.
+
+I testi sono oggetti TypeScript, uno per area (`common`, `wifi`, `lan`, `vpn`,
+`settings`, …), definiti con `defineText({ it, en })`: il tipo dell'inglese è
+quello dell'italiano, quindi una chiave dimenticata non compila. Le funzioni di
+`src/lib/` che producono testi (etichette, validazioni, motivi) leggono gli
+stessi dizionari, nella lingua del momento. Nessuna libreria esterna: il
+pacchetto resta piccolo per la flash del router.
+
+Il router scrive le sue frasi in inglese, che restano nei log e valgono come
+ripiego. Accanto alla frase manda un codice stabile:
+
+- il plugin rpcd risponde con `error`, `error_code` ed `error_params`
+  (`fail_code`); gli helper `led.sh`, `toggle.sh`, `wg.sh` e `ap.sh` scrivono
+  il codice nel file indicato da `TRAVEL_ERR_FILE`, e `fail_helper` lo aggiunge
+  alla risposta;
+- `profile_apply` accompagna la `note` con `note_code` e `note_params`;
+- `traveld` aggiunge `code` e `params` agli eventi e `last_error_code` /
+  `last_error_params` all'ultimo errore.
+
+Il frontend ricompone la frase dal codice, in italiano o in inglese
+(`src/i18n/backend.ts`, `src/i18n/auto.ts`); un codice sconosciuto ricade sulla
+frase inglese del router. Anche
+i motivi per cui un'opzione VPN è bloccata si ricompongono da `blocked_by`.
 
 ### Sessioni, permessi e segreti
 
@@ -1428,7 +1459,8 @@ dal frontend.
 | `traveld` | Stato e automazioni | `status`, `dashboard`, `reset`, `portal`, `portal_check` |
 
 Le risposte possono contenere errori applicativi nel campo `error`, oltre
-ai codici ubus. Non tutti i metodi restituiscono un diff, sono idempotenti
+ai codici ubus; dalla versione 1.11 il campo è accompagnato da `error_code` ed
+`error_params` (vedi [Lingue](#lingue)). Non tutti i metodi restituiscono un diff, sono idempotenti
 o condividono lo stesso meccanismo di rollback.
 
 ## Build, installazione e dipendenze
@@ -1519,8 +1551,7 @@ né una roadmap approvata.
 
 ### Debiti tecnici e verifiche da completare
 
-- **Documentazione operativa:** `README.md` conserva riferimenti alle fasi;
-  `recovery.md` descrive ancora spostamento automatico degli AP, timeout
+- **Documentazione operativa:** `recovery.md` descrive ancora spostamento automatico degli AP, timeout
   uniforme di 90 secondi, un archivio `lastgood` non creato dal codice e
   disinstallazione come pacchetto. La procedura va riallineata prima di
   usarla come riferimento operativo.
@@ -1572,7 +1603,7 @@ né una roadmap approvata.
   per funzione, e disinstallazione completa dei file copiati e delle
   configurazioni generate.
 - Versione della UI/plugin e del daemon unificata, oggi mantenuta separatamente,
-  e pulizia dei commenti che riportano fasi o comportamenti superati.
+  e pulizia dei commenti che riportano comportamenti superati.
 - Country code e altre impostazioni radio dalla UI, mantenendo i controlli
   dell'accesso locale durante le riconfigurazioni.
 - Eventuali storico del traffico, vista conntrack/top talker, registro eventi

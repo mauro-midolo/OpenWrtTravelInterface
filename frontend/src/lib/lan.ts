@@ -14,6 +14,7 @@
  * raggiungibile.
  */
 
+import { lanText } from '../i18n/lan';
 import { call } from './ubus';
 import { isValidIp, overlaps, parseIp, sortKey, subnetOfMask } from './ip';
 import { normalizeMac } from './wifi';
@@ -113,18 +114,30 @@ export interface RaOption {
 export const RA_OPTIONS: RaOption[] = [
   {
     id: 'auto',
-    label: 'Automatico (consigliato)',
-    hint: 'SLAAC e DHCPv6 insieme. E’ il default di OpenWrt, ed e’ l’unica combinazione in cui Android — che fa solo SLAAC — e Windows — che preferisce DHCPv6 — funzionano entrambi.',
+    get label() {
+      return lanText().lib.ra.auto.label;
+    },
+    get hint() {
+      return lanText().lib.ra.auto.hint;
+    },
   },
   {
     id: 'slaac',
-    label: 'Solo SLAAC',
-    hint: 'I dispositivi si scelgono l’indirizzo da soli. Il router non ne assegna e non ne tiene un elenco.',
+    get label() {
+      return lanText().lib.ra.slaac.label;
+    },
+    get hint() {
+      return lanText().lib.ra.slaac.hint;
+    },
   },
   {
     id: 'off',
-    label: 'Spento',
-    hint: 'Nessun annuncio IPv6 ai dispositivi. E’ la risposta a “IPv6 mi ha rotto la connessione in albergo”.',
+    get label() {
+      return lanText().lib.ra.off.label;
+    },
+    get hint() {
+      return lanText().lib.ra.off.hint;
+    },
   },
 ];
 
@@ -359,16 +372,40 @@ const PROVIDERS: DnsProvider[] = [
 
 /** Opzioni per i DNS annunciati ai dispositivi: l'automatico e' il router. */
 export const CLIENT_DNS_OPTIONS: DnsProvider[] = [
-  { id: 'auto', label: 'Automatico / Router', servers: [] },
+  {
+    id: 'auto',
+    get label() {
+      return lanText().lib.autoRouter;
+    },
+    servers: [],
+  },
   ...PROVIDERS,
-  { id: 'custom', label: 'Personalizzato', servers: [] },
+  {
+    id: 'custom',
+    get label() {
+      return lanText().lib.custom;
+    },
+    servers: [],
+  },
 ];
 
 /** Opzioni per i resolver del router: l'automatico sono quelli della WAN. */
 export const ROUTER_DNS_OPTIONS: DnsProvider[] = [
   ...PROVIDERS,
-  { id: 'auto', label: 'Automatico / DNS della WAN', servers: [] },
-  { id: 'custom', label: 'Personalizzato', servers: [] },
+  {
+    id: 'auto',
+    get label() {
+      return lanText().lib.autoWan;
+    },
+    servers: [],
+  },
+  {
+    id: 'custom',
+    get label() {
+      return lanText().lib.custom;
+    },
+    servers: [],
+  },
 ];
 
 /**
@@ -504,19 +541,19 @@ export interface PoolProblem {
  */
 export function checkPool(address: string, from: number, to: number): PoolProblem | null {
   if (!Number.isInteger(from) || !Number.isInteger(to)) {
-    return { message: 'I due valori devono essere numeri.' };
+    return { message: lanText().lib.poolNotNumbers };
   }
   if (from < 2 || from > 254 || to < 2 || to > 254) {
-    return { message: 'I valori devono stare fra 2 e 254.' };
+    return { message: lanText().lib.poolRange };
   }
   if (from > to) {
-    return { message: 'Il primo valore deve essere minore o uguale al secondo.' };
+    return { message: lanText().lib.poolOrder };
   }
 
   const octet = lastOctet(address);
   if (octet !== null && octet >= from && octet <= to) {
     return {
-      message: `L'indirizzo del router (.${octet}) cadrebbe dentro il pool: il DHCP lo assegnerebbe a un dispositivo.`,
+      message: lanText().lib.poolHasRouter(octet),
     };
   }
   return null;
@@ -565,7 +602,8 @@ export async function stageLan(
     }
   };
 
-  await write('indirizzo della rete locale', {
+  const t = lanText().lib;
+  await write(t.writeLanAddress, {
     config: 'network',
     section: 'lan',
     values: { ipaddr: addresses, netmask: LAN_NETMASK },
@@ -573,7 +611,7 @@ export async function stageLan(
 
   // uci vuole il primo indirizzo e QUANTI, non l'ultimo: la conversione si fa
   // qui una volta sola, cosi' l'interfaccia puo' parlare di "da" e "a".
-  await write('intervallo DHCP', {
+  await write(t.writePool, {
     config: 'dhcp',
     section: 'lan',
     values: {
@@ -604,7 +642,7 @@ export async function stageLan(
       settings.dnsClient.length > 0 ? [...others, `6,${settings.dnsClient.join(',')}`] : others;
 
     if (options.length > 0) {
-      await write('DNS annunciati ai dispositivi', {
+      await write(t.writeClientDns, {
         config: 'dhcp',
         section: 'lan',
         values: { dhcp_option: options },
@@ -616,7 +654,7 @@ export async function stageLan(
 
   if (settings.dnsClient6 !== null) {
     if (settings.dnsClient6.length > 0) {
-      await write('DNS IPv6 annunciati ai dispositivi', {
+      await write(t.writeClientDns6, {
         config: 'dhcp',
         section: 'lan',
         values: { dns: settings.dnsClient6 },
@@ -633,7 +671,7 @@ export async function stageLan(
   // buttare via una scelta fatta altrove senza che nessuno l'abbia chiesto.
   if (settings.raMode !== 'custom') {
     const ra = raValues(settings.raMode);
-    await write('annunci IPv6 ai dispositivi', {
+    await write(t.writeRa, {
       config: 'dhcp',
       section: 'lan',
       // `ra_default` resta fisso a 0 e non ha un interruttore. A 1 il router si
@@ -646,7 +684,7 @@ export async function stageLan(
     if (ra.ra_flags === null) {
       await clear('dhcp', 'lan', 'ra_flags');
     } else {
-      await write('annunci IPv6 ai dispositivi', {
+      await write(t.writeRa, {
         config: 'dhcp',
         section: 'lan',
         values: { ra_flags: ra.ra_flags },
@@ -656,7 +694,7 @@ export async function stageLan(
     if (ra.ra_slaac === null) {
       await clear('dhcp', 'lan', 'ra_slaac');
     } else {
-      await write('annunci IPv6 ai dispositivi', {
+      await write(t.writeRa, {
         config: 'dhcp',
         section: 'lan',
         values: { ra_slaac: ra.ra_slaac },
@@ -668,7 +706,7 @@ export async function stageLan(
   // riga di comando ma non e' quello che accetta `uci set` via ubus.
   if (current.dnsmasq_section && settings.dnsUpstream !== null) {
     if (settings.dnsUpstream.length > 0) {
-      await write('DNS usati dal router', {
+      await write(t.writeRouterDns, {
         config: 'dhcp',
         section: current.dnsmasq_section,
         values: { server: settings.dnsUpstream },
@@ -870,7 +908,7 @@ export async function stageEthPort(
   port: EthPort,
   target: PortMode,
 ): Promise<void> {
-  if (!info.bridge_section) throw new Error('Nessun bridge br-lan trovato nella configurazione.');
+  if (!info.bridge_section) throw new Error(lanText().lib.noBridge);
 
   const ports = info.bridge_ports.filter((p) => p !== port.name);
   if (target === 'lan') ports.push(port.name);
@@ -968,7 +1006,7 @@ export async function stageEthPort(
   }
 }
 
-// --- Dispositivi collegati (Fase 7) -------------------------------------------
+// --- Dispositivi collegati ----------------------------------------------------
 
 export interface LanClient {
   mac: string;
@@ -1089,8 +1127,8 @@ export function clientDetail(client: LanClient): string {
   const parts: string[] = [];
   const address = clientAddress(client);
 
-  if (client.name) parts.push(address || 'senza indirizzo');
-  else if (!address) parts.push('senza indirizzo');
+  if (client.name) parts.push(address || lanText().lib.noAddress);
+  else if (!address) parts.push(lanText().lib.noAddress);
 
   // Gli altri indirizzi v6 si contano, non si elencano. Con le estensioni di
   // privacy un telefono ne ha tre o quattro contemporaneamente, e stamparli
@@ -1117,6 +1155,6 @@ export function clientLink(client: LanClient): string {
   if (client.via === 'wifi') {
     return client.band ? `Access point ${client.band} GHz` : 'Access point';
   }
-  if (client.via === 'ethernet') return client.iface || 'Cavo';
-  return 'non determinata';
+  if (client.via === 'ethernet') return client.iface || lanText().lib.cable;
+  return lanText().lib.unknownLink;
 }

@@ -1,4 +1,6 @@
 import type { Apply } from '../lib/apply';
+import { commonText } from '../i18n/common';
+import { componentsText } from '../i18n/components';
 
 /**
  * Le fasi comuni a ogni modifica rischiosa: attesa, ritorno indietro, errore.
@@ -6,21 +8,20 @@ import type { Apply } from '../lib/apply';
  * perche' entrambe possono chiudere fuori chi le sta lanciando.
  */
 export function ApplyStatus({ apply, onClose }: { apply: Apply; onClose: () => void }) {
+  const t = componentsText().apply;
+  const close = commonText().actions.close;
   if (apply.phase === 'applying') {
-    return <p class="muted">Applico la configurazione…</p>;
+    return <p class="muted">{t.applying}</p>;
   }
 
   if (apply.phase === 'waiting') {
     return (
       <>
         <p class="countdown">{apply.left}s</p>
-        <p class="muted">
-          Se la pagina non risponde, allo scadere il router torna alla configurazione
-          precedente.
-        </p>
+        <p class="muted">{t.waiting}</p>
         <div class="sheet__actions">
           <button class="button button--ghost" type="button" onClick={() => void apply.abort()}>
-            Annulla subito
+            {t.abort}
           </button>
         </div>
       </>
@@ -30,12 +31,10 @@ export function ApplyStatus({ apply, onClose }: { apply: Apply; onClose: () => v
   if (apply.phase === 'rolledback') {
     return (
       <>
-        <p class="alert alert--error">
-          Nessuna conferma in tempo: il router è tornato alla configurazione precedente.
-        </p>
+        <p class="alert alert--error">{t.rolledBack}</p>
         <div class="sheet__actions">
           <button class="button button--primary" onClick={onClose}>
-            Chiudi
+            {close}
           </button>
         </div>
       </>
@@ -48,7 +47,7 @@ export function ApplyStatus({ apply, onClose }: { apply: Apply; onClose: () => v
         <p class="alert alert--error alert--code">{apply.error}</p>
         <div class="sheet__actions">
           <button class="button button--primary" onClick={onClose}>
-            Chiudi
+            {close}
           </button>
         </div>
       </>

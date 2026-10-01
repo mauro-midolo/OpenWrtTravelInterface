@@ -3,6 +3,7 @@ import {
   isValidHostname,
 } from '../lib/hostname';
 import type { HostnameChoice, HostnameMode } from '../lib/hostname';
+import { hostnameText } from '../i18n/hostname';
 
 /**
  * Scelta del nome da mandare nella richiesta DHCP.
@@ -21,13 +22,14 @@ export function HostnamePicker({
   deviceHostname?: string;
   onChange: (choice: HostnameChoice) => void;
 }) {
+  const t = hostnameText();
   const invalid = choice.mode === 'custom' && choice.value !== '' && !isValidHostname(choice.value);
 
   const pick = (mode: HostnameMode) => onChange({ ...choice, mode });
 
   return (
     <div class="field">
-      <span>Nome da inviare nella richiesta DHCP</span>
+      <span>{t.field}</span>
       <div class="chips">
         {HOSTNAME_MODES.map((entry) => (
           <button
@@ -45,7 +47,7 @@ export function HostnamePicker({
         <input
           type="text"
           value={choice.value}
-          placeholder="es. laptop"
+          placeholder={t.placeholder}
           autocapitalize="none"
           autocomplete="off"
           spellcheck={false}
@@ -54,7 +56,7 @@ export function HostnamePicker({
       )}
 
       {invalid && (
-        <span class="muted">Solo lettere, cifre e trattini.</span>
+        <span class="muted">{t.invalid}</span>
       )}
 
       {choice.mode === 'device' && deviceHostname && (

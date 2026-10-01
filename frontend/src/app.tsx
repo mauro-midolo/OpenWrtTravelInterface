@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
+import { commonText } from './i18n/common';
 import { call, clearSession, hasSession } from './lib/ubus';
 import { Login } from './screens/Login';
 import { Dashboard } from './screens/Dashboard';
@@ -23,15 +24,16 @@ type Tab = 'wifi' | 'lan' | 'stato' | 'vpn' | 'impostazioni';
  * uplink, e finche' stavano in coda a "Internet" allungavano una schermata
  * che si guarda per tutt'altro motivo.
  */
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: 'wifi', label: 'WiFi' },
-  { id: 'lan', label: 'LAN' },
-  { id: 'stato', label: 'Internet' },
-  { id: 'vpn', label: 'VPN' },
-  { id: 'impostazioni', label: 'Impostazioni' },
+const TABS: Array<{ id: Tab; label: keyof ReturnType<typeof commonText>['tabs'] }> = [
+  { id: 'wifi', label: 'wifi' },
+  { id: 'lan', label: 'lan' },
+  { id: 'stato', label: 'internet' },
+  { id: 'vpn', label: 'vpn' },
+  { id: 'impostazioni', label: 'settings' },
 ];
 
 export function App() {
+  const t = commonText();
   const [phase, setPhase] = useState<Phase>('checking');
   // Il WiFi e' la schermata piu' usata: e' quella che si apre per prima.
   const [tab, setTab] = useState<Tab>('wifi');
@@ -64,7 +66,7 @@ export function App() {
   if (phase === 'checking') {
     return (
       <main class="screen screen--centered">
-        <p class="muted">Connessione al router…</p>
+        <p class="muted">{t.connecting}</p>
       </main>
     );
   }
@@ -88,7 +90,7 @@ export function App() {
             class={tab === entry.id ? 'tab tab--on' : 'tab'}
             onClick={() => setTab(entry.id)}
           >
-            {entry.label}
+            {t.tabs[entry.label]}
           </button>
         ))}
       </nav>

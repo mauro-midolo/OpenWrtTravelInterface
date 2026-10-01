@@ -251,7 +251,7 @@ describe('la levetta e gli access point WiFi', () => {
 
     const result = inAp('ap_switch 2.4 on');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('senza password');
+    expect(result.stderr).toContain('has no password');
     expect(disabled('default_radio0')).toBe('1');
 
     // Spegnere invece resta lecito: il verso pericoloso e' uno solo.
@@ -292,7 +292,7 @@ describe('la levetta e gli access point WiFi', () => {
 
     const result = run('toggle_set ap5');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('nessun access point configurato');
+    expect(result.stderr).toContain('no access point configured');
     expect(existsSync(file('etc/config/travel_toggle'))).toBe(false);
   });
 

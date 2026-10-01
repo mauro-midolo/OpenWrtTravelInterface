@@ -23,6 +23,12 @@
 
 VERSION_FILE=/usr/share/travel/version
 
+# Dove gli helper lasciano il codice dell'ultimo errore (vedi `fail_helper`).
+# Uno per processo: rpcd lancia questo script a ogni chiamata.
+TRAVEL_ERR_FILE="/tmp/.travel-err.$$"
+export TRAVEL_ERR_FILE
+trap 'rm -f "$TRAVEL_ERR_FILE"' EXIT
+
 # Legge la prima riga di un file, stringa vuota se assente o illeggibile.
 #
 # `read` esce con errore anche quando la riga l'ha letta, se il file non finisce
@@ -73,7 +79,7 @@ method_led_get() {
 		json_dump
 		return
 	fi
-	led_get || { fail_json "Impossibile leggere lo stato del LED."; return; }
+	led_get || { fail_code led_read_failed "Could not read the LED state."; return; }
 	json_init
 	json_add_boolean supported 1
 	json_add_boolean enabled "$LED_ENABLED"
@@ -83,12 +89,12 @@ method_led_get() {
 method_led_set() {
 	local input enabled type error
 	input=$(cat)
-	json_load "$input" || { fail_json "Richiesta LED non valida."; return; }
+	json_load "$input" || { fail_code led_bad_request "Invalid LED request."; return; }
 	json_get_type type enabled
 	json_get_var enabled enabled
-	[ "$type" = boolean ] || { fail_json "enabled deve essere booleano."; return; }
+	[ "$type" = boolean ] || { fail_code led_bad_enabled "enabled must be a boolean."; return; }
 	. /usr/share/travel/led.sh
-	error=$(led_set "$enabled" 2>&1) || { fail_json "$error"; return; }
+	error=$(led_set "$enabled" 2>&1) || { fail_helper "$error"; return; }
 	method_led_get
 }
 
@@ -100,7 +106,7 @@ method_led_set() {
 method_toggle_get() {
 	local action section
 	. /usr/share/travel/toggle.sh
-	toggle_get || { fail_json "Configurazione dell'interruttore non valida."; return; }
+	toggle_get || { fail_code toggle_bad_config "Invalid switch configuration."; return; }
 	toggle_position
 	json_init
 	json_add_string action "$TOGGLE_ACTION"
@@ -124,12 +130,12 @@ method_toggle_get() {
 method_toggle_set() {
 	local input action type error
 	input=$(cat)
-	json_load "$input" || { fail_json "Richiesta dell'interruttore non valida."; return; }
+	json_load "$input" || { fail_code toggle_bad_request "Invalid switch request."; return; }
 	json_get_type type action
 	json_get_var action action
-	[ "$type" = string ] || { fail_json "action deve essere una stringa."; return; }
+	[ "$type" = string ] || { fail_code toggle_bad_action_type "action must be a string."; return; }
 	. /usr/share/travel/toggle.sh
-	error=$(toggle_set "$action" 2>&1) || { fail_json "$error"; return; }
+	error=$(toggle_set "$action" 2>&1) || { fail_helper "$error"; return; }
 	method_toggle_get
 }
 
@@ -441,8 +447,8 @@ ipv6_prefix() {
 # Interfacce logiche che sono WAN, cioe' quelle nella zona firewall "wan".
 #
 # E' la definizione operativa giusta su questo router: qualunque cosa esca da
-# li' e' un uplink, e quando in Fase 3 arrivera' il tethering USB comparira' da
-# solo senza toccare questo codice.
+# li' e' un uplink, e il tethering USB compare da solo senza toccare questo
+# codice.
 wan_networks() {
 	local zone net device entry bridge ports
 	zone=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'\$/\1/p" | head -n 1)
@@ -860,7 +866,8 @@ method_scan() {
 
 	if [ -z "$radio" ]; then
 		json_init
-		json_add_string error "radio sconosciuta"
+		json_add_string error "unknown radio"
+		json_add_string error_code unknown_radio
 		json_add_array results
 		json_close_array
 		json_dump
@@ -876,7 +883,8 @@ method_scan() {
 		phy=$(phy_name "$status")
 		if [ -z "$phy" ]; then
 			json_init
-			json_add_string error "nessuna phy wireless trovata"
+			json_add_string error "no wireless phy found"
+			json_add_string error_code scan_no_phy
 			json_add_array results
 			json_close_array
 			json_dump
@@ -888,7 +896,11 @@ method_scan() {
 
 		if ! iw phy "$phy" interface add "$SCAN_TEMP_IF" type managed 2>/dev/null; then
 			json_init
-			json_add_string error "impossibile creare l'interfaccia temporanea su $phy"
+			json_add_string error "could not create the temporary interface on $phy"
+			json_add_string error_code scan_temp_failed
+			json_add_object error_params
+			json_add_string phy "$phy"
+			json_close_object
 			json_add_array results
 			json_close_array
 			json_dump
@@ -907,7 +919,8 @@ method_scan() {
 		printf '%s' "$results"
 	else
 		json_init
-		json_add_string error "la scansione non ha restituito risultati"
+		json_add_string error "the scan returned no results"
+		json_add_string error_code scan_empty
 		json_add_array results
 		json_close_array
 		json_dump
@@ -1019,7 +1032,7 @@ method_sta_diagnose() {
 	json_get_var _radio radio
 	json_get_var _after after
 
-	radio=$(valid_radio "$_radio") || { fail_json "radio sconosciuta"; return; }
+	radio=$(valid_radio "$_radio") || { fail_code unknown_radio "unknown radio"; return; }
 
 	# `after` finisce in un'espressione aritmetica: solo cifre, e niente segno.
 	case "$_after" in
@@ -1095,9 +1108,9 @@ method_stage_connect_saved() {
 	json_get_var _section section
 	json_get_var _radio radio
 
-	section=$(valid_saved "$_section") || { fail_json "rete salvata sconosciuta"; return; }
-	radio=$(valid_radio "$_radio")     || { fail_json "radio sconosciuta"; return; }
-	[ -n "$sid" ] || { fail_json "sessione mancante"; return; }
+	section=$(valid_saved "$_section") || { fail_code unknown_saved "unknown saved network"; return; }
+	radio=$(valid_radio "$_radio")     || { fail_code unknown_radio "unknown radio"; return; }
+	[ -n "$sid" ] || { fail_code missing_session "missing session"; return; }
 
 	ssid=$(uci -q get "travel.$section.ssid")
 	key=$(uci -q get "travel.$section.key")
@@ -1187,7 +1200,7 @@ method_stage_connect_saved() {
 		json_add_string section "$target"
 		json_dump
 	else
-		fail_json "impossibile preparare la connessione"
+		fail_code connect_prepare_failed "could not prepare the connection"
 	fi
 }
 
@@ -1203,7 +1216,7 @@ method_mark_used() {
 	json_get_var _section section
 	json_get_var result result
 
-	section=$(valid_saved "$_section") || { fail_json "rete salvata sconosciuta"; return; }
+	section=$(valid_saved "$_section") || { fail_code unknown_saved "unknown saved network"; return; }
 
 	# `portal` e' un esito a se': la connessione e' riuscita, l'indirizzo c'e', e
 	# Internet non passa lo stesso. Metterlo insieme a `ok` nasconderebbe
@@ -1230,6 +1243,47 @@ fail_json() {
 	json_init
 	json_add_string error "$1"
 	json_dump
+}
+
+# Come `fail_json`, con un codice stabile accanto alla frase: l'interfaccia lo
+# usa per mostrare l'errore nella sua lingua, e la frase resta per chi non lo
+# conosce (un frontend piu' vecchio, i log). Dopo il messaggio, coppie
+# chiave/valore per le parti variabili: `fail_code codice "frase" chiave valore`.
+fail_code() {
+	local code="$1" message="$2"
+	shift 2
+	json_init
+	json_add_string error "$message"
+	json_add_string error_code "$code"
+	json_add_object error_params
+	while [ $# -ge 2 ]; do
+		json_add_string "$1" "$2"
+		shift 2
+	done
+	json_close_object
+	json_dump
+}
+
+# L'errore di un helper (led.sh, toggle.sh, wg.sh, ap.sh): la frase arriva da
+# stderr, il codice dal file che l'helper scrive in TRAVEL_ERR_FILE. Senza
+# codice - un helper che non l'ha scritto - resta la sola frase.
+fail_helper() {
+	local message="$1" code="" line
+	set --
+	if [ -s "$TRAVEL_ERR_FILE" ]; then
+		{
+			IFS= read -r code
+			while IFS= read -r line; do
+				set -- "$@" "$line"
+			done
+		} < "$TRAVEL_ERR_FILE"
+	fi
+	rm -f "$TRAVEL_ERR_FILE"
+	if [ -n "$code" ]; then
+		fail_code "$code" "$message" "$@"
+	else
+		fail_json "$message"
+	fi
 }
 
 # Impostazioni della rete che il router OFFRE, distinte da quelle delle reti a
@@ -1497,7 +1551,7 @@ method_ethports() {
 		json_add_string  mac            "$(first_line "/sys/class/net/$port/address")"
 		json_add_string  mac_config     "$dev_mac"
 		json_add_string  device_section "$dev_section"
-		# Con mwan3 (Fase 3) ogni WAN ha anche una voce li': va seguita nella
+		# Con mwan3 ogni WAN ha anche una voce li': va seguita nella
 		# stessa transazione, altrimenti resterebbe un health check su una WAN
 		# che non esiste piu'.
 		json_add_boolean mwan3   "$([ -n "$network" ] && [ -n "$(uci -q get "mwan3.$network")" ] && echo 1 || echo 0)"
@@ -1510,7 +1564,7 @@ method_ethports() {
 	json_dump
 }
 
-# --- Chi e' collegato alla rete locale (Fase 7) -------------------------------
+# --- Chi e' collegato alla rete locale ----------------------------------------
 #
 # Un metodo solo per due schermate: la scheda LAN mostra l'elenco, la clonazione
 # del MAC ci sceglie dentro. Due enumerazioni separate divergerebbero, e
@@ -1698,7 +1752,7 @@ client_object() {
 }
 
 # Dispositivi visti sulla rete locale, con il MAC e la porta o l'access point da
-# cui entrano (requisito G, Fase 7).
+# cui entrano (requisito G).
 #
 # Serve anche alla clonazione del MAC: certi portali autenticano l'indirizzo, e
 # dopo aver fatto l'accesso dal telefono si puo' far indossare al router quello
@@ -1977,13 +2031,13 @@ usb_function_label() {
 		02:0c:*)  printf 'EEM (tethering)' ;;
 		02:0e:*)  printf 'MBIM (tethering)' ;;
 		e0:01:03) printf 'RNDIS (tethering)' ;;
-		0a:*)     printf 'dati CDC' ;;
-		06:01:01) printf 'PTP (foto)' ;;
-		08:*)     printf 'archiviazione' ;;
+		0a:*)     printf 'CDC data' ;;
+		06:01:01) printf 'PTP (photos)' ;;
+		08:*)     printf 'storage' ;;
 		ff:42:01) printf 'ADB' ;;
-		ff:ff:*)  printf 'MTP (trasferimento file)' ;;
+		ff:ff:*)  printf 'MTP (file transfer)' ;;
 		01:*)     printf 'audio' ;;
-		03:*)     printf 'periferica di input' ;;
+		03:*)     printf 'input device' ;;
 		*)        printf '' ;;
 	esac
 }
@@ -2151,7 +2205,7 @@ method_usb_reset() {
 	done
 
 	if [ -z "$driver" ]; then
-		fail_json "nessun controller USB agganciato a un driver xhci"
+		fail_code usb_no_xhci "no USB controller bound to an xhci driver"
 		return
 	fi
 
@@ -2213,7 +2267,7 @@ method_mwan_apply() {
 	cat >/dev/null
 
 	if ! [ -x /etc/init.d/mwan3 ]; then
-		fail_json "mwan3 non e' installato"
+		fail_code mwan_missing "mwan3 is not installed"
 		return
 	fi
 
@@ -2227,7 +2281,8 @@ method_mwan_apply() {
 			mwan_set_mode failover
 			uci commit mwan3
 			/etc/init.d/mwan3 restart >/dev/null 2>&1
-			fail_json "non posso passare al bilanciamento: $(policy_reason "$holder")"
+			fail_code balance_blocked "cannot switch to load balancing: $(policy_reason "$holder")" \
+				holder "$holder" name "$(policy_name "$holder")"
 			return
 		}
 	fi
@@ -2517,7 +2572,7 @@ method_portal_probe() {
 	json_load "$input"
 	json_get_var candidate network
 
-	network=$(valid_wan "$candidate") || { fail_json "WAN sconosciuta"; return; }
+	network=$(valid_wan "$candidate") || { fail_code unknown_wan "unknown WAN"; return; }
 
 	url=$(portal_setting portal_url "$PORTAL_DEFAULT_URL")
 	marker=$(portal_setting portal_marker "$PORTAL_DEFAULT_MARKER")
@@ -2673,7 +2728,7 @@ method_portal_forget() {
 	for valid in $(portal_sections); do
 		[ "$valid" = "$candidate" ] && section="$valid"
 	done
-	[ -n "$section" ] || { fail_json "voce sconosciuta"; return; }
+	[ -n "$section" ] || { fail_code unknown_entry "unknown entry"; return; }
 
 	uci delete "travel.$section"
 	uci commit travel
@@ -3113,7 +3168,7 @@ method_ts_login() {
 	json_load "$input"
 	json_get_var authkey authkey
 
-	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	ts=$(ts_bin) || { fail_code tailscale_missing "tailscale is not installed"; return; }
 
 	# Da qui in poi il servizio serve acceso, e deve restarlo dopo un riavvio:
 	# una VPN che non torna su da sola dopo un blackout in albergo e' peggio di
@@ -3129,7 +3184,7 @@ method_ts_login() {
 	done
 
 	if ! ts_running; then
-		fail_json "tailscaled non si e' avviato: guarda logread | grep tailscale"
+		fail_code tailscaled_not_started "tailscaled did not start: check logread | grep tailscale"
 		return
 	fi
 
@@ -3337,8 +3392,8 @@ ts_forwarding() {
 method_ts_apply() {
 	local ts flags out rc holder want_exit changed=0
 
-	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
-	ts_running || { fail_json "tailscaled non e' in esecuzione"; return; }
+	ts=$(ts_bin) || { fail_code tailscale_missing "tailscale is not installed"; return; }
+	ts_running || { fail_code tailscaled_not_running "tailscaled is not running"; return; }
 
 	# Il cancello, dalla parte dell'exit node. Se qualcosa sta gia' decidendo
 	# dove esce il traffico, l'exit node non si applica - e l'impostazione viene
@@ -3349,7 +3404,8 @@ method_ts_apply() {
 		holder=$(policy_holder ts_exit) && {
 			uci set travel.tailscale.exit_node=''
 			uci commit travel
-			fail_json "non posso usare un exit node: $(policy_reason "$holder")"
+			fail_code exit_node_blocked "cannot use an exit node: $(policy_reason "$holder")" \
+				holder "$holder" name "$(policy_name "$holder")"
 			return
 		}
 	fi
@@ -3393,7 +3449,7 @@ method_ts_apply() {
 method_ts_down() {
 	local ts out
 
-	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	ts=$(ts_bin) || { fail_code tailscale_missing "tailscale is not installed"; return; }
 	out=$("$ts" down 2>&1)
 
 	json_init
@@ -3410,7 +3466,7 @@ method_ts_down() {
 method_ts_logout() {
 	local ts out
 
-	ts=$(ts_bin) || { fail_json "tailscale non e' installato"; return; }
+	ts=$(ts_bin) || { fail_code tailscale_missing "tailscale is not installed"; return; }
 	out=$("$ts" logout 2>&1)
 	/etc/init.d/tailscale stop    >/dev/null 2>&1
 	/etc/init.d/tailscale disable >/dev/null 2>&1
@@ -3421,7 +3477,7 @@ method_ts_logout() {
 	json_dump
 }
 
-# --- WireGuard (Fase 6b) ------------------------------------------------------
+# --- WireGuard ---------------------------------------------------------------
 #
 # **Piu' configurazioni salvate, una sola accesa.** Le due meta' della frase
 # sono indipendenti e vanno tenute tali: chi viaggia ha il provider di casa, il
@@ -3712,6 +3768,7 @@ wg_fields_reset() {
 	WGF_PEER=""; WGF_PSK=""; WGF_HOST=""; WGF_PORT=""; WGF_ALLOWED=""
 	WGF_KEEPALIVE=""
 	WG_ERR=""
+	WG_CODE=""
 }
 
 # Tutto cio' senza cui il tunnel non puo' esistere, piu' la forma di cio' che
@@ -3719,29 +3776,30 @@ wg_fields_reset() {
 # `fail_json` senza riscriverlo.
 wg_validate() {
 	WG_ERR=""
+	WG_CODE=""
 
 	valid_wg_name "$WGF_NAME" || {
-		WG_ERR="nome non valido: lettere, cifre, spazi, punto, - e _, fino a 32 caratteri"
+		WG_CODE=wg_bad_name; WG_ERR="invalid name: letters, digits, spaces, dot, - and _, up to 32 characters"
 		return 1
 	}
 	# Mancante e malformato sono due errori diversi e portano a due gesti
 	# diversi: nel primo caso il file incollato e' monco - succede a chi copia
 	# meta' schermata - nel secondo c'e' qualcosa da correggere.
-	[ -n "$WGF_PRIV" ] || { WG_ERR="manca la chiave privata (PrivateKey nella sezione [Interface])"; return 1; }
-	valid_wg_key "$WGF_PRIV" || { WG_ERR="la chiave privata non e' una chiave WireGuard valida"; return 1; }
-	[ -n "$WGF_PEER" ] || { WG_ERR="manca la chiave pubblica del peer (PublicKey nella sezione [Peer])"; return 1; }
-	valid_wg_key "$WGF_PEER" || { WG_ERR="la chiave pubblica del peer non e' una chiave WireGuard valida"; return 1; }
-	[ -z "$WGF_PSK" ] || valid_wg_key "$WGF_PSK" || { WG_ERR="la chiave precondivisa non e' una chiave WireGuard valida"; return 1; }
-	[ -n "$WGF_ADDR" ] || { WG_ERR="mancano gli indirizzi dell'interfaccia (Address nella sezione [Interface])"; return 1; }
-	valid_wg_addrs "$WGF_ADDR" || { WG_ERR="gli indirizzi dell'interfaccia sono malformati"; return 1; }
-	[ -n "$WGF_ALLOWED" ] || { WG_ERR="manca cosa instradare nel tunnel (AllowedIPs nella sezione [Peer])"; return 1; }
-	valid_wg_addrs "$WGF_ALLOWED" || { WG_ERR="AllowedIPs malformati"; return 1; }
-	[ -z "$WGF_DNS" ] || valid_wg_addrs "$WGF_DNS" || { WG_ERR="i DNS non sono indirizzi validi"; return 1; }
-	[ -n "$WGF_HOST" ] || { WG_ERR="manca l'endpoint del peer (Endpoint nella sezione [Peer])"; return 1; }
-	valid_wg_host "$WGF_HOST" || { WG_ERR="l'endpoint del peer non e' un nome ne' un indirizzo valido"; return 1; }
-	wg_number_in "$WGF_PORT" 1 65535 || { WG_ERR="la porta dell'endpoint non e' valida"; return 1; }
-	[ -z "$WGF_MTU" ] || wg_number_in "$WGF_MTU" 576 9200 || { WG_ERR="MTU fuori intervallo (576-9200)"; return 1; }
-	[ -z "$WGF_KEEPALIVE" ] || wg_number_in "$WGF_KEEPALIVE" 0 65535 || { WG_ERR="keepalive fuori intervallo"; return 1; }
+	[ -n "$WGF_PRIV" ] || { WG_CODE=wg_no_private_key; WG_ERR="the private key is missing (PrivateKey in the [Interface] section)"; return 1; }
+	valid_wg_key "$WGF_PRIV" || { WG_CODE=wg_bad_private_key; WG_ERR="the private key is not a valid WireGuard key"; return 1; }
+	[ -n "$WGF_PEER" ] || { WG_CODE=wg_no_peer_key; WG_ERR="the peer public key is missing (PublicKey in the [Peer] section)"; return 1; }
+	valid_wg_key "$WGF_PEER" || { WG_CODE=wg_bad_peer_key; WG_ERR="the peer public key is not a valid WireGuard key"; return 1; }
+	[ -z "$WGF_PSK" ] || valid_wg_key "$WGF_PSK" || { WG_CODE=wg_bad_preshared; WG_ERR="the preshared key is not a valid WireGuard key"; return 1; }
+	[ -n "$WGF_ADDR" ] || { WG_CODE=wg_no_address; WG_ERR="the interface addresses are missing (Address in the [Interface] section)"; return 1; }
+	valid_wg_addrs "$WGF_ADDR" || { WG_CODE=wg_bad_address; WG_ERR="the interface addresses are malformed"; return 1; }
+	[ -n "$WGF_ALLOWED" ] || { WG_CODE=wg_no_allowed; WG_ERR="what to route into the tunnel is missing (AllowedIPs in the [Peer] section)"; return 1; }
+	valid_wg_addrs "$WGF_ALLOWED" || { WG_CODE=wg_bad_allowed; WG_ERR="malformed AllowedIPs"; return 1; }
+	[ -z "$WGF_DNS" ] || valid_wg_addrs "$WGF_DNS" || { WG_CODE=wg_bad_dns; WG_ERR="the DNS entries are not valid addresses"; return 1; }
+	[ -n "$WGF_HOST" ] || { WG_CODE=wg_no_endpoint; WG_ERR="the peer endpoint is missing (Endpoint in the [Peer] section)"; return 1; }
+	valid_wg_host "$WGF_HOST" || { WG_CODE=wg_bad_endpoint; WG_ERR="the peer endpoint is neither a valid name nor a valid address"; return 1; }
+	wg_number_in "$WGF_PORT" 1 65535 || { WG_CODE=wg_bad_port; WG_ERR="the endpoint port is not valid"; return 1; }
+	[ -z "$WGF_MTU" ] || wg_number_in "$WGF_MTU" 576 9200 || { WG_CODE=wg_bad_mtu; WG_ERR="MTU out of range (576-9200)"; return 1; }
+	[ -z "$WGF_KEEPALIVE" ] || wg_number_in "$WGF_KEEPALIVE" 0 65535 || { WG_CODE=wg_bad_keepalive; WG_ERR="keepalive out of range"; return 1; }
 
 	return 0
 }
@@ -3983,9 +4041,9 @@ method_wg_toggle() {
 	busy=$(wg_active) || busy=""
 
 	if [ "$want" = "1" ] || [ "$want" = "true" ]; then
-		error=$(wg_switch "$id" on ui 2>&1) || { fail_json "$error"; return; }
+		error=$(wg_switch "$id" on ui 2>&1) || { fail_helper "$error"; return; }
 	else
-		error=$(wg_switch "$id" off ui 2>&1) || { fail_json "$error"; return; }
+		error=$(wg_switch "$id" off ui 2>&1) || { fail_helper "$error"; return; }
 		[ -n "$id" ] || id="$busy"
 	fi
 
@@ -4088,13 +4146,13 @@ method_wg_import() {
 	json_get_var id id
 	json_get_var name name
 
-	[ -n "$conf" ] || { fail_json "configurazione vuota"; return; }
+	[ -n "$conf" ] || { fail_code wg_empty_config "empty configuration"; return; }
 
 	wg_fields_reset
 	wg_parse_conf "$conf"
 
 	if [ -n "$id" ]; then
-		wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+		wg_known "$id" || { fail_code wg_unknown "unknown WireGuard configuration"; return; }
 		section="$id"
 		# Reimportando si puo' anche non toccare il nome: quello che c'e' va
 		# gia' bene, ed e' il riferimento che la persona ha in testa.
@@ -4102,16 +4160,16 @@ method_wg_import() {
 		state="$(uci -q get "network.$section.disabled")"
 		[ "$state" = "1" ] || state=0
 	else
-		section=$(wg_new_section) || { fail_json "troppe configurazioni WireGuard salvate"; return; }
+		section=$(wg_new_section) || { fail_code wg_too_many "too many saved WireGuard configurations"; return; }
 		state=1
 	fi
 
 	WGF_NAME="$name"
 	wg_name_taken "$WGF_NAME" "$section" && {
-		fail_json "esiste gia' una configurazione WireGuard con questo nome"
+		fail_code wg_name_taken "a WireGuard configuration with this name already exists"
 		return
 	}
-	wg_validate || { fail_json "$WG_ERR"; return; }
+	wg_validate || { fail_code "$WG_CODE" "$WG_ERR"; return; }
 
 	wg_write "$section" "$state"
 	[ "$state" = "1" ] || wg_reload "$section"
@@ -4154,7 +4212,7 @@ method_wg_save() {
 	json_load "$input"
 	json_get_var id id
 
-	wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+	wg_known "$id" || { fail_code wg_unknown "unknown WireGuard configuration"; return; }
 
 	wg_fields_reset
 	json_get_var WGF_NAME      name
@@ -4184,10 +4242,10 @@ method_wg_save() {
 	fi
 
 	wg_name_taken "$WGF_NAME" "$id" && {
-		fail_json "esiste gia' una configurazione WireGuard con questo nome"
+		fail_code wg_name_taken "a WireGuard configuration with this name already exists"
 		return
 	}
-	wg_validate || { fail_json "$WG_ERR"; return; }
+	wg_validate || { fail_code "$WG_CODE" "$WG_ERR"; return; }
 
 	# Lo stato di accensione non e' un parametro del modulo: si cambia con
 	# l'interruttore, che e' l'unico punto in cui il vincolo del tunnel unico
@@ -4225,11 +4283,11 @@ method_wg_delete() {
 	json_load "$input"
 	json_get_var id id
 
-	wg_known "$id" || { fail_json "configurazione WireGuard sconosciuta"; return; }
+	wg_known "$id" || { fail_code wg_unknown "unknown WireGuard configuration"; return; }
 
 	busy=$(wg_active) || busy=""
 	[ "$busy" = "$id" ] && {
-		fail_json "e' la configurazione attiva: disattivala prima di eliminarla"
+		fail_code wg_delete_active "it is the active configuration: deactivate it before deleting it"
 		return
 	}
 
@@ -4447,14 +4505,14 @@ method_profile_save() {
 	json_get_var name name
 	json_get_var section section
 
-	valid_profile_name "$name" || { fail_json "nome non valido: lettere, cifre, spazi, - e _, fino a 24 caratteri"; return; }
+	valid_profile_name "$name" || { fail_code profile_bad_name "invalid name: letters, digits, spaces, - and _, up to 24 characters"; return; }
 
 	if [ -n "$section" ]; then
 		found=""
 		for entry in $(profile_sections); do
 			[ "$entry" = "$section" ] && found="$entry"
 		done
-		[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+		[ -n "$found" ] || { fail_code profile_unknown "unknown profile"; return; }
 	else
 		# Il nome della sezione non e' il nome del profilo: quello lo scrive
 		# una persona, con spazi e accenti, e uci non li accetta.
@@ -4483,7 +4541,7 @@ method_profile_delete() {
 	for entry in $(profile_sections); do
 		[ "$entry" = "$section" ] && found="$entry"
 	done
-	[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+	[ -n "$found" ] || { fail_code profile_unknown "unknown profile"; return; }
 
 	uci -q delete "travel.$section"
 	uci commit travel
@@ -4514,14 +4572,16 @@ method_profile_apply() {
 	for entry in $(profile_sections); do
 		[ "$entry" = "$section" ] && found="$entry"
 	done
-	[ -n "$found" ] || { fail_json "profilo sconosciuto"; return; }
+	[ -n "$found" ] || { fail_code profile_unknown "unknown profile"; return; }
 
 	profile_read_section "$section"
 	note=""
+	note_holder=""
 
 	if [ "$P_MODE" = "balance" ] && holder=$(policy_holder balance); then
 		P_MODE=failover
-		note="il profilo chiedeva il bilanciamento: $(policy_reason "$holder")"
+		note="the profile asked for load balancing: $(policy_reason "$holder")"
+		note_holder="$holder"
 	fi
 
 	# Le sezioni potrebbero non esserci ancora: `travel.vpn` la crea lo script
@@ -4593,6 +4653,14 @@ method_profile_apply() {
 	json_add_string  section "$section"
 	json_add_string  mode "$P_MODE"
 	json_add_string  note "$note"
+	# La stessa nota in forma di codice, per l'interfaccia in un'altra lingua.
+	if [ -n "$note_holder" ]; then
+		json_add_string note_code profile_balance_blocked
+		json_add_object note_params
+		json_add_string holder "$note_holder"
+		json_add_string name "$(policy_name "$note_holder")"
+		json_close_object
+	fi
 	json_dump
 }
 
@@ -4636,24 +4704,24 @@ method_backup_export() {
 	local size data
 
 	if ! have_base64; then
-		fail_json "manca ucode: scarica il backup da LuCI"
+		fail_code backup_no_ucode "ucode is missing: download the backup from LuCI"
 		return
 	fi
 
 	rm -f "$BACKUP_FILE"
 	if ! sysupgrade -b "$BACKUP_FILE" >/dev/null 2>&1; then
-		fail_json "creazione del backup fallita"
+		fail_code backup_failed "creating the backup failed"
 		return
 	fi
 
 	size=$(wc -c < "$BACKUP_FILE" 2>/dev/null)
 	case "$size" in
-		''|*[!0-9]*) fail_json "backup non leggibile"; rm -f "$BACKUP_FILE"; return ;;
+		''|*[!0-9]*) fail_code backup_unreadable "backup not readable"; rm -f "$BACKUP_FILE"; return ;;
 	esac
 
 	if [ "$size" -gt $((BACKUP_MAX_KB * 1024)) ]; then
 		rm -f "$BACKUP_FILE"
-		fail_json "backup troppo grande ($((size / 1024)) KB): scaricalo da LuCI"
+		fail_code backup_too_big "backup too large ($((size / 1024)) KB): download it from LuCI" kb "$((size / 1024))"
 		return
 	fi
 
@@ -4666,7 +4734,7 @@ method_backup_export() {
 	json_add_int     size "$size"
 	if ! data=$(b64_encode_file "$BACKUP_FILE"); then
 		rm -f "$BACKUP_FILE"
-		fail_json "codifica del backup fallita"
+		fail_code backup_encode_failed "encoding the backup failed"
 		return
 	fi
 	json_add_string  data "$data"
@@ -4692,25 +4760,25 @@ method_backup_import() {
 	json_get_var first first
 	json_get_var last last
 
-	have_base64 || { fail_json "manca ucode: ripristina il backup da LuCI"; return; }
-	[ -n "$chunk" ] || { fail_json "pezzo vuoto"; return; }
+	have_base64 || { fail_code restore_no_ucode "ucode is missing: restore the backup from LuCI"; return; }
+	[ -n "$chunk" ] || { fail_code chunk_empty "empty chunk"; return; }
 
 	# Solo l'alfabeto del base64: quello che arriva dalla rete non entra in un
 	# decodificatore senza essere prima riconosciuto.
 	case "$chunk" in
-		*[!A-Za-z0-9+/=]*) fail_json "il pezzo non e' base64"; return ;;
+		*[!A-Za-z0-9+/=]*) fail_code chunk_not_base64 "the chunk is not base64"; return ;;
 	esac
 
 	# Ogni pezzo deve stare su un confine di quattro caratteri, che e' l'unita'
 	# del base64: tagliato altrove, ogni pezzo decodificato da solo perde i bit
 	# in mezzo e l'archivio esce corrotto in un modo che si scopre solo dopo.
-	[ $(( ${#chunk} % 4 )) -eq 0 ] || { fail_json "pezzo non allineato: dev'essere un multiplo di 4 caratteri"; return; }
+	[ $(( ${#chunk} % 4 )) -eq 0 ] || { fail_code chunk_misaligned "misaligned chunk: it must be a multiple of 4 characters"; return; }
 
 	[ "$first" = "1" ] && rm -f "$BACKUP_RESTORE"
 
 	if ! printf '%s' "$chunk" | b64_decode >> "$BACKUP_RESTORE" 2>/dev/null; then
 		rm -f "$BACKUP_RESTORE"
-		fail_json "decodifica del pezzo fallita"
+		fail_code chunk_decode_failed "decoding the chunk failed"
 		return
 	fi
 
@@ -4729,19 +4797,19 @@ method_backup_import() {
 	# loro posto e meta' no, che e' lo stato da cui si esce solo dal cavo.
 	if ! tar -tzf "$BACKUP_RESTORE" >/dev/null 2>&1; then
 		rm -f "$BACKUP_RESTORE"
-		fail_json "l'archivio non si apre: caricamento incompleto o file sbagliato"
+		fail_code archive_unreadable "the archive does not open: incomplete upload or wrong file"
 		return
 	fi
 
 	if ! tar -tzf "$BACKUP_RESTORE" 2>/dev/null | grep -q '^etc/config/'; then
 		rm -f "$BACKUP_RESTORE"
-		fail_json "questo archivio non contiene /etc/config: non e' un backup di OpenWrt"
+		fail_code archive_not_openwrt "this archive does not contain /etc/config: it is not an OpenWrt backup"
 		return
 	fi
 
 	if ! sysupgrade -r "$BACKUP_RESTORE" >/dev/null 2>&1; then
 		rm -f "$BACKUP_RESTORE"
-		fail_json "ripristino fallito"
+		fail_code restore_failed "restore failed"
 		return
 	fi
 
@@ -4759,7 +4827,7 @@ method_backup_import() {
 	json_dump
 }
 
-# --- Orologio e NTP (Fase 8) -------------------------------------------------
+# --- Orologio e NTP -----------------------------------------------------------
 #
 # Su questo router non c'e' un orologio a batteria: staccata la corrente,
 # l'ora riparte da quella del firmware. Non e' un dettaglio da pignoli - con
@@ -4841,7 +4909,7 @@ method_time_set() {
 	json_get_var servers servers
 
 	section=$(anon_section system system)
-	[ -n "$section" ] || { fail_json "sezione system non trovata"; return; }
+	[ -n "$section" ] || { fail_code system_section_missing "system section not found"; return; }
 
 	# La stringa POSIX e' quella che conta davvero: il nome del fuso serve solo
 	# se sul router c'e' il pacchetto zoneinfo, che di solito non c'e'. Si
@@ -4851,10 +4919,10 @@ method_time_set() {
 	# stanno fra apici perche' altrimenti la shell le leggerebbe come
 	# redirezioni invece che come caratteri di un insieme.
 	case "$timezone" in
-		''|*[!A-Za-z0-9+,./:_'<>'-]*) fail_json "fuso orario non valido"; return ;;
+		''|*[!A-Za-z0-9+,./:_'<>'-]*) fail_code timezone_invalid "invalid time zone"; return ;;
 	esac
 	case "$zonename" in
-		*[!A-Za-z0-9\ _/+-]*) fail_json "nome del fuso non valido"; return ;;
+		*[!A-Za-z0-9\ _/+-]*) fail_code zonename_invalid "invalid time zone name"; return ;;
 	esac
 
 	uci set "system.$section.timezone=$timezone"
@@ -4877,12 +4945,12 @@ method_time_set() {
 	# qualcuno passerebbe pure per un nome di server valido.
 	set -f
 	for server in $servers; do
-		valid_ntp_server "$server" || { set +f; fail_json "server NTP non valido: $server"; return; }
+		valid_ntp_server "$server" || { set +f; fail_code ntp_server_invalid "invalid NTP server: $server" server "$server"; return; }
 		count=$((count + 1))
-		[ "$count" -le 8 ] || { set +f; fail_json "troppi server: otto bastano"; return; }
+		[ "$count" -le 8 ] || { set +f; fail_code ntp_too_many "too many servers: eight are enough"; return; }
 	done
 
-	[ "$count" -gt 0 ] || { set +f; fail_json "serve almeno un server NTP"; return; }
+	[ "$count" -gt 0 ] || { set +f; fail_code ntp_none "at least one NTP server is needed"; return; }
 
 	uci -q delete system.ntp.server
 	for server in $servers; do
@@ -4905,7 +4973,7 @@ method_time_set() {
 	json_dump
 }
 
-# --- Riavvio, subito o a un'ora (Fase 8) -------------------------------------
+# --- Riavvio, subito o a un'ora ---------------------------------------------
 #
 # Il riavvio pianificato serve a una cosa sola e va detta: un router acceso per
 # settimane in valigia accumula stati strani - una WAN che non torna, un driver
@@ -4963,12 +5031,12 @@ method_reboot_set() {
 
 	case "$hour" in ''|*[!0-9]*) hour=4 ;; esac
 	case "$minute" in ''|*[!0-9]*) minute=0 ;; esac
-	[ "$hour" -le 23 ] || { fail_json "ora non valida"; return; }
-	[ "$minute" -le 59 ] || { fail_json "minuto non valido"; return; }
+	[ "$hour" -le 23 ] || { fail_code hour_invalid "invalid hour"; return; }
+	[ "$minute" -le 59 ] || { fail_code minute_invalid "invalid minute"; return; }
 	case "$weekday" in
 		''|'*') weekday='*' ;;
 		[0-6]) ;;
-		*) fail_json "giorno non valido"; return ;;
+		*) fail_code weekday_invalid "invalid day"; return ;;
 	esac
 
 	# Il file si riscrive senza la nostra riga e poi si riaggiunge: cosi' non

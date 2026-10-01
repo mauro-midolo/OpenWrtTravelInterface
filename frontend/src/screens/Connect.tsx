@@ -36,6 +36,8 @@ import type { PortalResult } from '../lib/portal';
 import { HostnamePicker } from '../components/HostnamePicker';
 import { MacPicker } from '../components/MacPicker';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { commonText } from '../i18n/common';
+import { connectText } from '../i18n/connect';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,6 +55,7 @@ export function ConnectSheet({
   saved: SavedNetwork[];
   onClose: (changed: boolean) => void;
 }) {
+  const t = connectText();
   const apply = useApply();
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
@@ -293,7 +296,7 @@ export function ConnectSheet({
         setPortal(verdict);
       } catch {
         // Una verifica che non riesce non toglie niente alla connessione appena
-        // fatta: si mostra l'esito senza, come prima della Fase 5.
+        // fatta: si mostra l'esito senza verdetto sull'uscita.
       }
       setProbing(false);
     }
@@ -384,49 +387,43 @@ export function ConnectSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>{net.hidden ? 'Rete nascosta' : net.ssid}</h2>
+        <h2>{net.hidden ? t.hidden : net.ssid}</h2>
 
         {idle && (
           <form onSubmit={start}>
-            <p class="muted">
-              {net.band} GHz · canale {net.channel} · {net.security}
-            </p>
+            <p class="muted">{t.meta(net.band, net.channel, net.security)}</p>
 
             {plan.sharesRadioWithAp && (
               <p class="alert alert--warn">
-                L'access point su <strong>{plan.staRadio.band} GHz</strong> condivide questa
-                radio: potrà interrompersi se la rete cade.
+                {t.sharesRadio(plan.staRadio.band ?? plan.staRadio.name)}
                 {plan.otherApActive && plan.otherRadio ? (
                   <>
                     {' '}
-                    Quello su <strong>{plan.otherRadio.band} GHz</strong> resta raggiungibile.
+                    {t.otherApSafe(plan.otherRadio.band ?? plan.otherRadio.name)}
                   </>
                 ) : (
                   <>
                     {' '}
-                    <strong>Accendi prima un access point sull'altra radio</strong>, per non
-                    restare senza accesso.
+                    {t.turnOnOtherAp}
                   </>
                 )}
               </p>
             )}
 
             {plan.noApAtAll && (
-              <p class="alert alert--warn">
-                Non c'è <strong>nessun access point acceso</strong>.
-              </p>
+              <p class="alert alert--warn">{t.noAp}</p>
             )}
 
             {!net.open && (
               <label class="field">
-                <span>Password della rete</span>
+                <span>{t.password}</span>
                 <input
                   type="password"
                   value={password}
                   autocomplete="off"
                   autofocus={known === undefined}
                   placeholder={
-                    known?.has_key ? 'lascia vuoto per usare quella salvata' : undefined
+                    known?.has_key ? t.keepSaved : undefined
                   }
                   onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
                 />
@@ -452,8 +449,7 @@ export function ConnectSheet({
                   onChange={(e) => setAddBand((e.target as HTMLInputElement).checked)}
                 />
                 <span>
-                  Aggiungi <strong>{bandLabel(net.band)}</strong> alla rete salvata «
-                  {savedElsewhere.ssid}» ({bandsLabel(savedElsewhere.bands)})
+                  {t.addBand(bandLabel(net.band), savedElsewhere.ssid, bandsLabel(savedElsewhere.bands))}
                 </span>
               </label>
             )}
@@ -472,16 +468,14 @@ export function ConnectSheet({
                     disabled={net.hidden || !canSaveApart}
                     onChange={(e) => setRemember((e.target as HTMLInputElement).checked)}
                   />
-                  <span>
-                    Salva questa rete{savedElsewhere ? ' come voce a parte' : ''}
-                  </span>
+                  <span>{savedElsewhere ? t.saveApart : t.save}</span>
                 </label>
 
                 {/* La chiave salvata sta sul router e non passa di qui: basta a
                     collegarsi, non a scrivere una voce nuova che deve averne
                     una sua. */}
                 {!canSaveApart && (
-                  <p class="muted">Per salvarla come voce a parte serve la password.</p>
+                  <p class="muted">{t.needsPassword}</p>
                 )}
 
                 {/* La banda da cui l'hai trovata resta accesa e non si può
@@ -490,7 +484,7 @@ export function ConnectSheet({
                     resta modificabile dopo, dalle reti salvate. */}
                 {remember && !net.hidden && (
                   <div class="field">
-                    <span id="bande-salvataggio">Bande su cui salvarla</span>
+                    <span id="bande-salvataggio">{t.bands}</span>
                     <div role="group" aria-labelledby="bande-salvataggio">
                       {BANDS.map((band) => (
                         <label class="check" key={band}>
@@ -504,7 +498,7 @@ export function ConnectSheet({
                           />
                           <span>
                             {bandLabel(band)}
-                            {band === otherBand && otherTaken ? ' · già usata da un’altra rete salvata' : ''}
+                            {band === otherBand && otherTaken ? t.bandTaken : ''}
                           </span>
                         </label>
                       ))}
@@ -516,14 +510,14 @@ export function ConnectSheet({
 
             <div class="sheet__actions">
               <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-                Annulla
+                {commonText().actions.cancel}
               </button>
               <button
                 class="button button--primary"
                 type="submit"
                 disabled={!passwordOk || !macOk || !hostnameOk}
               >
-                Connetti
+                {t.connect}
               </button>
             </div>
           </form>
@@ -531,8 +525,8 @@ export function ConnectSheet({
 
         <ApplyStatus apply={apply} onClose={() => onClose(true)} />
 
-        {checking && <p class="muted">Connesso al router. Verifico la rete…</p>}
-        {probing && <p class="muted">Rete presa. Controllo se si esce davvero…</p>}
+        {checking && <p class="muted">{t.checking}</p>}
+        {probing && <p class="muted">{t.probing}</p>}
         {done && <Outcome uplink={uplink} portal={portal} onClose={() => onClose(true)} />}
       </div>
     </div>
@@ -554,13 +548,15 @@ function Outcome({
   portal: PortalResult | null;
   onClose: () => void;
 }) {
+  const t = connectText();
   const state = uplink ? uplinkState(uplink) : 'unassociated';
 
   return (
     <>
       {state === 'addressed' && (
         <p class={portal?.state === 'online' ? 'alert alert--ok' : 'alert alert--info'}>
-          Collegato a <strong>{uplink?.ssid}</strong>.<br />
+          {t.connectedTo(uplink?.ssid ?? '')}
+          <br />
           {/* Su una rete v6-only non c'e' nessun IPv4 da mostrare: scrivere
               "IP" seguito dal vuoto farebbe sembrare rotta una connessione che
               funziona. Si mostra il primo indirizzo v6 al suo posto. */}
@@ -571,27 +567,25 @@ function Outcome({
             <>
               <br />
               <br />
-              Verificato: <strong>Internet si raggiunge</strong>.
+              {t.verified}
             </>
           )}
           {!portal && (
             <>
               <br />
               <br />
-              Uscita verso Internet non verificata.
+              {t.notVerified}
             </>
           )}
         </p>
       )}
 
-      {/* Il caso per cui esiste tutta la Fase 5: la connessione e' riuscita e
+      {/* Il caso per cui esiste la verifica dell'uscita: la connessione e' riuscita e
           Internet non c'e'. Senza questo riquadro si vedrebbe "Collegato" e si
           andrebbe a cercare il guasto nella password o nel segnale. */}
       {state === 'addressed' && portal?.state === 'portal' && (
         <>
-          <p class="alert alert--warn">
-            La rete ha un <strong>portale di accesso</strong>: serve il login.
-          </p>
+          <p class="alert alert--warn">{t.portal}</p>
           {portalLoginUrl(portal) && (
             <a
               class="button button--primary"
@@ -599,16 +593,14 @@ function Outcome({
               target="_blank"
               rel="noreferrer"
             >
-              Apri la pagina di accesso
+              {t.openLogin}
             </a>
           )}
         </>
       )}
 
       {state === 'addressed' && portal?.state === 'blocked' && (
-        <p class="alert alert--warn">
-          La rete ha dato un indirizzo ma <strong>non esce niente</strong>.
-        </p>
+        <p class="alert alert--warn">{t.blocked}</p>
       )}
 
       {state === 'addressed' && portal?.state === 'unknown' && portalReason(portal) && (
@@ -616,20 +608,16 @@ function Outcome({
       )}
 
       {state === 'no-address' && (
-        <p class="alert alert--error">
-          Agganciato a <strong>{uplink?.ssid}</strong>, ma la rete non ha dato un indirizzo.
-        </p>
+        <p class="alert alert--error">{t.noAddress(uplink?.ssid ?? '')}</p>
       )}
 
       {(state === 'unassociated' || state === 'disabled') && (
-        <p class="alert alert--error">
-          Non è riuscito ad agganciare la rete. Controlla la password.
-        </p>
+        <p class="alert alert--error">{t.unassociated}</p>
       )}
 
       <div class="sheet__actions">
         <button class="button button--primary" onClick={onClose}>
-          Chiudi
+          {commonText().actions.close}
         </button>
       </div>
     </>

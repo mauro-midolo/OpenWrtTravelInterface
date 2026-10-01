@@ -109,7 +109,7 @@ describe('router physical toggle', () => {
     expect(run('toggle_set led').status).toBe(0);
     const result = run('toggle_set apri-il-garage');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Azione non valida');
+    expect(result.stderr).toContain('Invalid action');
     expect(read('etc/config/travel_toggle')).toContain("option action 'led'");
   });
 
@@ -147,7 +147,7 @@ describe('router physical toggle', () => {
     rmSync(file('sys/class/leds/blue-status'), { recursive: true });
     const result = run('toggle_set led');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Impossibile applicare');
+    expect(result.stderr).toContain('Could not apply');
     expect(existsSync(file('etc/config/travel_toggle'))).toBe(false);
   });
 
@@ -172,7 +172,7 @@ describe('router physical toggle', () => {
     const stubborn = `mktemp() { case "$1" in */.travel-toggle.*) return 1 ;; *) command mktemp "$@" ;; esac; }`;
     const result = run(`${stubborn}\ntoggle_set led`);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Impossibile salvare la scelta');
+    expect(result.stderr).toContain('Could not save the choice');
     expect(read('etc/config/travel_toggle'), 'la scelta di prima').toBe(before.toggle);
     expect(read('etc/config/travel_led'), 'la preferenza del LED').toBe(before.led);
     expect(read('sys/class/leds/blue-status/brightness')).toBe(before.brightness);
@@ -200,7 +200,7 @@ describe('router physical toggle', () => {
     const intruder = `toggle_align() { ( TOGGLE_LOCK_WAIT=0; toggle_run off ); return 1; }`;
     const result = run(`${intruder}\ntoggle_set led`);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Impossibile applicare');
+    expect(result.stderr).toContain('Could not apply');
     expect(read('etc/config/travel_toggle'), 'la scelta di prima').toBe(before.toggle);
     expect(read('etc/config/travel_led'), 'la preferenza del LED').toBe(before.led);
     expect(read('sys/class/leds/blue-status/brightness')).toBe(before.brightness);
@@ -258,7 +258,7 @@ describe('router physical toggle', () => {
   it('rejects a position that is neither on nor off', () => {
     const result = run('toggle_run forse');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Posizione non valida');
+    expect(result.stderr).toContain('Invalid position');
     expect(existsSync(file('var/run/travel-toggle.position'))).toBe(false);
   });
 

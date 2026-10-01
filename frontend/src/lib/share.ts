@@ -12,6 +12,8 @@
  * I due punti e virgola finali chiudono il record e non sono facoltativi.
  */
 
+import { networksText } from '../i18n/networks';
+
 /** La sicurezza come la scrive il QR, dedotta dalla cifratura salvata. */
 export function qrSecurity(encryption: string): 'nopass' | 'WPA' | 'SAE' {
   // Rete aperta: il campo P si omette.
@@ -22,7 +24,7 @@ export function qrSecurity(encryption: string): 'nopass' | 'WPA' | 'SAE' {
   if (base === 'sae') return 'SAE';
   // WPA/WPA2 e transizione WPA2/WPA3 usano il tipo WPA del formato WiFi.
   if (['psk', 'psk2', 'psk-mixed', 'sae-mixed'].includes(base)) return 'WPA';
-  throw new Error('Questo tipo di sicurezza non supporta la condivisione tramite QR.');
+  throw new Error(networksText().share.unsupported);
 }
 
 /**
@@ -73,10 +75,10 @@ export interface ShareInput {
 export function wifiUri(net: ShareInput): string {
   const security = qrSecurity(net.encryption);
   if (!net.ssid || new TextEncoder().encode(net.ssid).length > 32) {
-    throw new Error('Il nome della rete salvata non è valido.');
+    throw new Error(networksText().share.badSsid);
   }
   if (security !== 'nopass' && !net.key) {
-    throw new Error('Questa rete protetta non ha una password salvata. Modifica la rete prima di condividerla.');
+    throw new Error(networksText().share.noKey);
   }
 
   const parts = [`T:${security}`, `S:${field(net.ssid)}`];

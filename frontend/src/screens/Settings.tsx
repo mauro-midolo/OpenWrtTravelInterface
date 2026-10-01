@@ -7,6 +7,9 @@ import type { DeviceStatus, UsbDevice, UsbDevices } from '../lib/device';
 import { getSystem, isValidHostname, setSystemHostname } from '../lib/hostname';
 import { BackupCard, ProfilesCard, RebootCard, TimeCard } from './System';
 import { LedAndToggleRows } from '../components/LedAndToggleRows';
+import { LanguageSelect } from '../components/LanguageSelect';
+import { commonText } from '../i18n/common';
+import { settingsText } from '../i18n/settings';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -32,6 +35,8 @@ function DeviceNameSheet({
   current: string;
   onClose: (changed: boolean) => void;
 }) {
+  const t = settingsText();
+  const actions = commonText().actions;
   const [name, setName] = useState(current);
   const [section, setSection] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,34 +78,34 @@ function DeviceNameSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Nome del router</h2>
+        <h2>{t.deviceName}</h2>
 
         <label class="field">
-          <span>Nome</span>
+          <span>{t.name}</span>
           <input
             type="text"
             value={name}
-            placeholder="es. Beryl"
+            placeholder={t.namePlaceholder}
             autocapitalize="none"
             autocomplete="off"
             spellcheck={false}
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
           />
-          <span class="muted">Solo lettere, cifre e trattini.</span>
+          <span class="muted">{t.nameRule}</span>
         </label>
 
         {error && <p class="alert alert--error alert--code">{error}</p>}
 
         <div class="sheet__actions">
           <button class="button button--ghost" onClick={() => onClose(false)}>
-            Annulla
+            {actions.cancel}
           </button>
           <button
             class="button button--primary"
             disabled={busy || !valid || !section}
             onClick={save}
           >
-            Salva
+            {actions.save}
           </button>
         </div>
       </div>
@@ -130,24 +135,25 @@ function DeviceNameSheet({
  * dichiara e si dice quella giusta.
  */
 function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<string, string> }) {
+  const t = settingsText().usb;
+  // Le etichette arrivano dal router in inglese e gli stati dei moduli come
+  // codici: si traducono quelli noti, gli altri (sigle come NCM o RNDIS)
+  // restano come sono.
+  const fn = (label: string) => t.functions[label] ?? label;
+  const state = (value: string) => t.moduleState[value] ?? value;
   const net = dev.interfaces.find((i) => i.network);
-  const offered = dev.interfaces.filter((i) => i.label).map((i) => i.label);
+  const offered = dev.interfaces.filter((i) => i.label).map((i) => fn(i.label));
 
   if (!net) {
     return (
-      <p class="alert alert--warn">
-        Collegato, ma non sta offrendo nessuna funzione di rete
-        {offered.length > 0 ? `: espone ${offered.join(', ')}` : ''}. Se è un telefono,
-        attiva la <strong>condivisione tramite USB</strong>.
-      </p>
+      <p class="alert alert--warn">{t.noFunction(offered.join(', '))}</p>
     );
   }
 
   if (net.module_state === 'assente') {
     return (
       <p class="alert alert--error">
-        Sta offrendo <strong>{net.label}</strong>, ma sul router manca il modulo{' '}
-        <code>kmod-usb-net-{net.module.replace(/_/g, '-')}</code>.
+        {t.moduleMissing(fn(net.label), `kmod-usb-net-${net.module.replace(/_/g, '-')}`)}
       </p>
     );
   }
@@ -159,23 +165,13 @@ function UnboundReason({ dev, modules }: { dev: UsbDevice; modules: Record<strin
     const base = modules.usbnet;
     return (
       <p class="alert alert--error">
-        Sta offrendo <strong>{net.label}</strong> e <code>{net.module}</code> è sul disco,
-        ma <strong>non è caricato</strong>.
-        {base && base !== 'caricato' ? (
-          <>
-            {' '}
-            <code>usbnet</code>, da cui dipende, è <strong>{base}</strong>.
-          </>
-        ) : null}
+        {t.moduleNotLoaded(fn(net.label), net.module, base && base !== 'caricato' ? state(base) : '')}
       </p>
     );
   }
 
   return (
-    <p class="alert alert--warn">
-      Sta offrendo <strong>{net.label}</strong> e il modulo <code>{net.module}</code> è
-      caricato, ma non lo ha agganciato. Stacca e riattacca il cavo.
-    </p>
+    <p class="alert alert--warn">{t.notBound(fn(net.label), net.module)}</p>
   );
 }
 
@@ -198,13 +194,10 @@ function UsbDevicesCard() {
   const state: UsbDevices | null = usePoll<UsbDevices>(() => getUsbDevices(), 5000).data;
 
   if (!state) return null;
+  const t = settingsText().usb;
 
   if (state.devices.length === 0) {
-    return (
-      <p class="muted">
-        Nessun dispositivo collegato alla porta USB.
-      </p>
-    );
+    return <p class="muted">{t.none}</p>;
   }
 
   return (
@@ -217,18 +210,14 @@ function UsbDevicesCard() {
           <div key={dev.port}>
             <Row
               label={label}
-              value={[dev.netdev || 'nessuna interfaccia', speed].filter(Boolean).join(' · ')}
+              value={[dev.netdev || t.noInterface, speed].filter(Boolean).join(' · ')}
             />
             {/* Attaccato ma senza driver di rete: e' il caso che prima
                 spariva. Cosa dire dipende da cosa il dispositivo offre, ed e'
                 per questo che si guardano le sue funzioni una per una. */}
             {!dev.netdev && <UnboundReason dev={dev} modules={state.modules} />}
             {dev.netdev && state.wan_usb.disabled && (
-              <p class="alert alert--warn">
-                Il driver <strong>{dev.driver || '—'}</strong> lo ha agganciato come{' '}
-                <code>{dev.netdev}</code>, ma l'interfaccia <code>wan_usb</code> è rimasta
-                disattivata. Stacca e riattacca il cavo.
-              </p>
+              <p class="alert alert--warn">{t.wanDisabled(dev.driver || '—', dev.netdev)}</p>
             )}
           </div>
         );
@@ -281,21 +270,20 @@ function UsbSpeed() {
 
   // Il kernel non espone il controllo delle porte: dirlo e' meglio che
   // mostrare una scelta che non produce nessun effetto.
+  const t = settingsText().usb;
   if (state?.mode === 'unsupported') {
-    return (
-      <p class="muted">Velocità della porta USB non regolabile.</p>
-    );
+    return <p class="muted">{t.speedFixed}</p>;
   }
 
   return (
     <>
       <div class="field">
-        <span>Velocità della porta</span>
+        <span>{t.speed}</span>
         <div class="chips">
           {(
             [
-              [false, 'Massima disponibile'],
-              [true, 'Limita a USB 2.0'],
+              [false, t.max],
+              [true, t.usb2],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -311,7 +299,7 @@ function UsbSpeed() {
         </div>
       </div>
 
-      {state === null && <p class="muted">Leggo lo stato della porta…</p>}
+      {state === null && <p class="muted">{t.readingPort}</p>}
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
     </>
@@ -323,14 +311,15 @@ function UsbReset() {
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const t = settingsText().usb;
   const run = async () => {
     setBusy(true);
     setError(null);
     setDone(null);
     try {
       const { controller, mode } = await resetUsb();
-      const label = controller || 'controller';
-      setDone(mode === 'usb2' ? `${label} riavviato, porta in USB 2.0` : `${label} riavviato`);
+      const label = controller || t.controller;
+      setDone(mode === 'usb2' ? t.resetUsb2(label) : t.reset(label));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -341,7 +330,7 @@ function UsbReset() {
   return (
     <>
       <button class="button button--ghost" disabled={busy} onClick={run}>
-        {busy ? 'Riavvio in corso…' : 'Riavvia la porta USB'}
+        {busy ? t.resetting : t.resetButton}
       </button>
       {done && (
         <p class="alert alert--ok">
@@ -367,6 +356,7 @@ function UsbReset() {
  * dove si va per quello che qui non c'e'.
  */
 export function Settings({ onLogout }: { onLogout: () => void }) {
+  const t = settingsText();
   // Non passa da travelD ma dal plugin rpcd: questa schermata deve funzionare
   // anche quando il daemon non risponde - e' anche il posto da cui si va a
   // LuCI, cioe' proprio dove si finisce quando qualcosa non va.
@@ -388,12 +378,12 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
   return (
     <main class="screen">
       <header class="topbar">
-        <h1>Impostazioni</h1>
+        <h1>{t.title}</h1>
         {/* "Aggiorna" come nelle altre schermate, non "Esci": l'uscita resta
             dov'era, in Internet, e averla in due posti sarebbe solo un doppione
             da cercare. */}
         <button class="button button--ghost" onClick={poll.refresh}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
@@ -401,30 +391,30 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
         {/* Il nome non e' solo un'etichetta: e' anche quello che le WAN
             impostate su "nome del router" mandano alla rete a monte. */}
         <header class="radio__head">
-          <h2 class="uplink__title">Dispositivo</h2>
+          <h2 class="uplink__title">{t.device}</h2>
           <button class="button button--ghost" onClick={() => setEditingName(true)}>
-            Cambia nome
+            {t.rename}
           </button>
         </header>
 
         {data === null ? (
           <p class="muted">
-            {poll.loading ? 'Caricamento…' : 'Il router non ha risposto.'}
+            {poll.loading ? t.loading : t.noAnswer}
           </p>
         ) : (
           <>
-            <Row label="Nome" value={data.hostname || '—'} />
-            <Row label="Acceso da" value={formatUptime(data.uptime)} />
-            <Row label="Carico" value={data.load.map((n) => n.toFixed(2)).join('  ')} />
+            <Row label={t.name} value={data.hostname || '—'} />
+            <Row label={t.uptime} value={formatUptime(data.uptime)} />
+            <Row label={t.load} value={data.load.map((n) => n.toFixed(2)).join('  ')} />
             <Row
-              label="Temperatura"
+              label={t.temperature}
               value={
                 data.temp_mc == null
-                  ? 'non disponibile'
+                  ? t.unavailable
                   : `${Math.round(data.temp_mc / 1000)} °C`
               }
             />
-            <Row label="Memoria in uso" value={`${mem}%`} />
+            <Row label={t.memory} value={`${mem}%`} />
           </>
         )}
 
@@ -432,18 +422,25 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
             lo stato del dispositivo non arriva. */}
         <LedAndToggleRows />
 
+        {/* La lingua sta qui, accanto alle altre preferenze del dispositivo:
+            si cambia senza dover uscire e rientrare dalla pagina di accesso. */}
+        <label class="row">
+          <span class="row__label">{t.language}</span>
+          <LanguageSelect class="row__select" />
+        </label>
+
         {poll.error && !(poll.error instanceof UbusError && poll.error.isAuthError) && (
           <p class="alert alert--warn alert--code">{poll.error.message}</p>
         )}
       </section>
 
-      {/* I profili stanno per primi fra le cose della Fase 8: sono quelli che
+      {/* I profili stanno per primi fra queste schede: sono quelli che
           si usano arrivando in un posto nuovo, mentre backup, orologio e
           riavvio si toccano una volta e poi stanno li'. */}
       <ProfilesCard />
 
       <section class="card">
-        <h2 class="uplink__title">Porta USB</h2>
+        <h2 class="uplink__title">{t.usb.title}</h2>
         <UsbDevicesCard />
         <UsbSpeed />
         <UsbReset />
@@ -461,9 +458,9 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
           in cui qualcosa non va. Si apre in una scheda nuova per non perdere
           questa. */}
       <section class="card">
-        <h2 class="uplink__title">Configurazione avanzata</h2>
+        <h2 class="uplink__title">{t.advanced}</h2>
         <a class="button button--ghost" href="/cgi-bin/luci/" target="_blank" rel="noreferrer">
-          Apri LuCI
+          {t.openLuci}
         </a>
       </section>
 

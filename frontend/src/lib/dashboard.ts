@@ -7,6 +7,7 @@
  * finche' qualcuno sta guardando questa schermata.
  */
 
+import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
 import type { PortalResult } from './portal';
 
@@ -156,10 +157,10 @@ export type OverallState =
 /**
  * Stato complessivo in una parola (requisito G.1).
  *
- * Fino alla Fase 5 questa funzione non poteva dire "online" e non lo diceva:
+ * Senza la verifica dell'uscita questa funzione non potrebbe dire "online":
  * avere indirizzo e rotta non garantisce che Internet funzioni, perche' un
- * portale risponde a tutto e blocca il resto. Adesso la verifica c'e', e la
- * distinzione che ne esce e' la ragione dell'intera fase: `connected` significa
+ * portale risponde a tutto e blocca il resto. La verifica c'e', e la
+ * distinzione che ne esce e' la sua ragione d'essere: `connected` significa
  * "non lo so ancora", `online` significa "l'ho misurato".
  *
  * La WAN che conta e' quella che porta il traffico: e' da li' che esce anche il
@@ -207,7 +208,7 @@ export function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}g ${h}h`;
+  if (d > 0) return `${d}${settingsText().days} ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }

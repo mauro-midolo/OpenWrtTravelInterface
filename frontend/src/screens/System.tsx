@@ -25,6 +25,8 @@ import {
 import type { RebootSchedule, TimeState } from '../lib/system';
 import { formatBytes } from '../lib/dashboard';
 import { wanLabel } from './MultiWan';
+import { commonText } from '../i18n/common';
+import { settingsText } from '../i18n/settings';
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -54,6 +56,8 @@ function ProfileSheet({
   profile: Profile;
   onClose: (changed: boolean) => void;
 }) {
+  const t = settingsText().profiles;
+  const actions = commonText().actions;
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,9 +80,9 @@ function ProfileSheet({
         <h2>{profile.name}</h2>
         <p class="muted">{profileSummary(profile)}</p>
 
-        <h2>Ordine delle WAN</h2>
+        <h2>{t.wanOrder}</h2>
         {profile.wans.length === 0 ? (
-          <p class="muted">Nessuna WAN salvata in questo profilo.</p>
+          <p class="muted">{t.noWans}</p>
         ) : (
           [...profile.wans]
             .sort((a, b) => a.priority - b.priority)
@@ -88,8 +92,8 @@ function ProfileSheet({
                 label={wanLabel(wan.network)}
                 value={
                   wan.enabled
-                    ? `priorità ${wan.priority}${profile.mode === 'balance' ? ` · peso ${wan.weight}` : ''}`
-                    : 'esclusa'
+                    ? `${t.priority(wan.priority)}${profile.mode === 'balance' ? t.weight(wan.weight) : ''}`
+                    : t.excluded
                 }
               />
             ))
@@ -100,16 +104,14 @@ function ProfileSheet({
 
         {confirmDelete ? (
           <>
-            <p class="alert alert--warn">
-              Elimino <strong>{profile.name}</strong>?
-            </p>
+            <p class="alert alert--warn">{t.confirmDelete(profile.name)}</p>
             <div class="sheet__actions">
               <button
                 class="button button--ghost"
                 disabled={busy}
                 onClick={() => setConfirmDelete(false)}
               >
-                Annulla
+                {actions.cancel}
               </button>
               <button
                 class="button button--primary"
@@ -119,7 +121,7 @@ function ProfileSheet({
                   onClose(true);
                 })}
               >
-                Elimina
+                {t.remove}
               </button>
             </div>
           </>
@@ -127,14 +129,14 @@ function ProfileSheet({
           <>
             <div class="sheet__actions">
               <button class="button button--ghost" disabled={busy} onClick={() => onClose(false)}>
-                Chiudi
+                {actions.close}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy}
                 onClick={() => setConfirmDelete(true)}
               >
-                Elimina
+                {t.remove}
               </button>
               <button
                 class="button button--primary"
@@ -152,7 +154,7 @@ function ProfileSheet({
                   }
                 })}
               >
-                {busy ? 'Applico…' : 'Applica'}
+                {busy ? t.applying : t.apply}
               </button>
             </div>
 
@@ -164,7 +166,7 @@ function ProfileSheet({
                 onClose(true);
               })}
             >
-              Aggiorna con lo stato di adesso
+              {t.update}
             </button>
           </>
         )}
@@ -174,6 +176,8 @@ function ProfileSheet({
 }
 
 function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) {
+  const t = settingsText();
+  const actions = commonText().actions;
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -196,19 +200,19 @@ function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) 
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Nuovo profilo</h2>
+        <h2>{t.profiles.newProfile}</h2>
         <form onSubmit={save}>
           <label class="field">
-            <span>Nome</span>
+            <span>{t.name}</span>
             <input
               type="text"
               value={name}
-              placeholder="es. hotel"
+              placeholder={t.profiles.namePlaceholder}
               autocomplete="off"
               onInput={(e) => setName((e.target as HTMLInputElement).value)}
             />
             {name.trim() !== '' && !valid && (
-              <span class="muted">Lettere, cifre, spazi, trattini. Fino a 24 caratteri.</span>
+              <span class="muted">{t.profiles.nameRule}</span>
             )}
           </label>
 
@@ -216,10 +220,10 @@ function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) 
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             <button class="button button--primary" type="submit" disabled={busy || !valid}>
-              {busy ? 'Salvo…' : 'Salva'}
+              {busy ? t.profiles.saving : actions.save}
             </button>
           </div>
         </form>
@@ -229,6 +233,7 @@ function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) 
 }
 
 export function ProfilesCard() {
+  const t = settingsText().profiles;
   const [data, setData] = useState<ProfileList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Profile | null>(null);
@@ -248,17 +253,17 @@ export function ProfilesCard() {
   return (
     <section class="card">
       <header class="radio__head">
-        <h2 class="uplink__title">Profili</h2>
+        <h2 class="uplink__title">{t.title}</h2>
         <button class="button button--ghost" onClick={() => setSaving(true)}>
-          Salva stato
+          {t.saveState}
         </button>
       </header>
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
-      {!data && !error && <p class="muted">Leggo i profili…</p>}
+      {!data && !error && <p class="muted">{t.loading}</p>}
 
       {data && data.profiles.length === 0 && (
-        <p class="muted">Nessun profilo.</p>
+        <p class="muted">{t.none}</p>
       )}
 
       {data?.profiles.map((profile) => (
@@ -270,12 +275,12 @@ export function ProfilesCard() {
           {/* Quale profilo e' quello di adesso lo decide il router confrontando
               i valori: senza, un profilo resterebbe evidenziato anche dopo aver
               cambiato una cosa a mano. */}
-          {data.current === profile.section && <span class="badge badge--ok">adesso</span>}
+          {data.current === profile.section && <span class="badge badge--ok">{t.current}</span>}
         </button>
       ))}
 
       {data && data.profiles.length > 0 && !data.current && (
-        <p class="muted">Nessun profilo corrisponde alla configurazione attuale.</p>
+        <p class="muted">{t.noMatch}</p>
       )}
 
       {open && (
@@ -312,6 +317,7 @@ export function ProfilesCard() {
  * c'e': non esiste un secondo endpoint da cui scaricare un file.
  */
 export function BackupCard() {
+  const t = settingsText().backup;
   const [busy, setBusy] = useState<null | 'export' | 'import'>(null);
   const [progress, setProgress] = useState(0);
   const [done, setDone] = useState<string | null>(null);
@@ -342,7 +348,7 @@ export function BackupCard() {
       const base64 = await fileToBase64(pending);
       await importBackup(base64, (sent, total) => setProgress(Math.round((sent / total) * 100)));
       setPending(null);
-      setDone('Configurazione ripristinata: il router si sta riavviando.');
+      setDone(t.restored);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -353,15 +359,15 @@ export function BackupCard() {
 
   return (
     <section class="card">
-      <h2 class="uplink__title">Backup della configurazione</h2>
-      <p class="muted">Contiene anche le password del WiFi e le chiavi della VPN.</p>
+      <h2 class="uplink__title">{t.title}</h2>
+      <p class="muted">{t.note}</p>
 
       <button class="button button--ghost" disabled={busy !== null} onClick={save}>
-        {busy === 'export' ? 'Preparo…' : 'Scarica il backup'}
+        {busy === 'export' ? t.preparing : t.download}
       </button>
 
       <div class="field">
-        <span>Ripristina da un file</span>
+        <span>{t.restoreFrom}</span>
         <input
           type="file"
           accept=".tar.gz,.gz,application/gzip"
@@ -377,25 +383,20 @@ export function BackupCard() {
 
       {pending && busy === null && (
         <>
-          <p class="alert alert--warn">
-            Ripristinare <strong>{pending.name}</strong> sovrascrive tutta la configurazione
-            e <strong>riavvia il router</strong>.
-          </p>
+          <p class="alert alert--warn">{t.restoreWarn(pending.name)}</p>
           <div class="sheet__actions">
             <button class="button button--ghost" onClick={() => setPending(null)}>
-              Annulla
+              {commonText().actions.cancel}
             </button>
             <button class="button button--primary" onClick={restore}>
-              Ripristina e riavvia
+              {t.restore}
             </button>
           </div>
         </>
       )}
 
       {busy === 'import' && (
-        <p class="muted">
-          Carico l'archivio… {progress}%. Non chiudere la pagina.
-        </p>
+        <p class="muted">{t.uploading(progress)}</p>
       )}
 
       {done && <p class="alert alert--ok">{done}</p>}
@@ -405,7 +406,7 @@ export function BackupCard() {
 }
 
 /**
- * Orologio (Fase 8).
+ * Orologio.
  *
  * Su questo router non c'e' un orologio a batteria: staccata la corrente, l'ora
  * riparte da quella del firmware. Con l'orologio indietro di mesi ogni
@@ -417,6 +418,8 @@ export function BackupCard() {
  * posti.
  */
 function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: boolean) => void }) {
+  const t = settingsText().time;
+  const actions = commonText().actions;
   const known = ZONES.find((z) => z.tz === time.timezone);
   const [zone, setZone] = useState(known ? known.name : 'custom');
   const [custom, setCustom] = useState(known ? '' : time.timezone);
@@ -454,28 +457,28 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Ora e fuso</h2>
+        <h2>{t.title}</h2>
 
         <form onSubmit={save}>
           <label class="field">
-            <span>Dove sei</span>
+            <span>{t.where}</span>
             <select value={zone} onChange={(e) => setZone((e.target as HTMLSelectElement).value)}>
               {ZONES.map((z) => (
                 <option key={z.name} value={z.name}>
                   {z.label}
                 </option>
               ))}
-              <option value="custom">Altro — stringa POSIX</option>
+              <option value="custom">{t.other}</option>
             </select>
           </label>
 
           {zone === 'custom' && (
             <label class="field">
-              <span>Stringa del fuso</span>
+              <span>{t.tzString}</span>
               <input
                 type="text"
                 value={custom}
-                placeholder="es. CET-1CEST,M3.5.0,M10.5.0/3"
+                placeholder={t.tzPlaceholder}
                 autocapitalize="none"
                 autocomplete="off"
                 spellcheck={false}
@@ -490,11 +493,11 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>Sincronizza l'ora dalla rete</span>
+            <span>{t.sync}</span>
           </label>
 
           <label class="field">
-            <span>Server NTP, uno per riga</span>
+            <span>{t.servers}</span>
             <textarea
               rows={4}
               value={servers}
@@ -504,7 +507,7 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
               onInput={(e) => setServers((e.target as HTMLTextAreaElement).value)}
             />
             {!serversOk && (
-              <span class="muted">Serve almeno un nome valido (lettere, cifre, punti).</span>
+              <span class="muted">{t.badServers}</span>
             )}
           </label>
 
@@ -512,14 +515,14 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             <button
               class="button button--primary"
               type="submit"
               disabled={busy || !serversOk || !tzOk}
             >
-              {busy ? 'Salvo…' : 'Salva'}
+              {busy ? t.saving : actions.save}
             </button>
           </div>
         </form>
@@ -529,6 +532,7 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
 }
 
 export function TimeCard() {
+  const t = settingsText().time;
   const [time, setTimeState] = useState<TimeState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -549,39 +553,31 @@ export function TimeCard() {
   return (
     <section class="card">
       <header class="radio__head">
-        <h2 class="uplink__title">Ora e fuso</h2>
+        <h2 class="uplink__title">{t.title}</h2>
         <button class="button button--ghost" onClick={() => setEditing(true)} disabled={!time}>
-          Modifica
+          {t.edit}
         </button>
       </header>
 
       {error && <p class="alert alert--error alert--code">{error}</p>}
-      {!time && !error && <p class="muted">Leggo l'ora del router…</p>}
+      {!time && !error && <p class="muted">{t.loading}</p>}
 
       {time && (
         <>
-          <Row label="Ora del router" value={time.local} />
-          <Row label="Fuso" value={zone ? zone.label : time.zonename || time.timezone || '—'} />
+          <Row label={t.routerTime} value={time.local} />
+          <Row label={t.zone} value={zone ? zone.label : time.zonename || time.timezone || '—'} />
           <Row
-            label="Sincronizzazione"
-            value={
-              !time.ntp_enabled
-                ? 'spenta'
-                : time.ntpd_running
-                  ? 'attiva'
-                  : 'accesa, ma il servizio non gira'
-            }
+            label={t.syncRow}
+            value={!time.ntp_enabled ? t.syncOff : time.ntpd_running ? t.syncOn : t.syncDown}
           />
-          <Row label="Server" value={time.servers.length ? String(time.servers.length) : 'nessuno'} />
+          <Row label={t.server} value={time.servers.length ? String(time.servers.length) : t.none} />
 
           {/* "Plausibile" e non "sincronizzata": nessuno qui ha parlato con un
               server NTP: si sta solo guardando se l'ora e' un numero possibile.
               Affermare una sincronizzazione non misurata sarebbe l'errore che
               questo progetto evita altrove. */}
           {!time.plausible && (
-            <p class="alert alert--warn">
-              L'orologio è indietro: finché non si sincronizza i siti in HTTPS non si aprono.
-            </p>
+            <p class="alert alert--warn">{t.behind}</p>
           )}
 
         </>
@@ -601,7 +597,7 @@ export function TimeCard() {
 }
 
 /**
- * Riavvio, subito o a un'ora (Fase 8).
+ * Riavvio, subito o a un'ora.
  *
  * Il riavvio pianificato non e' manutenzione preventiva generica: e' il rimedio
  * a guasti che questo progetto ha gia' incontrato - una WAN che non torna su, il
@@ -615,6 +611,8 @@ function RebootSheet({
   schedule: RebootSchedule;
   onClose: (changed: boolean) => void;
 }) {
+  const t = settingsText().reboot;
+  const actions = commonText().actions;
   const [enabled, setEnabled] = useState(schedule.enabled);
   const [hour, setHour] = useState(String(schedule.hour));
   const [minute, setMinute] = useState(String(schedule.minute));
@@ -641,7 +639,7 @@ function RebootSheet({
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
-        <h2>Riavvio pianificato</h2>
+        <h2>{t.scheduled}</h2>
 
         <form onSubmit={save}>
           <label class="check">
@@ -650,11 +648,11 @@ function RebootSheet({
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>Riavvio pianificato</span>
+            <span>{t.scheduled}</span>
           </label>
 
           <label class="field">
-            <span>Quando</span>
+            <span>{t.when}</span>
             <select value={weekday} onChange={(e) => setWeekday((e.target as HTMLSelectElement).value)}>
               {WEEKDAYS.map((day) => (
                 <option key={day.value} value={day.value}>
@@ -665,14 +663,14 @@ function RebootSheet({
           </label>
 
           <div class="field">
-            <span>A che ora</span>
+            <span>{t.at}</span>
             <div class="range">
               <input
                 type="text"
                 class="range__box"
                 value={hour}
                 inputMode="numeric"
-                aria-label="ora"
+                aria-label={t.hour}
                 onInput={(e) => setHour((e.target as HTMLInputElement).value)}
               />
               <span class="range__label">:</span>
@@ -681,12 +679,12 @@ function RebootSheet({
                 class="range__box"
                 value={minute}
                 inputMode="numeric"
-                aria-label="minuti"
+                aria-label={t.minutes}
                 onInput={(e) => setMinute((e.target as HTMLInputElement).value)}
               />
             </div>
             {(!hourOk || !minuteOk) && (
-              <span class="muted">Ora fra 0 e 23, minuti fra 0 e 59.</span>
+              <span class="muted">{t.badTime}</span>
             )}
           </div>
 
@@ -694,14 +692,14 @@ function RebootSheet({
 
           <div class="sheet__actions">
             <button class="button button--ghost" type="button" onClick={() => onClose(false)}>
-              Annulla
+              {actions.cancel}
             </button>
             <button
               class="button button--primary"
               type="submit"
               disabled={busy || !hourOk || !minuteOk}
             >
-              {busy ? 'Salvo…' : 'Salva'}
+              {busy ? t.saving : actions.save}
             </button>
           </div>
         </form>
@@ -711,6 +709,7 @@ function RebootSheet({
 }
 
 export function RebootCard() {
+  const t = settingsText().reboot;
   const [schedule, setSchedule] = useState<RebootSchedule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -732,15 +731,15 @@ export function RebootCard() {
     <section class="card">
       <header class="radio__head">
         <div>
-          <h2 class="uplink__title">Riavvio</h2>
+          <h2 class="uplink__title">{t.title}</h2>
           <p class="muted">
             {schedule?.enabled
-              ? `Pianificato: ${scheduleLabel(schedule)}.`
-              : 'Nessun riavvio pianificato.'}
+              ? t.plannedFor(scheduleLabel(schedule))
+              : t.notPlanned}
           </p>
         </div>
         <button class="button button--ghost" onClick={() => setEditing(true)} disabled={!schedule}>
-          Pianifica
+          {t.plan}
         </button>
       </header>
 
@@ -749,19 +748,15 @@ export function RebootCard() {
       {/* Una riga scritta e non applicata sarebbe il caso peggiore: la scheda
           direbbe "riavvia ogni notte" e non riavvierebbe mai. */}
       {schedule?.enabled && !schedule.cron_running && (
-        <p class="alert alert--warn">
-          Il servizio cron non sta girando: il riavvio pianificato non verrà eseguito.
-        </p>
+        <p class="alert alert--warn">{t.noCron}</p>
       )}
 
       {confirm ? (
         <>
-          <p class="alert alert--warn">
-            Il router riparte adesso: la rete cade per un minuto o due.
-          </p>
+          <p class="alert alert--warn">{t.confirm}</p>
           <div class="sheet__actions">
             <button class="button button--ghost" onClick={() => setConfirm(false)}>
-              Annulla
+              {commonText().actions.cancel}
             </button>
             <button
               class="button button--primary"
@@ -777,18 +772,18 @@ export function RebootCard() {
                 }
               }}
             >
-              {going ? 'Riavvio…' : 'Riavvia adesso'}
+              {going ? t.rebooting : t.now}
             </button>
           </div>
         </>
       ) : (
         <button class="button button--ghost" onClick={() => setConfirm(true)}>
-          Riavvia adesso
+          {t.now}
         </button>
       )}
 
       {going && (
-        <p class="muted">Il router si sta riavviando…</p>
+        <p class="muted">{t.inProgress}</p>
       )}
 
       {editing && schedule && (

@@ -1,109 +1,117 @@
-﻿# Travel Router UI
+# Travel Router UI
 
-[![Versione progetto: 1.9.1-fase8](https://img.shields.io/badge/versione-1.9.1--fase8-blue)](package/travel/files/usr/share/travel/version)
-[![OpenWrt di riferimento: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
-[![Dispositivo: GL-MT3600BE](https://img.shields.io/badge/dispositivo-GL--MT3600BE-green)](#dispositivo-e-firmware-di-riferimento)
+**English** · [Italiano](README-it.md)
 
-**La gestione di un router da viaggio, pensata per lo schermo del telefono.**
+[![Version: 1.11.0](https://img.shields.io/badge/version-1.11.0-blue)](package/travel/files/usr/share/travel/version)
+[![Reference OpenWrt: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
+[![Device: GL-MT3600BE](https://img.shields.io/badge/device-GL--MT3600BE-green)](#reference-device-and-firmware)
+[![UI: English · Italiano](https://img.shields.io/badge/UI-English%20%C2%B7%20Italiano-lightgrey)](#languages)
 
-Travel Router UI è un'interfaccia web per **GL.iNet Beryl 7 (GL-MT3600BE)**
-con **OpenWrt vanilla 25.12**. Riunisce connessioni WiFi, accesso a Internet,
-rete locale e VPN in un pannello utilizzabile dal browser, anche quando la
-connessione Internet non funziona.
+**Travel router management, designed for a phone screen.**
 
-## Perché esiste
+Travel Router UI is a web interface for the **GL.iNet Beryl 7 (GL-MT3600BE)**
+running **vanilla OpenWrt 25.12**. It brings WiFi connections, Internet access,
+the local network and VPNs together in a single panel you can use from the
+browser, even when the Internet connection is down.
 
-In viaggio cambia la rete a cui ci si collega: il WiFi dell'hotel richiede un
-accesso dal browser, una connessione cade, il telefono diventa una WAN di
-emergenza. Gestire questi passaggi dallo smartphone può richiedere di
-attraversare molte pagine di configurazione e capire quali impostazioni
-dipendono dalle altre.
+## Why it exists
 
-Il progetto vuole rendere semplici le operazioni più frequenti: collegare il
-router alla rete disponibile, mantenere una rete personale per i propri
-dispositivi, capire perché Internet non è raggiungibile e scegliere come
-instradare il traffico. L'interfaccia è progettata per l'uso con una mano,
-con le informazioni e le azioni raccolte per attività.
+When you travel, the network you connect to keeps changing: the hotel WiFi
+wants a login in the browser, a connection drops, your phone becomes an
+emergency WAN. Handling all this from a smartphone can mean going through many
+configuration pages and working out which settings depend on which.
 
-Tutti i file dell'applicazione sono serviti dal router: la configurazione
-locale resta accessibile senza Internet, purché il telefono riesca a
-raggiungerlo. LuCI rimane disponibile per la configurazione avanzata.
+The project aims to make the most frequent tasks simple: connecting the router
+to whatever network is available, keeping a personal network for your own
+devices, understanding why the Internet is not reachable and choosing how
+traffic is routed. The interface is designed for one-handed use, with
+information and actions grouped by task.
 
-## Dispositivo e firmware di riferimento
+Every application file is served by the router itself: the local configuration
+stays reachable without Internet, as long as the phone can reach the router.
+LuCI remains available for advanced configuration.
 
-| Voce | Specifica |
+## Reference device and firmware
+
+| Item | Specification |
 |---|---|
-| Dispositivo | GL.iNet Beryl 7, modello **GL-MT3600BE** |
-| Processore | MediaTek a quattro core, 2,0 GHz |
-| Memoria | 512 MB DDR4 |
-| Archiviazione | 512 MB NAND flash |
-| WiFi | WiFi 7 dual band, 2,4 e 5 GHz |
-| Ethernet | Due porte da 2,5 Gb/s, WAN e LAN |
-| USB | Una porta USB 3.0 per periferiche e tethering compatibile |
-| Alimentazione | USB-C |
-| Firmware di riferimento del progetto | **OpenWrt vanilla 25.12** |
-| Versione dell'interfaccia/plugin | **1.9.1-fase8** |
+| Device | GL.iNet Beryl 7, model **GL-MT3600BE** |
+| CPU | Quad-core MediaTek, 2.0 GHz |
+| Memory | 512 MB DDR4 |
+| Storage | 512 MB NAND flash |
+| WiFi | Dual-band WiFi 7, 2.4 and 5 GHz |
+| Ethernet | Two 2.5 Gb/s ports, WAN and LAN |
+| USB | One USB 3.0 port for peripherals and compatible tethering |
+| Power | USB-C |
+| Reference firmware | **Vanilla OpenWrt 25.12** |
+| Interface/plugin version | **1.11.0** |
 
-Le specifiche hardware provengono dalla
-[scheda ufficiale GL.iNet](https://www.gl-inet.com/products/gl-mt3600be/).
-Le funzionalità radio effettivamente disponibili dipendono dal firmware e dai
-driver installati.
+Hardware specifications come from the
+[official GL.iNet product page](https://www.gl-inet.com/products/gl-mt3600be/).
+The radio features actually available depend on the installed firmware and
+drivers.
 
-La base software indicata è l'ambiente di riferimento documentato nel
-repository. Il progetto si installa su OpenWrt già presente sul dispositivo;
-non distribuisce un'immagine firmware. La compatibilità con il firmware
-originale GL.iNet, altri router o altre versioni di OpenWrt è da verificare.
-Gli script di installazione usano `apk`.
+The software base listed here is the reference environment documented in the
+repository. The project is installed on top of an OpenWrt system already on the
+device; it does not ship a firmware image. Compatibility with the stock GL.iNet
+firmware, other routers or other OpenWrt versions has not been verified. The
+install scripts use `apk`.
 
-Il badge della versione segue il
-[file di versione distribuito sul router](package/travel/files/usr/share/travel/version).
-Il repository indica la serie OpenWrt **25.12**, senza fissare una specifica
-patch release o build del firmware.
+The version badge follows the
+[version file shipped to the router](package/travel/files/usr/share/travel/version).
+The repository targets the OpenWrt **25.12** series without pinning a specific
+patch release or firmware build.
 
-## Cosa permette di fare
+## What it can do
 
-| Area | Funzioni disponibili |
+| Area | Features |
 |---|---|
-| **WiFi** | Cercare e collegare reti — una già salvata si riapre dalla scansione con la sua configurazione e senza ridigitare la password —, aggiungere a mano una rete nascosta, attivare la riconnessione automatica, gestire gli access point e scegliere MAC e hostname DHCP. Le reti salvate hanno una pagina dedicata, con una lista sola in cui ogni rete dice su quali bande vale — 2,4 GHz, 5 GHz o entrambe — più ricerca, priorità e condivisione tramite QR e password visibile su richiesta, anche quando non sono connesse. |
-| **Accesso a Internet** | Vedere stato e traffico delle connessioni, usare WiFi, Ethernet e tethering USB, configurare failover, bilanciamento e regole multi-WAN. |
-| **Portali di accesso** | Rilevare i captive portal di hotel e reti pubbliche e aprire il percorso di autenticazione dal browser. |
-| **Rete locale** | Configurare indirizzo IPv4, DHCP e DNS, scegliere come annunciare IPv6 ai dispositivi, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
-| **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
-| **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, accendere e spegnere il LED di stato, scegliere cosa fa la levetta fisica, gestire USB, orologio e riavvio pianificato. |
+| **WiFi** | Scan for and join networks — a saved one reopens from the scan with its configuration, without typing the password again —, add a hidden network by hand, turn on auto-reconnect, manage the access points and choose MAC address and DHCP hostname. Saved networks have their own page: a single list where each network shows which bands it applies to — 2.4 GHz, 5 GHz or both — plus search, priority, and sharing via QR code with the password shown on request, even when they are not connected. |
+| **Internet access** | See status and traffic of each connection, use WiFi, Ethernet and USB tethering, configure failover, load balancing and multi-WAN rules. |
+| **Captive portals** | Detect the captive portals of hotels and public networks and open the login flow in the browser. |
+| **Local network** | Configure IPv4 address, DHCP and DNS, choose how IPv6 is announced to devices, change the role and MAC address of the Ethernet ports, and see connected devices with the port or access point they come from. |
+| **VPN** | Manage Tailscale, pick an exit node, save several named WireGuard configurations and activate one at a time, and enable the kill switch with a temporary pause to get through captive portals. |
+| **System** | Save connection-mode profiles, export and restore configuration backups, turn the status LED on and off, choose what the physical switch does, manage USB, clock and scheduled reboot. |
+| **Language** | Use the interface in English or Italian. On first access the language follows the browser (English if it is neither English nor Italian); it can be changed from the menu on the login page or in Settings, and the choice is remembered by the browser. |
 
-Per esempio, in hotel puoi collegare il router al WiFi della struttura,
-completare l'accesso al portale e continuare a usare la tua rete personale.
-Se hai configurato una seconda connessione, il failover permette di usarla
-quando quella principale non è più disponibile.
+For example, at a hotel you can connect the router to the hotel WiFi, complete
+the portal login and keep using your personal network. If you have configured a
+second connection, failover lets you use it when the main one is no longer
+available.
 
-## Stato del progetto e limiti attuali
+## Project status and current limitations
 
-Le funzioni elencate sono implementate; il progetto è in sviluppo e richiede
-verifiche sul dispositivo per i diversi scenari di rete.
+The features listed above are implemented; the project is under development and
+needs on-device testing across different network scenarios.
 
-- **IPv6** è gestito su tutto il percorso: WAN dual-stack, annunci RA/DHCPv6
-  sulla LAN, firewall, VPN, WireGuard e failover multi-WAN. Non c'è un
-  interruttore globale, e la scelta si fa per WAN. Il **captive portal** resta
-  l'unica parte solo IPv4, per scelta: i portali sono un meccanismo IPv4.
-  Dettagli e tabelle nell'architettura.
-- Bilanciamento multi-WAN, uso di un exit node Tailscale remoto e WireGuard
-  attivo sono modalità alternative fra loro. La UI applica questi vincoli.
-- WireGuard salva più configurazioni, ognuna con un peer, e ne tiene attiva
-  una alla volta; non offre split tunneling né più tunnel attivi insieme.
-- Il kill switch blocca l'inoltro dalla LAN alla WAN; il suo ambito e i suoi
-  limiti sono descritti nell'architettura.
-- La UI non configura reti WiFi Enterprise né reti ospiti isolate. Gli SSID
-  nascosti si aggiungono a mano dalla scheda WiFi, indicando nome, bande e tipo
-  di sicurezza.
-- Il simulatore aiuta a provare i flussi, ma non sostituisce le verifiche su
-  OpenWrt. La suite automatica copre la condivisione WiFi; non è presente una pipeline CI.
+- **IPv6** is handled end to end: dual-stack WANs, RA/DHCPv6 announcements on
+  the LAN, firewall, VPN, WireGuard and multi-WAN failover. There is no global
+  switch; the choice is made per WAN. The **captive portal** check is the only
+  IPv4-only part, on purpose: portals are an IPv4 mechanism. Details and tables
+  are in the architecture document.
+- Multi-WAN load balancing, using a remote Tailscale exit node and an active
+  WireGuard tunnel are mutually exclusive modes. The UI enforces these
+  constraints.
+- WireGuard stores several configurations, each with one peer, and keeps one
+  active at a time; it offers neither split tunneling nor multiple active
+  tunnels.
+- The kill switch blocks forwarding from the LAN to the WAN; its scope and
+  limits are described in the architecture document.
+- The UI does not configure WiFi Enterprise networks or isolated guest
+  networks. Hidden SSIDs are added by hand from the WiFi tab, giving name,
+  bands and security type.
+- The simulator helps exercise the flows but does not replace testing on
+  OpenWrt. An automated Vitest suite covers frontend logic, the translations
+  and the router shell helpers; there is no CI pipeline yet.
 
-Dettagli tecnici, comportamenti di rollback e sviluppi mancanti sono descritti
-in [Architettura e stato dell'implementazione](docs/architettura.md).
+Technical details, rollback behaviour and missing pieces are described in
+[Architecture and implementation status](docs/architettura.md) (in Italian).
+For when something goes wrong on the road, see the
+[recovery guide](docs/recovery.md) (in Italian).
 
-## Provare l'interfaccia senza router
+## Try the interface without a router
 
-Con Node.js e npm disponibili sul PC, dalla cartella del progetto:
+With Node.js and npm installed, from the project folder:
 
 ```powershell
 cd frontend
@@ -111,85 +119,87 @@ npm install
 npm run dev
 ```
 
-Apri **http://localhost:5173/travel/**. In assenza della variabile
-`VITE_ROUTER`, il server di sviluppo attiva il simulatore e il login accetta
-qualsiasi password. Puoi esplorare le schermate e provare reti WiFi,
-interruzioni di connessione, portali e VPN senza un dispositivo collegato.
+Open **http://localhost:5173/travel/**. When the `VITE_ROUTER` variable is not
+set, the development server enables the simulator and the login accepts any
+password. You can explore the screens and try WiFi networks, connection drops,
+captive portals and VPNs without a device.
 
-I dati e gli scenari simulati sono in
+The simulated data and scenarios are in
 [`frontend/src/lib/mock.ts`](frontend/src/lib/mock.ts).
 
-Per sviluppare contro un router reale, dalla cartella `frontend`:
+To develop against a real router, from the `frontend` folder:
 
 ```powershell
 $env:VITE_ROUTER = "https://192.168.10.1"
 npm run dev
 ```
 
-In questa modalità le operazioni dell'interfaccia modificano il router indicato.
+In this mode the actions you take in the interface change the router you point
+it at.
 
-## Installare sul router
+## Installing on the router
 
-Servono un PC con **PowerShell, Node.js, npm, SSH e tar**, il router con
-OpenWrt già installato e accesso amministrativo via SSH. Sul router sono
-attesi i servizi OpenWrt di base, tra cui uhttpd con accesso ubus, rpcd/UCI e
-ucode con i relativi moduli; l'elenco completo è
-nell'[architettura](docs/architettura.md#build-installazione-e-dipendenze).
-L'installazione delle dipendenze mancanti richiede accesso a Internet dal router.
+You need a PC with **PowerShell, Node.js, npm, SSH and tar**, a router with
+OpenWrt already installed, and administrative SSH access. The router is expected
+to provide the basic OpenWrt services, including uhttpd with ubus access,
+rpcd/UCI and ucode with its modules; the full list is in the
+[architecture document](docs/architettura.md#build-installazione-e-dipendenze).
+Installing missing dependencies requires Internet access from the router.
 
-Dalla cartella principale del repository:
+From the repository root:
 
 ```powershell
 .\tools\deploy.ps1 -Router 192.168.10.1
 ```
 
-Sostituisci l'indirizzo con quello del tuo router. Lo script compila il
-frontend sul PC, trasferisce i file via SSH e avvia il setup. Sul router
-vengono serviti file statici; Node.js serve solo sul PC.
+Replace the address with your router's. The script builds the frontend on the
+PC, copies the files over SSH and runs the setup. The router only serves static
+files; Node.js is needed on the PC only.
 
-Per installare anche il terminale web opzionale:
+To also install the optional web terminal:
 
 ```powershell
 .\tools\deploy.ps1 -Router 192.168.10.1 -WithTtyd
 ```
 
-Apri quindi **https://192.168.10.1/travel/**, se HTTPS è configurato sul
-router, e accedi con la password di root. Un certificato autofirmato genera
-un avviso nel browser. Gli indirizzi di esempio vanno adattati alla propria LAN.
+Then open **https://192.168.10.1/travel/**, if HTTPS is configured on the
+router, and sign in with the root password. A self-signed certificate triggers a
+browser warning. Adapt the example addresses to your own LAN.
 
-| Opzione | Scopo |
+| Option | Purpose |
 |---|---|
-| `-Router <ip>` | Indirizzo del router; predefinito `192.168.10.1` |
-| `-User <utente>` | Utente SSH; predefinito `root` |
-| `-SkipBuild` | Usa la build già presente in `frontend/dist/` |
-| `-WithTtyd` | Richiede anche l'installazione di `luci-app-ttyd` |
+| `-Router <ip>` | Router address; default `192.168.10.1` |
+| `-User <user>` | SSH user; default `root` |
+| `-SkipBuild` | Use the build already in `frontend/dist/` |
+| `-WithTtyd` | Also install `luci-app-ttyd` |
 
-Il setup installa servizi e dipendenze, inizializza configurazioni di rete e
-firewall e imposta la pagina iniziale del router perché apra `/travel/`.
-**LuCI resta raggiungibile in `/cgi-bin/luci/`.** Eventuali avvisi sulle
-dipendenze vanno risolti per utilizzare le funzioni interessate.
+The setup installs services and dependencies, initialises network and firewall
+configuration, and sets the router's start page to open `/travel/`. **LuCI
+stays reachable at `/cgi-bin/luci/`.** Any dependency warnings must be resolved
+to use the related features.
 
-La creazione iniziale degli access point è separata dal deploy: lo script
-[`tools/setup-ap.ps1`](tools/setup-ap.ps1) configura SSID e password sulle
-due radio, disabilita le altre interfacce WiFi e ricarica il wireless.
+Creating the access points in the first place is separate from the deploy: the
+[`tools/setup-ap.ps1`](tools/setup-ap.ps1) script configures SSID and password
+on both radios, disables the other WiFi interfaces and reloads wireless.
 
-## Struttura e sviluppo
+## Structure and development
 
 ```text
-frontend/              Interfaccia Preact, TypeScript e Vite
-  src/lib/             Client ubus, logica applicativa e simulatore
-  src/screens/         Schermate dell'applicazione
-package/travel/files/  Backend rpcd, daemon ucode, servizi e script di setup
-tools/                 Deploy e strumenti per il dispositivo
-docs/                  Architettura e documentazione operativa
+frontend/              Preact, TypeScript and Vite interface
+  src/i18n/            UI texts in English and Italian
+  src/lib/             ubus client, application logic and simulator
+  src/screens/         Application screens
+package/travel/files/  rpcd backend, ucode daemon, services and setup scripts
+tools/                 Deploy and device tools
+docs/                  Architecture and operational documentation (Italian)
 ```
 
-Il browser comunica con il router tramite `/ubus`. Il plugin `travel`
-espone le operazioni di gestione; il daemon `traveld` cura riconnessione,
-campionamento del traffico e automazioni. OpenWrt conserva la gestione
-effettiva delle connessioni e delle configurazioni.
+The browser talks to the router through `/ubus`. The `travel` plugin exposes
+the management operations; the `traveld` daemon handles reconnection, traffic
+sampling and automations. OpenWrt keeps doing the actual connection and
+configuration management.
 
-Per controllare i tipi e compilare, dalla cartella `frontend`:
+To type-check, test and build, from the `frontend` folder:
 
 ```powershell
 npm run typecheck
@@ -197,15 +207,33 @@ npm test
 npm run build
 ```
 
-Su Windows, i test dell?helper LED richiedono Git Bash nel percorso standard
+On Windows, the tests of the shell helpers need Git Bash at the standard path
 `C:/Program Files/Git/bin/bash.exe`.
 
-## Contribuire
+### Languages
 
-Segnalazioni, prove sul dispositivo e proposte di miglioramento sono benvenute.
-Per un problema, indica modello del router, versione e build di OpenWrt,
-versione del progetto, passaggi per riprodurlo e comportamento atteso.
-Rimuovi password, chiavi e altri dati riservati dagli eventuali log allegati.
+UI texts live in `frontend/src/i18n/`, one file per area, with Italian and
+English side by side (`defineText`). The English type is derived from the
+Italian one: a missing key is an `npm run typecheck` error, and
+`tests/i18n.test.ts` checks that both languages have the same keys.
 
-Per orientarsi nel codice e individuare le aree da completare, parti da
-[`docs/architettura.md`](docs/architettura.md).
+The router writes its messages in English, next to a stable code
+(`error_code`, `error_params`): the interface rebuilds the message in the chosen
+language from `frontend/src/i18n/backend.ts`, and falls back to the router's
+English sentence when it does not know the code. A new backend error is written as
+`fail_code code "sentence" key value`; `tests/backend-codes.test.ts` fails until
+the code has its translation.
+
+## Contributing
+
+Bug reports, on-device testing and improvement proposals are welcome. When
+reporting a problem, include the router model, OpenWrt version and build,
+project version, steps to reproduce and the expected behaviour. Remove
+passwords, keys and any other private data from attached logs.
+
+To find your way around the code and the areas still to be completed, start
+from [`docs/architettura.md`](docs/architettura.md) (in Italian). Comments in
+the source code are written in Italian as well.
+
+This README also exists in [Italian](README-it.md); the two files are kept in
+sync.

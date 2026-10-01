@@ -16,7 +16,11 @@
  * uno puo' essere un pulsante e basta.
  */
 
+import { settingsText } from '../i18n/settings';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
+import { backendMessage } from '../i18n/backend';
+import type { BackendParams } from '../i18n/backend';
 
 export interface ProfileWan {
   network: string;
@@ -61,7 +65,7 @@ export async function saveProfile(name: string, section = ''): Promise<string> {
     name,
     section,
   });
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return result.section ?? '';
 }
 
@@ -74,26 +78,30 @@ export async function saveProfile(name: string, section = ''): Promise<string> {
  * regola di `mwan_apply`.
  */
 export async function applyProfile(section: string): Promise<string> {
-  const result = await call<{ note?: string; error?: string }>('travel', 'profile_apply', {
-    section,
-  });
-  if (result.error) throw new Error(result.error);
-  return result.note ?? '';
+  const result = await call<{
+    note?: string;
+    note_code?: string;
+    note_params?: BackendParams;
+    error?: string;
+  }>('travel', 'profile_apply', { section });
+  if (result.error) throw backendError(result);
+  return backendMessage(result.note ?? '', result.note_code, result.note_params);
 }
 
 export async function deleteProfile(section: string): Promise<void> {
   const result = await call<{ error?: string }>('travel', 'profile_delete', { section });
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
 }
 
 /** Cosa cambia questo profilo, in una riga. */
 export function profileSummary(profile: Profile): string {
+  const t = settingsText().profiles.summary;
   const bits: string[] = [];
-  bits.push(profile.mode === 'balance' ? 'bilanciamento' : 'failover');
-  if (profile.autoreconnect) bits.push('riconnessione automatica');
-  if (profile.killswitch) bits.push('kill switch');
-  if (!profile.portal_check) bits.push('senza verifica portali');
+  bits.push(profile.mode === 'balance' ? t.balance : t.failover);
+  if (profile.autoreconnect) bits.push(t.autoreconnect);
+  if (profile.killswitch) bits.push(t.killswitch);
+  if (!profile.portal_check) bits.push(t.noPortal);
   const off = profile.wans.filter((w) => !w.enabled).length;
-  if (off > 0) bits.push(`${off} WAN esclus${off === 1 ? 'a' : 'e'}`);
+  if (off > 0) bits.push(t.excluded(off));
   return bits.join(' · ');
 }

@@ -162,8 +162,13 @@ p {
    come si appoggiano alla linea di base. */
 .row__label--state {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
+  /* Accanto c'e' un menu, che e' largo quanto la sua voce piu' lunga: qui il
+     nome puo' andare a capo, altrimenti i due insieme escono dalla scheda. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .row__value {
@@ -194,12 +199,29 @@ label.row--readonly {
 
 .row__select {
   max-width: 60%;
+  /* Senza, un elemento flex non scende sotto la larghezza del suo contenuto e
+     il max-width da solo non basta: la voce lunga si tronca invece di sbordare. */
+  min-width: 0;
+  flex: 0 1 auto;
   align-self: center;
   font-size: 0.9rem;
+  text-overflow: ellipsis;
 }
 
 .login {
   gap: 16px;
+}
+
+.login__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.login__lang {
+  min-height: 36px;
+  font-size: 0.9rem;
 }
 
 .field {

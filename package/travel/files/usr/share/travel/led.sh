@@ -3,7 +3,19 @@
 # sh /usr/share/travel/led.sh apply per ripristinare la scelta persistente.
 . /lib/functions/leds.sh
 
-led_error() { printf '%s\n' "$*" >&2; }
+# Il motivo esce su stderr, com'e' sempre stato: e' quello che finisce nei log.
+# Il primo argomento e' un codice stabile e i seguenti, dopo il messaggio, coppie
+# chiave/valore: se chi chiama ha indicato un file in TRAVEL_ERR_FILE - l'rpcd,
+# per mostrare l'errore nella lingua dell'interfaccia - ci finiscono una per
+# riga, il codice per primo.
+led_error() {
+	_err_code="$1"
+	shift
+	printf '%s\n' "$1" >&2
+	shift
+	[ -z "${TRAVEL_ERR_FILE:-}" ] || printf '%s\n' "$_err_code" "$@" > "$TRAVEL_ERR_FILE"
+	return 0
+}
 
 # Solo i LED dichiarati dal device tree per lo stato del router. Sul Beryl 7
 # running e' blu, boot bianco: OFF deve spegnere entrambi i colori.
@@ -15,20 +27,20 @@ led_detect() {
 		name=$(get_dt_led "$role")
 		case "$name" in
 			'') continue ;;
-			*/*|*[!A-Za-z0-9_:.-]*) led_error 'Nome LED non valido.'; return 1 ;;
+			*/*|*[!A-Za-z0-9_:.-]*) led_error led_bad_name 'Invalid LED name.'; return 1 ;;
 		esac
 		case "$seen" in *" $name "*) continue ;; esac
 		if [ ! -r "/sys/class/leds/$name/brightness" ] ||
 			[ ! -w "/sys/class/leds/$name/brightness" ] ||
 			[ ! -w "/sys/class/leds/$name/trigger" ]; then
-			led_error 'LED di stato non disponibile su questo router.'
+			led_error led_unavailable 'Status LED not available on this router.'
 			return 1
 		fi
 		seen="$seen$name "
 		LED_DEVICES="$LED_DEVICES $name"
 	done
 	case "$seen" in *" $LED_RUNNING "*) [ -n "$LED_RUNNING" ] && return 0 ;; esac
-	led_error 'LED di stato non disponibile su questo router.'
+	led_error led_unavailable 'Status LED not available on this router.'
 	return 1
 }
 
@@ -43,7 +55,7 @@ led_get() {
 			LED_ENABLED=0
 			[ "$brightness" -gt 0 ] && LED_ENABLED=1
 			return 0 ;;
-		*) led_error 'Configurazione del LED non valida.'; return 1 ;;
+		*) led_error led_bad_config 'Invalid LED configuration.'; return 1 ;;
 	esac
 }
 
@@ -65,16 +77,16 @@ led_write() {
 # La configurazione dedicata evita di committare modifiche di rete pendenti.
 led_set() (
 	local want="$1" persist="${2:-1}" name trigger brightness snapshot='' tmp=''
-	case "$want" in 0|1) ;; *) led_error 'Stato LED non valido.'; exit 1 ;; esac
+	case "$want" in 0|1) ;; *) led_error led_bad_state 'Invalid LED state.'; exit 1 ;; esac
 	mkdir /var/lock/travel-led 2>/dev/null || {
-		led_error 'Modifica del LED in corso. Riprova.'; exit 1
+		led_error led_busy 'The LED is being changed. Try again.'; exit 1
 	}
 	trap '[ -z "$tmp" ] || rm -f "$tmp"; rmdir /var/lock/travel-led' EXIT
 	led_detect || exit 1
 	for name in $LED_DEVICES; do
 		trigger=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "/sys/class/leds/$name/trigger")
 		brightness=$(cat "/sys/class/leds/$name/brightness") || exit 1
-		[ -n "$trigger" ] || { led_error 'Impossibile leggere il LED.'; exit 1; }
+		[ -n "$trigger" ] || { led_error led_read_failed 'Could not read the LED.'; exit 1; }
 		snapshot="$snapshot$name $trigger $brightness
 "
 	done
@@ -87,7 +99,7 @@ led_set() (
 	}
 	if ! led_write "$want"; then
 		led_restore
-		led_error 'Impossibile applicare lo stato del LED.'
+		led_error led_apply_failed 'Could not apply the LED state.'
 		exit 1
 	fi
 	[ "$persist" = 1 ] || exit 0
@@ -100,7 +112,7 @@ led_set() (
 		tmp=''
 	else
 		led_restore
-		led_error 'Impossibile salvare lo stato del LED.'
+		led_error led_save_failed 'Could not save the LED state.'
 		exit 1
 	fi
 )

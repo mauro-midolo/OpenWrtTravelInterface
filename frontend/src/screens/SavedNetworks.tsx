@@ -49,6 +49,9 @@ import { HostnamePicker } from '../components/HostnamePicker';
 import { MacPicker } from '../components/MacPicker';
 import { ShareSheet } from './ShareNetwork';
 import { ApplyStatus } from '../components/ApplyStatus';
+import { locale } from '../i18n';
+import { commonText } from '../i18n/common';
+import { savedText } from '../i18n/saved';
 
 /**
  * Da quante reti in su compare la casella di ricerca.
@@ -71,27 +74,17 @@ const SEARCH_FROM = 6;
 const CONNECT_WAIT_SECONDS = 30;
 
 function whenUsed(epoch: number): string {
-  if (!epoch) return 'mai usata';
+  const t = savedText();
+  if (!epoch) return t.neverUsed;
   const days = Math.floor((Date.now() / 1000 - epoch) / 86400);
-  if (days <= 0) return 'usata oggi';
-  if (days === 1) return 'usata ieri';
-  if (days < 30) return `usata ${days} giorni fa`;
-  return `usata il ${new Date(epoch * 1000).toLocaleDateString('it-IT')}`;
+  if (days <= 0) return t.usedToday;
+  if (days === 1) return t.usedYesterday;
+  if (days < 30) return t.usedDaysAgo(days);
+  return t.usedOn(new Date(epoch * 1000).toLocaleDateString(locale()));
 }
 
-const RESULT_LABEL: Record<string, string> = {
-  ok: 'ultima volta: connessa',
-  // Connessa e senza Internet: e' un esito a se', ed e' quello che conviene
-  // sapere prima di ricollegarsi - dice che servira' di nuovo un login.
-  portal: 'ultima volta: portale di accesso',
-  'no-address': 'ultima volta: senza indirizzo',
-  unassociated: 'ultima volta: non agganciata',
-  // I due modi di non agganciarsi che hanno rimedi opposti: correggere la
-  // password, oppure avvicinarsi. Tenerli separati e' il motivo per cui il
-  // router va a leggere il log di wpa_supplicant.
-  'wrong-key': 'ultima volta: password rifiutata',
-  'not-found': 'ultima volta: rete non trovata',
-};
+/** L'esito dell'ultimo tentativo, per esteso: sta nella scheda della rete. */
+const resultLabel = (result: string): string | undefined => savedText().result[result];
 
 /**
  * Lo stesso esito, come sta dentro una riga d'elenco.
@@ -100,13 +93,7 @@ const RESULT_LABEL: Record<string, string> = {
  * guardare, e se anche quelle andate bene portassero un'etichetta non ci
  * sarebbe piu' niente che spicca.
  */
-const RESULT_SHORT: Record<string, string> = {
-  portal: 'portale di accesso',
-  'no-address': 'senza indirizzo',
-  unassociated: 'non agganciata',
-  'wrong-key': 'password rifiutata',
-  'not-found': 'rete non trovata',
-};
+const resultShort = (result: string): string | undefined => savedText().resultShort[result];
 
 /**
  * Com'e' distribuito l'elenco fra le bande, in una frase.
@@ -121,11 +108,12 @@ function bandSummary(saved: SavedNetwork[]): string {
   const only5 = saved.filter((n) => !n.bands['2.4'] && n.bands['5']).length;
   const none = saved.filter((n) => !hasAnyBand(n.bands)).length;
 
+  const t = savedText();
   return [
-    both > 0 ? `${both} su entrambe le bande` : '',
-    only24 > 0 ? `${only24} solo a 2.4 GHz` : '',
-    only5 > 0 ? `${only5} solo a 5 GHz` : '',
-    none > 0 ? `${none} senza banda` : '',
+    both > 0 ? t.both(both) : '',
+    only24 > 0 ? t.only24(only24) : '',
+    only5 > 0 ? t.only5(only5) : '',
+    none > 0 ? t.noBandCount(none) : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -144,16 +132,18 @@ export function SavedEntryCard({
   saved: SavedNetwork[];
   onOpen: () => void;
 }) {
+  const t = savedText();
   return (
     <section class="card">
       <button class="net net--link" onClick={onOpen}>
         <span class="net__main">
           <span class="net__ssid">
-            Gestione reti salvate{saved.length > 0 ? ` (${saved.length})` : ''}
+            {t.entry}
+            {saved.length > 0 ? ` (${saved.length})` : ''}
           </span>
           <span class="net__meta">
             {saved.length === 0
-              ? 'Nessuna ancora. Quando ti colleghi a una rete puoi salvarla, e la ritrovi qui senza ridigitare la password.'
+              ? t.entryEmpty
               : bandSummary(saved)}
           </span>
         </span>
@@ -170,7 +160,7 @@ export function SavedEntryCard({
 /** Le targhette delle bande di una rete: si leggono senza aprire la riga. */
 function BandBadges({ bands }: { bands: BandSet }) {
   if (!hasAnyBand(bands)) {
-    return <span class="badge badge--warn">nessuna banda</span>;
+    return <span class="badge badge--warn">{savedText().noBand}</span>;
   }
   return (
     <>
@@ -211,7 +201,7 @@ function SavedRow({
   const meta = [
     encryptionLabel(net.encryption),
     whenUsed(net.last_used),
-    RESULT_SHORT[net.last_result],
+    resultShort(net.last_result),
     net.note,
   ]
     .filter(Boolean)
@@ -228,11 +218,11 @@ function SavedRow({
         </span>
         <span class="net__side saved__badges">
           <BandBadges bands={net.bands} />
-          {connected && <span class="badge badge--ok">collegata</span>}
+          {connected && <span class="badge badge--ok">{savedText().connected}</span>}
           {/* Una rete che non annuncia il nome non comparira' mai in una
               scansione: questo elenco e' l'unico posto da cui si sa che c'e'. */}
-          {net.hidden && <span class="badge badge--muted">nascosta</span>}
-          {net.disabled && <span class="badge badge--warn">disattivata</span>}
+          {net.hidden && <span class="badge badge--muted">{savedText().hidden}</span>}
+          {net.disabled && <span class="badge badge--warn">{savedText().disabled}</span>}
         </span>
       </button>
     </li>
@@ -260,6 +250,7 @@ export function SavedNetworksScreen({
   onReload: () => void;
   onBack: () => void;
 }) {
+  const t = savedText();
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<SavedNetwork | null>(null);
 
@@ -283,20 +274,20 @@ export function SavedNetworksScreen({
           <button
             class="button button--ghost button--icon"
             onClick={onBack}
-            aria-label="Torna alle reti WiFi"
+            aria-label={t.back}
           >
             ←
           </button>
-          <h1>Reti salvate</h1>
+          <h1>{t.title}</h1>
         </div>
         <button class="button button--ghost" onClick={onReload}>
-          Aggiorna
+          {commonText().actions.refresh}
         </button>
       </header>
 
       {saved.length === 0 ? (
         <section class="card">
-          <p class="muted">Nessuna rete salvata.</p>
+          <p class="muted">{t.empty}</p>
         </section>
       ) : (
         <>
@@ -305,8 +296,8 @@ export function SavedNetworksScreen({
               <input
                 type="search"
                 value={query}
-                placeholder="Cerca per nome o nota"
-                aria-label="Cerca fra le reti salvate"
+                placeholder={t.search}
+                aria-label={t.searchLabel}
                 onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
               />
             </label>
@@ -314,7 +305,7 @@ export function SavedNetworksScreen({
 
           {filtering && rows.length === 0 && (
             <section class="card">
-              <p class="muted">Nessuna rete salvata corrisponde a «{needle}».</p>
+              <p class="muted">{t.noMatch(needle)}</p>
             </section>
           )}
 
@@ -364,6 +355,8 @@ export function SavedSheet({
   radios: Radio[];
   onClose: (changed: boolean) => void;
 }) {
+  const t = savedText();
+  const actions = commonText().actions;
   const apply = useApply();
   const [mode, setMode] = useState<Mode>('menu');
   const [password, setPassword] = useState('');
@@ -487,7 +480,7 @@ export function SavedSheet({
    */
   const connect = async () => {
     if (!target) {
-      setError('Nessuna radio disponibile sulle bande di questa rete.');
+      setError(t.noRadio);
       return;
     }
     setMode('connecting');
@@ -532,18 +525,16 @@ export function SavedSheet({
         {mode === 'menu' && (
           <>
             <p class="muted">
-              {net.hidden ? 'Rete nascosta · ' : ''}
+              {net.hidden ? t.hiddenPrefix : ''}
               {encryptionLabel(net.encryption)} · {bandsLabel(net.bands)} ·{' '}
               {whenUsed(net.last_used)}
-              {net.last_result && RESULT_LABEL[net.last_result]
-                ? ` · ${RESULT_LABEL[net.last_result]}`
+              {net.last_result && resultLabel(net.last_result)
+                ? ` · ${resultLabel(net.last_result)}`
                 : ''}
             </p>
 
             {!hasAnyBand(net.bands) && (
-              <p class="alert alert--warn">
-                Questa rete non è abilitata su nessuna banda.
-              </p>
+              <p class="alert alert--warn">{t.noBandEnabled}</p>
             )}
 
             {/* Con la rete su tutte e due le bande la radio e' una scelta, e
@@ -551,7 +542,7 @@ export function SavedSheet({
                 le radio restano due e ognuna si aggancia per conto suo. */}
             {candidates.length > 1 && (
               <div class="field">
-                <span id="radio-connessione">Collegati usando</span>
+                <span id="radio-connessione">{t.connectUsing}</span>
                 <div class="chips" role="group" aria-labelledby="radio-connessione">
                   {candidates.map((r) => (
                     <button
@@ -569,12 +560,10 @@ export function SavedSheet({
             )}
 
             {candidates.length === 1 && target && (
-              <p class="muted">Radio {bandLabel(target.band ?? target.name)}</p>
+              <p class="muted">{t.radio(bandLabel(target.band ?? target.name))}</p>
             )}
 
-            <p class="muted">
-              Nome inviato nel DHCP: {hostnameLabel(hostnameOf(net), deviceHostname)}.
-            </p>
+            <p class="muted">{t.dhcpName(hostnameLabel(hostnameOf(net), deviceHostname))}</p>
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
@@ -584,27 +573,27 @@ export function SavedSheet({
                 disabled={busy || !target}
                 onClick={connect}
               >
-                Connetti
+                {t.connect}
               </button>
               <button class="button button--ghost" disabled={busy} onClick={() => setMode('edit')}>
-                Modifica
+                {t.edit}
               </button>
               <button class="button button--ghost" disabled={busy} onClick={() => setSharing(true)}>
-                Condividi
+                {t.share}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy || index <= 0}
                 onClick={() => void guard(() => reorder(saved, net.section, -1))}
               >
-                Sposta su
+                {t.moveUp}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy || index < 0 || index >= saved.length - 1}
                 onClick={() => void guard(() => reorder(saved, net.section, 1))}
               >
-                Sposta giù
+                {t.moveDown}
               </button>
               <button
                 class="button button--ghost"
@@ -615,20 +604,20 @@ export function SavedSheet({
                   )
                 }
               >
-                {net.disabled ? 'Riattiva' : 'Disattiva'}
+                {net.disabled ? t.enable : t.disable}
               </button>
               <button
                 class="button button--ghost"
                 disabled={busy}
                 onClick={() => void guard(() => deleteNetwork(net.section))}
               >
-                Elimina
+                {t.remove}
               </button>
             </div>
 
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
-                Chiudi
+                {actions.close}
               </button>
             </div>
           </>
@@ -638,7 +627,7 @@ export function SavedSheet({
           <>
             {net.hidden && (
               <label class="field">
-                <span>Nome della rete (SSID)</span>
+                <span>{t.ssid}</span>
                 <input
                   type="text"
                   value={ssid}
@@ -651,13 +640,13 @@ export function SavedSheet({
             )}
 
             {net.hidden && ssid !== '' && !ssidOk && (
-              <p class="alert alert--error">Il nome può essere lungo al massimo 32 byte.</p>
+              <p class="alert alert--error">{t.ssidTooLong}</p>
             )}
 
             {/* Le bande sono una proprietà della rete, non due reti: la
                 password e la cifratura qui sotto valgono per tutte e due. */}
             <div class="field">
-              <span id="bande-rete">Bande su cui usare questa rete</span>
+              <span id="bande-rete">{t.bands}</span>
               <div role="group" aria-labelledby="bande-rete">
                 {BANDS.map((band) => (
                   <label class="check" key={band}>
@@ -675,26 +664,23 @@ export function SavedSheet({
             </div>
 
             {!hasAnyBand(bands) && (
-              <p class="alert alert--error">
-                Scegli almeno una banda.
-              </p>
+              <p class="alert alert--error">{t.pickBand}</p>
             )}
 
             {conflicts.map(({ band, net: other }) => (
               <p class="alert alert--error" key={band}>
-                «{other.ssid}» è già salvata a {bandLabel(band)} in un'altra voce
-                {other.note ? ` (${other.note})` : ''}.
+                {t.conflict(other.ssid, bandLabel(band), other.note)}
               </p>
             ))}
 
             <label class="field">
-              <span>Password</span>
+              <span>{t.password}</span>
               <input
                 type="password"
                 value={password}
                 autocomplete="new-password"
                 placeholder={
-                  net.has_key ? 'lascia vuoto per non cambiarla' : 'almeno 8 caratteri'
+                  net.has_key ? t.keepPassword : t.minPassword
                 }
                 onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
               />
@@ -707,7 +693,7 @@ export function SavedSheet({
               <MacPicker
                 key={band}
                 choice={mac[band]}
-                label={`Indirizzo MAC a ${bandLabel(band)}`}
+                label={t.macOn(bandLabel(band))}
                 onChange={(choice) => setMac({ ...mac, [band]: choice })}
               />
             ))}
@@ -719,11 +705,11 @@ export function SavedSheet({
             />
 
             <label class="field">
-              <span>Nota</span>
+              <span>{t.note}</span>
               <input
                 type="text"
                 value={note}
-                placeholder="es. hotel di Berlino"
+                placeholder={t.notePlaceholder}
                 onInput={(e) => setNote((e.target as HTMLInputElement).value)}
               />
             </label>
@@ -732,7 +718,7 @@ export function SavedSheet({
 
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => setMode('menu')}>
-                Indietro
+                {actions.back}
               </button>
               <button
                 class="button button--primary"
@@ -758,7 +744,7 @@ export function SavedSheet({
                   )
                 }
               >
-                Salva
+                {actions.save}
               </button>
             </div>
           </>
@@ -769,46 +755,34 @@ export function SavedSheet({
             <ApplyStatus apply={apply} onClose={() => onClose(true)} />
 
             {checking && (
-              <p class="muted">Connessione in corso…</p>
+              <p class="muted">{t.connecting}</p>
             )}
 
             {outcome === 'ok' && (
-              <p class="alert alert--ok">
-                Connessa a «{net.ssid}».
-              </p>
+              <p class="alert alert--ok">{t.ok(net.ssid)}</p>
             )}
 
             {outcome === 'no-address' && (
-              <p class="alert alert--warn">
-                Agganciata a «{net.ssid}», ma la rete non ha assegnato nessun indirizzo.
-              </p>
+              <p class="alert alert--warn">{t.noAddress(net.ssid)}</p>
             )}
 
             {outcome === 'wrong-key' && (
-              <p class="alert alert--error">
-                «{net.ssid}» ha rifiutato la password.
-              </p>
+              <p class="alert alert--error">{t.wrongKey(net.ssid)}</p>
             )}
 
             {outcome === 'not-found' && (
-              <p class="alert alert--warn">
-                «{net.ssid}» non è stata trovata.
-              </p>
+              <p class="alert alert--warn">{t.notFound(net.ssid)}</p>
             )}
 
             {outcome === 'unassociated' && (
-              <p class="alert alert--warn">
-                Non si è agganciata a «{net.ssid}».
-              </p>
+              <p class="alert alert--warn">{t.unassociated(net.ssid)}</p>
             )}
 
             {/* Non un fallimento: un'assenza di misura. Dirlo com'è evita di
                 annotare nella storia della rete un guasto che nessuno ha
                 visto - il router potrebbe essersi agganciato benissimo. */}
             {outcome === 'unknown' && (
-              <p class="alert alert--warn">
-                Il router non ha risposto durante la verifica: esito sconosciuto.
-              </p>
+              <p class="alert alert--warn">{t.unknown}</p>
             )}
 
             {/* La riga di log alla lettera: e' il dettaglio che distingue due
@@ -830,11 +804,11 @@ export function SavedSheet({
                       setMode('edit');
                     }}
                   >
-                    Modifica
+                    {t.edit}
                   </button>
                 )}
                 <button class="button button--primary" onClick={() => onClose(true)}>
-                  Chiudi
+                  {actions.close}
                 </button>
               </div>
             )}

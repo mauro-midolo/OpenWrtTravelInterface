@@ -9,25 +9,16 @@
  * generici, lasciando quei rami senza prova.
  */
 
+import { commonText } from '../i18n/common';
+import { backendMessage } from '../i18n/backend';
+import type { BackendParams } from '../i18n/backend';
+
 /** Codici di stato ubus che ci interessa distinguere. */
 export const UBUS_OK = 0;
 export const UBUS_PERMISSION_DENIED = 6;
 /** Quello che risponde `uci get` quando l'opzione non c'e'. */
 export const UBUS_NOT_FOUND = 5;
 
-/** Testo dei codici di stato ubus. Senza, restano numeri senza significato. */
-const UBUS_MESSAGES: Record<number, string> = {
-  1: 'comando non valido',
-  2: 'argomento non valido',
-  3: 'metodo inesistente',
-  4: 'oggetto non trovato',
-  5: 'nessun dato',
-  6: 'permesso negato',
-  7: 'timeout',
-  8: 'non supportato',
-  9: 'errore sconosciuto',
-  10: 'connessione fallita',
-};
 
 export class UbusError extends Error {
   constructor(
@@ -36,8 +27,10 @@ export class UbusError extends Error {
     readonly where: string,
     detail?: string,
   ) {
-    const text = detail ?? UBUS_MESSAGES[code] ?? `codice ${code}`;
-    super(`${where}: ${text} (codice ${code})`);
+    // Il testo dei codici sta nei dizionari: senza, restano numeri senza significato.
+    const t = commonText().ubus;
+    const text = detail ?? t.codes[code] ?? t.code(code);
+    super(`${where}: ${text} (${t.code(code)})`);
     this.name = 'UbusError';
   }
 
@@ -45,4 +38,34 @@ export class UbusError extends Error {
   get isAuthError(): boolean {
     return this.code === UBUS_PERMISSION_DENIED;
   }
+}
+
+/** Una risposta del router che puo' contenere un errore, con il suo codice. */
+export interface BackendFailure {
+  error?: string;
+  error_code?: string;
+  error_params?: BackendParams;
+}
+
+/**
+ * L'errore da lanciare per una risposta con `error`.
+ *
+ * Il messaggio e' gia' nella lingua dell'interfaccia (vedi `backendMessage`);
+ * il codice resta sull'errore per chi deve distinguere i casi.
+ */
+export class BackendError extends Error {
+  constructor(
+    readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BackendError';
+  }
+}
+
+export function backendError(result: BackendFailure): BackendError {
+  return new BackendError(
+    result.error_code,
+    backendMessage(result.error ?? '', result.error_code, result.error_params),
+  );
 }

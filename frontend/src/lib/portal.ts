@@ -11,7 +11,10 @@
  * (`traveld.portal`). Da qui si legge il verdetto e si chiede di rifarlo.
  */
 
+import { locale } from '../i18n';
+import { portalText } from '../i18n/portal';
 import { call } from './ubus';
+import { backendError } from './ubus-error';
 
 /**
  * Esito della verifica di una WAN.
@@ -70,7 +73,7 @@ export async function checkPortal(network: string): Promise<PortalResult> {
     { network },
     30_000,
   );
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw backendError(result);
   return result;
 }
 
@@ -95,15 +98,13 @@ export async function listPortalMemory(): Promise<PortalMemory[]> {
 
 export async function forgetPortal(section: string): Promise<void> {
   const response = await call<{ error?: string }>('travel', 'portal_forget', { section });
-  if (response.error) throw new Error(response.error);
+  if (response.error) throw backendError(response);
 }
 
-export const PORTAL_LABEL: Record<PortalState, string> = {
-  online: 'Internet raggiungibile',
-  portal: 'Serve un login',
-  blocked: 'Nessuna uscita',
-  unknown: 'Non verificata',
-};
+/** Il verdetto in due parole, nella lingua dell'interfaccia. */
+export function portalLabel(state: PortalState): string {
+  return portalText().state[state];
+}
 
 /**
  * Perche' la verifica non ha potuto dire niente.
@@ -113,26 +114,10 @@ export const PORTAL_LABEL: Record<PortalState, string> = {
  * indirizzo. Sono situazioni diverse e vanno dette per nome.
  */
 export function portalReason(result: PortalResult): string {
-  switch (result.reason) {
-    case 'no-address':
-      return 'La WAN non ha un indirizzo: non c’è ancora niente da verificare.';
-    case 'dns':
-      return `Il nome ${hostOf(result.probe_url)} non si risolve. È un DNS che non risponde, non un portale: i portali il DNS lo rispondono, è così che portano il browser sulla loro pagina.`;
-    case 'no-policy-routing':
-      return 'Non è stato possibile instradare la verifica su questa WAN. Serve il pacchetto ip-full, che arriva insieme a mwan3.';
-    case 'no-ip':
-      return 'Manca il comando ip: senza, la verifica non può uscire dalla WAN giusta.';
-    case 'no-http-client':
-      return 'Sul router non c’è né nc né uclient-fetch: non c’è modo di fare la richiesta, quindi non è la rete a non rispondere — non le è stato chiesto niente.';
-    case 'url-non-http':
-      return 'L’indirizzo di verifica deve essere http:// e non https://: un portale fa fallire una connessione cifrata, e un fallimento non si distingue da una rete che non funziona.';
-    case 'occupato':
-      return 'Un’altra verifica era in corso. Riprova fra qualche secondo.';
-    case 'src_validation':
-      return 'Il firewall ha la validazione della sorgente accesa: le risposte che rientrano da una WAN diversa da quella predefinita vengono scartate, e ogni verifica fuori da quella attiva risulta bloccata senza esserlo.';
-    default:
-      return '';
-  }
+  const reasons = portalText().reason;
+  if (result.reason === 'dns') return reasons.dns(hostOf(result.probe_url));
+  const text = reasons[result.reason as Exclude<keyof typeof reasons, 'dns'>];
+  return typeof text === 'string' ? text : '';
 }
 
 function hostOf(url: string): string {
@@ -180,12 +165,13 @@ export function needsLogin(result: PortalResult | null | undefined): boolean {
 export function portalAt(result: PortalResult): string {
   if (!result.at) return '';
   const seconds = Math.max(0, Math.round(Date.now() / 1000) - result.at);
-  if (seconds < 60) return 'adesso';
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min fa`;
-  return `${Math.round(seconds / 3600)} h fa`;
+  const t = portalText();
+  if (seconds < 60) return t.now;
+  if (seconds < 3600) return t.minutesAgo(Math.round(seconds / 60));
+  return t.hoursAgo(Math.round(seconds / 3600));
 }
 
 export function portalWhen(epoch: number): string {
-  if (!epoch) return 'mai';
-  return new Date(epoch * 1000).toLocaleString();
+  if (!epoch) return portalText().never;
+  return new Date(epoch * 1000).toLocaleString(locale());
 }
