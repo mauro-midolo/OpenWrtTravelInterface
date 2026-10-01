@@ -95,21 +95,12 @@ Note 'If typing the password gets tiresome, set up a key: see the README.'
 
 # `cat >` and not `dd`: busybox's dd does not know status=none and replies by
 # printing its help. The redirection is interpreted by the router's shell, not cmd.
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName               = 'ssh'
-$psi.Arguments              = "-o StrictHostKeyChecking=accept-new $remote ""cat > /tmp/travel-deploy.tar.gz"""
-$psi.RedirectStandardInput  = $true
-$psi.UseShellExecute        = $false
-
-$proc = [System.Diagnostics.Process]::Start($psi)
-try {
-    $stream = [System.IO.File]::OpenRead($tarball)
-    try { $stream.CopyTo($proc.StandardInput.BaseStream) } finally { $stream.Dispose() }
-    $proc.StandardInput.Close()
-    $proc.WaitForExit()
-} finally {
-    if (-not $proc.HasExited) { $proc.Kill() }
-}
+# The file is handed to ssh as its stdin handle, byte for byte: writing to
+# Process.StandardInput instead would go through a StreamWriter that, on
+# Windows PowerShell 5.1, prepends a UTF-8 BOM and corrupts the archive.
+$proc = Start-Process ssh -NoNewWindow -Wait -PassThru `
+    -RedirectStandardInput $tarball `
+    -ArgumentList '-o', 'StrictHostKeyChecking=accept-new', $remote, '"cat > /tmp/travel-deploy.tar.gz"'
 if ($proc.ExitCode -ne 0) { throw "transfer failed (ssh returned $($proc.ExitCode))" }
 
 # --- 4. Installation on the router -----------------------------------------
@@ -127,6 +118,9 @@ tar xzf /tmp/travel-deploy.tar.gz -C /
 rm -f /tmp/travel-deploy.tar.gz
 TRAVEL_INSTALL_TTYD=$ttyd sh /usr/share/travel/setup.sh
 "@
+# The here-string inherits this file's line endings: with CRLF, ash would see
+# `set -e\r` and reject it as an illegal option.
+$install = $install -replace "`r`n", "`n"
 
 ssh -o StrictHostKeyChecking=accept-new $remote $install
 if ($LASTEXITCODE -ne 0) { throw 'installation failed on the router' }
