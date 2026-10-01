@@ -84,8 +84,12 @@ Note "$payloadKb KB to transfer"
 
 # ustar: busybox tar on the router does not reliably read the pax format
 # that bsdtar would produce by default.
+# Windows' own tar, by full path: launched from Git Bash, `tar` on PATH is GNU
+# tar from msys, which reads `C:` in the archive path as a remote host.
+$tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+if (-not (Test-Path $tar)) { $tar = 'tar' }
 if (Test-Path $tarball) { Remove-Item $tarball -Force }
-tar --format=ustar -czf $tarball -C $stage .
+& $tar --format=ustar -czf $tarball -C $stage .
 if ($LASTEXITCODE -ne 0) { throw 'tar creation failed' }
 
 # --- 3. Transfer -----------------------------------------------------------

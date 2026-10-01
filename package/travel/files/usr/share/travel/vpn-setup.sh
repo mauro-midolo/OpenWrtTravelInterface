@@ -514,6 +514,42 @@ else
 	fi
 fi
 
+# Tailscale scrive le sue regole con iptables, non con nft.
+#
+# In modalita' `nftables` - il default del pacchetto - tailscaled aggiunge due
+# regole native (il salvataggio e il ripristino del connmark) dentro la tabella
+# `ip mangle`, che pero' e' di iptables-nft e quindi di mwan3. Da quel momento
+# `iptables -t mangle` risponde "table is incompatible": mwan3 non riesce piu'
+# ne' a leggere ne' a togliere le sue catene, e al riavvio successivo non riempie
+# la tabella di instradamento della WAN. Il traffico marcato finisce nella sua
+# regola `unreachable`.
+#
+# **Verificato sul router, ed e' il peggiore dei guasti possibili: sembra un
+# problema della VPN.** Con un tunnel WireGuard acceso la sua regola arriva
+# prima di quelle di mwan3 e tutto va; spento il tunnel non va piu' niente. Al
+# boot non si vede, perche' mwan3 parte prima di tailscaled: serve un riavvio
+# di mwan3 a servizio gia' acceso - un deploy, un cambio di priorita' delle WAN.
+#
+# In modalita' `iptables` le stesse regole passano da iptables-nft (gia'
+# richiesto da mwan3) e la tabella resta leggibile da tutti.
+if [ -n "$(uci -q get tailscale.settings)" ] &&
+	[ "$(uci -q get tailscale.settings.fw_mode)" != "iptables" ]; then
+	say "tailscale: regole firewall con iptables (con nft rompono mwan3)"
+	uci set tailscale.settings.fw_mode='iptables'
+	uci commit tailscale
+
+	# Le regole native se ne vanno solo con tailscaled che si ferma, e mwan3
+	# puo' ricostruirsi solo dopo: se e' gia' stato riavviato in questo giro
+	# - mwan3-setup.sh gira prima di questo script - lo ha fatto a meta'.
+	if /etc/init.d/tailscale running >/dev/null 2>&1; then
+		/etc/init.d/tailscale restart >/dev/null 2>&1
+		if [ -x /etc/init.d/mwan3 ] && /etc/init.d/mwan3 running >/dev/null 2>&1; then
+			say "riavvio mwan3 per ricostruire le sue tabelle"
+			/etc/init.d/mwan3 restart >/dev/null 2>&1
+		fi
+	fi
+fi
+
 # Il servizio non si avvia qui.
 #
 # Un daemon acceso che non ha mai fatto login non serve a niente e consuma
