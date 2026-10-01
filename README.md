@@ -1,6 +1,6 @@
 ﻿# Travel Router UI
 
-[![Versione progetto: 1.9.1-fase8](https://img.shields.io/badge/versione-1.9.1--fase8-blue)](package/travel/files/usr/share/travel/version)
+[![Versione progetto: 1.10.0-fase8](https://img.shields.io/badge/versione-1.10.0--fase8-blue)](package/travel/files/usr/share/travel/version)
 [![OpenWrt di riferimento: 25.12](https://img.shields.io/badge/OpenWrt-25.12-00B5E2)](docs/architettura.md)
 [![Dispositivo: GL-MT3600BE](https://img.shields.io/badge/dispositivo-GL--MT3600BE-green)](#dispositivo-e-firmware-di-riferimento)
 
@@ -42,7 +42,7 @@ raggiungerlo. LuCI rimane disponibile per la configurazione avanzata.
 | USB | Una porta USB 3.0 per periferiche e tethering compatibile |
 | Alimentazione | USB-C |
 | Firmware di riferimento del progetto | **OpenWrt vanilla 25.12** |
-| Versione dell'interfaccia/plugin | **1.9.1-fase8** |
+| Versione dell'interfaccia/plugin | **1.10.0-fase8** |
 
 Le specifiche hardware provengono dalla
 [scheda ufficiale GL.iNet](https://www.gl-inet.com/products/gl-mt3600be/).
@@ -70,6 +70,7 @@ patch release o build del firmware.
 | **Rete locale** | Configurare indirizzo IPv4, DHCP e DNS, scegliere come annunciare IPv6 ai dispositivi, cambiare il ruolo e l'indirizzo MAC delle porte Ethernet e vedere i dispositivi collegati con la porta o l'access point di provenienza. |
 | **VPN** | Gestire Tailscale, scegliere un exit node, salvare più configurazioni WireGuard con un nome e attivarne una alla volta, e abilitare il kill switch con sospensione temporanea per accedere ai portali. |
 | **Sistema** | Salvare profili delle modalità di connessione, esportare e ripristinare backup di configurazione, accendere e spegnere il LED di stato, scegliere cosa fa la levetta fisica, gestire USB, orologio e riavvio pianificato. |
+| **Lingua** | Usare l'interfaccia in italiano o in inglese. Al primo accesso la lingua segue quella del browser (inglese se non è né italiano né inglese); si cambia dal menu nella pagina di accesso o dalle Impostazioni, e la scelta resta salvata nel browser. |
 
 Per esempio, in hotel puoi collegare il router al WiFi della struttura,
 completare l'accesso al portale e continuare a usare la tua rete personale.
@@ -199,6 +200,20 @@ npm run build
 
 Su Windows, i test dell?helper LED richiedono Git Bash nel percorso standard
 `C:/Program Files/Git/bin/bash.exe`.
+
+### Lingue
+
+I testi dell'interfaccia stanno in `frontend/src/i18n/`, un file per area, con
+italiano e inglese uno accanto all'altro (`defineText`). Il tipo dell'inglese è
+quello dell'italiano: una chiave mancante è un errore di `npm run typecheck`, e
+`tests/i18n.test.ts` controlla che le due lingue abbiano le stesse chiavi.
+
+Gli errori del router arrivano con un codice stabile accanto alla frase
+italiana (`error_code`, `error_params`): l'interfaccia la ricompone nella lingua
+scelta da `frontend/src/i18n/backend.ts`, e se il codice non lo conosce mostra
+la frase del router. Un nuovo errore nel backend si scrive con
+`fail_code codice "frase" chiave valore`; `tests/backend-codes.test.ts` fallisce
+finché il codice non ha la sua traduzione.
 
 ## Contribuire
 

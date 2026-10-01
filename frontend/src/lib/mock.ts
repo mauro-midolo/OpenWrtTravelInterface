@@ -1065,8 +1065,20 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     },
     networks: penalties,
     events: [
-      { at: Math.floor(Date.now() / 1000) - 45, kind: 'connessione', message: 'radio1 -> Hotel-Guest (-52 dBm)' },
-      { at: Math.floor(Date.now() / 1000) - 320, kind: 'fallita', message: 'net_demo: nuovo tentativo fra 60s' },
+      {
+        at: Math.floor(Date.now() / 1000) - 45,
+        kind: 'connessione',
+        message: 'radio1 -> Hotel-Guest (-52 dBm)',
+        code: 'connecting',
+        params: { radio: 'radio1', ssid: 'Hotel-Guest', signal: -52 },
+      },
+      {
+        at: Math.floor(Date.now() / 1000) - 320,
+        kind: 'fallita',
+        message: 'net_demo: nuovo tentativo fra 60s',
+        code: 'retry',
+        params: { key: 'net_demo', wait: 60 },
+      },
     ],
     last_error: '',
   }),
