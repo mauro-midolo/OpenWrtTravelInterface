@@ -15,8 +15,8 @@ export function ApplyStatus({ apply, onClose }: { apply: Apply; onClose: () => v
       <>
         <p class="countdown">{apply.left}s</p>
         <p class="muted">
-          Se questa pagina non risponde più, non fare niente: il router torna da solo alla
-          configurazione precedente allo scadere del tempo.
+          Se la pagina non risponde, allo scadere il router torna alla configurazione
+          precedente.
         </p>
         <div class="sheet__actions">
           <button class="button button--ghost" type="button" onClick={() => void apply.abort()}>
@@ -31,8 +31,7 @@ export function ApplyStatus({ apply, onClose }: { apply: Apply; onClose: () => v
     return (
       <>
         <p class="alert alert--error">
-          Nessuna conferma in tempo: il router è tornato alla configurazione precedente. Non
-          è cambiato niente.
+          Nessuna conferma in tempo: il router è tornato alla configurazione precedente.
         </p>
         <div class="sheet__actions">
           <button class="button button--primary" onClick={onClose}>

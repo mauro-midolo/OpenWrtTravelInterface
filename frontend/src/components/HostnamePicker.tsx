@@ -54,20 +54,12 @@ export function HostnamePicker({
       )}
 
       {invalid && (
-        <span class="muted">
-          Solo lettere, cifre e trattini, non all'inizio né alla fine. Niente spazi o punti:
-          il server DHCP li rifiuta.
-        </span>
+        <span class="muted">Solo lettere, cifre e trattini.</span>
       )}
 
-      <span class="muted">
-        {choice.mode === 'none' &&
-          'La rete a monte non saprà come si chiama il router: comparirà solo come indirizzo MAC nella sua lista di client. È il default.'}
-        {choice.mode === 'device' &&
-          `Verrà inviato il nome del router${deviceHostname ? ` (${deviceHostname})` : ''}, che resta scritto nella lista dei client della rete a monte.`}
-        {choice.mode === 'custom' &&
-          'Verrà inviato questo nome. Serve sulle reti che registrano i client per nome, o per farsi riconoscere da un DHCP con assegnazioni fisse.'}
-      </span>
+      {choice.mode === 'device' && deviceHostname && (
+        <span class="muted">{deviceHostname}</span>
+      )}
     </div>
   );
 }

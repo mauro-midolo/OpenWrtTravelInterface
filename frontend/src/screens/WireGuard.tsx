@@ -92,26 +92,21 @@ function FieldsForm({
 
   return (
     <>
-      {text(
-        'name',
-        'Nome',
-        'es. casa, ufficio, provider svizzero',
-        'Obbligatorio: è come distingui questa configurazione dalle altre.',
-      )}
-      {text('addresses', 'Indirizzi dell’interfaccia', '10.66.0.2/32', 'Il campo Address del file .conf. Più indirizzi separati da virgola.')}
+      {text('name', 'Nome', 'es. casa, ufficio, provider svizzero')}
+      {text('addresses', 'Indirizzi dell’interfaccia', '10.66.0.2/32')}
       {text('peer_key', 'Chiave pubblica del peer', 'PublicKey del [Peer]')}
       {text(
         'endpoint',
         'Endpoint',
         'vpn.example.com',
-        'Un nome, un IPv4, o un IPv6 — anche senza parentesi: le mette il router.',
+        undefined,
         wgEndpointProblem(fields.endpoint),
       )}
       {text('port', 'Porta', '51820')}
-      {text('allowed_ips', 'Instradato nel tunnel', '0.0.0.0/0', 'AllowedIPs. Con 0.0.0.0/0 passa tutto di là.')}
+      {text('allowed_ips', 'Instradato nel tunnel', '0.0.0.0/0')}
       {text('dns', 'DNS', 'vuoto per non cambiarli')}
       {text('mtu', 'MTU', 'vuoto per il valore automatico')}
-      {text('keepalive', 'Keepalive', '25', 'Secondi. Senza, un tunnel dietro NAT si addormenta.')}
+      {text('keepalive', 'Keepalive (secondi)', '25')}
 
       {/* I segreti non escono mai dal router, quindi il campo parte vuoto e
           vuoto vuol dire "lascia quello che c'è": è la stessa regola della
@@ -125,11 +120,7 @@ function FieldsForm({
           placeholder={hasPrivateKey ? 'lascia vuoto per non cambiarla' : 'obbligatoria'}
           onInput={(e) => onChange({ private_key: (e.target as HTMLInputElement).value })}
         />
-        <span class="muted">
-          {hasPrivateKey
-            ? 'È salvata sul router e non viene mostrata: non esce mai da lì.'
-            : 'Manca: senza, il tunnel non può salire.'}
-        </span>
+        {!hasPrivateKey && <span class="muted">Manca: senza, il tunnel non può salire.</span>}
       </label>
 
       <label class="field">
@@ -235,9 +226,6 @@ function ImportSheet({
             autocomplete="off"
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
           />
-          <span class="muted">
-            Obbligatorio: è come distingui questa configurazione dalle altre.
-          </span>
         </label>
 
         <label class="field">
@@ -251,17 +239,7 @@ function ImportSheet({
             spellcheck={false}
             onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
           />
-          <span class="muted">
-            La chiave privata resta sul router: viene scritta e non riletta più, come la
-            password del WiFi.
-          </span>
         </label>
-
-        <p class="alert alert--info">
-          {profile
-            ? 'Sostituisce i parametri di questa configurazione. Le altre non vengono toccate.'
-            : 'La configurazione viene salvata spenta. Attivarla è un passo a parte, così anche la prima accensione passa dai controlli di compatibilità.'}
-        </p>
 
         {error && <p class="alert alert--error alert--code">{error}</p>}
 
@@ -336,12 +314,8 @@ function ToggleSheet({
           <>
             <p class="alert alert--warn">
               {on
-                ? 'Da adesso tutto il traffico dei client esce da questo tunnel. Se il tunnel non sale, senza kill switch il traffico torna a uscire dalla rete a cui sei collegato.'
-                : 'Il traffico torna a uscire direttamente dalla rete a cui sei collegato.'}
-            </p>
-            <p class="muted">
-              L'accesso al router non viene toccato: questa schermata resta raggiungibile in
-              ogni caso.
+                ? 'Tutto il traffico dei client uscirà da questo tunnel.'
+                : 'Il traffico tornerà a uscire direttamente dalla rete a cui sei collegato.'}
             </p>
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -452,8 +426,7 @@ function ProfileSheet({
 
             {!profile.named && (
               <p class="alert alert--info">
-                Questa configurazione arriva da una versione precedente e non ha un nome:
-                qui sopra c'è il suo endpoint. Aprila in Modifica per dargliene uno.
+                Questa configurazione non ha un nome: dagliene uno da Modifica.
               </p>
             )}
 
@@ -461,14 +434,12 @@ function ProfileSheet({
                 comunque, ma scoprirlo dopo aver premuto è un giro a vuoto. */}
             {!profile.active && other && !locked && (
               <p class="alert alert--info">
-                Per attivare questa devi prima disattivare «{other.name}»: una sola
-                configurazione WireGuard alla volta può portare il traffico.
+                Per attivare questa devi prima disattivare «{other.name}».
               </p>
             )}
             {!profile.active && !other && !locked && isBlocked && (
               <p class="alert alert--info">
-                Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}. Al
-                massimo una cosa alla volta può decidere da dove esce il traffico.
+                Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}.
               </p>
             )}
 
@@ -477,9 +448,8 @@ function ProfileSheet({
             {locked && (
               <p class="alert alert--info">
                 {byToggle?.id === profile.id
-                  ? 'Questa configurazione segue l’interruttore fisico: si accende e si spegne muovendo la levetta, non da qui.'
-                  : `L’interruttore fisico comanda «${byToggle?.name ?? 'una configurazione'}»: finché è così, da qui non si attiva e non si disattiva nessuna configurazione.`}{' '}
-                Per tornare a decidere da qui, cambia la funzione dell’interruttore in Sistema.
+                  ? 'Questa configurazione segue l’interruttore fisico.'
+                  : `L’interruttore fisico comanda «${byToggle?.name ?? 'una configurazione'}».`}
               </p>
             )}
 
@@ -518,9 +488,7 @@ function ProfileSheet({
             </div>
 
             {profile.active && (
-              <p class="muted">
-                Per eliminarla o cambiarne il nome senza rischi, disattivala prima.
-              </p>
+              <p class="muted">Per eliminarla, disattivala prima.</p>
             )}
 
             <div class="sheet__actions">
@@ -533,11 +501,6 @@ function ProfileSheet({
 
         {mode === 'edit' && (
           <>
-            <p class="muted">
-              Le modifiche valgono solo per questa configurazione: le altre restano come
-              sono.
-            </p>
-
             <FieldsForm
               fields={fields}
               hasPrivateKey={profile.config.has_private_key}
@@ -547,8 +510,7 @@ function ProfileSheet({
 
             {profile.active && (
               <p class="alert alert--warn">
-                Questa configurazione è attiva: salvando, il tunnel viene rifatto con i
-                parametri nuovi e per qualche secondo il traffico non passa.
+                Configurazione attiva: salvando, il traffico si interrompe per qualche secondo.
               </p>
             )}
 
@@ -574,10 +536,8 @@ function ProfileSheet({
         {mode === 'delete' && (
           <>
             <p class="alert alert--warn">
-              Elimini «{profile.name}» e la sua chiave privata. Per riaverla servirà di nuovo
-              il file del provider.
+              Elimini «{profile.name}» e la sua chiave privata?
             </p>
-            <p class="muted">Le altre configurazioni salvate non vengono toccate.</p>
 
             {error && <p class="alert alert--error alert--code">{error}</p>}
 
@@ -672,8 +632,7 @@ export function WireGuardCard({
 
       {!wg.installed && (
         <p class="alert alert--warn">
-          Il pacchetto <code>wireguard-tools</code> non è sul router. Si installa da solo al
-          prossimo deploy fatto con Internet funzionante.
+          Il pacchetto <code>wireguard-tools</code> non è installato.
         </p>
       )}
 
@@ -681,8 +640,7 @@ export function WireGuardCard({
           foglio di un profilo si ripete solo quando lì si sta per premere. */}
       {!active && isBlocked && !locked && profiles.length > 0 && (
         <p class="alert alert--info">
-          Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}. Al
-          massimo una cosa alla volta può decidere da dove esce il traffico.
+          Non si può attivare WireGuard adesso: {blockReason(wg.policy, 'wireguard')}.
         </p>
       )}
 
@@ -691,18 +649,12 @@ export function WireGuardCard({
           trovarne la ragione senza doverla cercare. */}
       {locked && (
         <p class="alert alert--info">
-          L’attivazione la comanda l’interruttore fisico:{' '}
-          <strong>{byToggle?.name ?? wg.toggle}</strong> segue la levetta e da qui non si
-          attiva né si disattiva nessuna configurazione. Le altre cose — modificare,
-          reimportare, guardare — restano come sempre.
+          <strong>{byToggle?.name ?? wg.toggle}</strong> segue l’interruttore fisico.
         </p>
       )}
 
       {profiles.length === 0 ? (
-        <p class="muted">
-          Nessuna. Incolla il file .conf del tuo provider, dagli un nome, e lo ritrovi qui:
-          puoi salvarne quante ne vuoi e attivarne una alla volta.
-        </p>
+        <p class="muted">Nessuna configurazione.</p>
       ) : (
         <ul class="list list--flush">
           {profiles.map((profile) => (
@@ -764,8 +716,7 @@ export function WireGuardCard({
           {!alive && (
             <p class="alert alert--warn">
               Il tunnel è acceso ma <strong>l'ultimo handshake non è recente</strong>: il peer
-              non sta rispondendo. Di solito è l'endpoint irraggiungibile dalla rete in cui
-              ti trovi, oppure una chiave che non combacia.
+              non sta rispondendo.
             </p>
           )}
         </>

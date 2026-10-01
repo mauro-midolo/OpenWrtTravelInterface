@@ -54,7 +54,6 @@ export function HiddenSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const chosen = STA_ENCRYPTIONS.find((e) => e.value === encryption);
   const wantsKey = needsKey(encryption);
 
   // Un doppione e' una voce con lo stesso nome che copre una delle bande
@@ -109,12 +108,6 @@ export function HiddenSheet({
         <h2>Aggiungi rete nascosta</h2>
 
         <form onSubmit={save}>
-          <p class="muted">
-            Una rete che non annuncia il proprio nome non compare cercando: va scritta a
-            mano. Viene salvata anche se adesso non è raggiungibile, e ci si collega quando
-            si è a portata.
-          </p>
-
           <label class="field">
             <span>Nome della rete (SSID)</span>
             <input
@@ -126,10 +119,6 @@ export function HiddenSheet({
               placeholder="esattamente com'è scritto"
               onInput={(e) => setSsid((e.target as HTMLInputElement).value)}
             />
-            <span class="muted">
-              Maiuscole e minuscole contano: <code>Ufficio</code> e <code>ufficio</code> sono
-              due reti diverse.
-            </span>
           </label>
 
           {/* Errori solo su un campo gia' toccato: dire "obbligatorio" su una
@@ -154,15 +143,11 @@ export function HiddenSheet({
                 </label>
               ))}
             </div>
-            <span class="muted">
-              Almeno una. Se la stessa rete nascosta c'è su tutte e due, accendile entrambe:
-              resta una configurazione sola, con una password sola.
-            </span>
           </div>
 
           {!hasAnyBand(bands) && (
             <p class="alert alert--error">
-              Scegli almeno una banda: senza, nessuna radio userebbe questa rete.
+              Scegli almeno una banda.
             </p>
           )}
 
@@ -178,7 +163,6 @@ export function HiddenSheet({
                 </option>
               ))}
             </select>
-            {chosen && <span class="muted">{chosen.note}</span>}
           </label>
 
           {/* Solo i parametri che servono davvero a collegarsi: su una rete
@@ -208,16 +192,14 @@ export function HiddenSheet({
             <input
               type="text"
               value={note}
-              placeholder="es. rete dell'ufficio, non compare nell'elenco"
+              placeholder="es. rete dell'ufficio"
               onInput={(e) => setNote((e.target as HTMLInputElement).value)}
             />
           </label>
 
           {conflicts.map(({ band, net }) => (
             <p class="alert alert--warn" key={band}>
-              «{net.ssid}» è già salvata a {bandLabel(band)}. Modificala dalle reti salvate
-              invece di aggiungerne una seconda uguale: sulla stessa radio verrebbe usata
-              solo una delle due.
+              «{net.ssid}» è già salvata a {bandLabel(band)}: modificala dalle reti salvate.
             </p>
           ))}
 

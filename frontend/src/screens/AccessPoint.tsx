@@ -25,9 +25,7 @@ export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }
     return (
       <section class="card">
         <h2 class="uplink__title">Access point</h2>
-        <p class="muted">
-          Nessun access point configurato. Rilancia <code>tools\setup-ap.ps1</code> dal PC.
-        </p>
+        <p class="muted">Nessun access point configurato.</p>
       </section>
     );
   }
@@ -72,26 +70,19 @@ export function ApCard({ aps, onEdit }: { aps: ApSection[]; onEdit: () => void }
           <Row label="Dispositivi collegati" value={String(clients)} />
         </>
       ) : (
-        <p class="muted">
-          Configurato su {aps.map((ap) => `${ap.band} GHz`).join(' e ')}, ma spento su
-          entrambe.{' '}
-          {byToggle.length < aps.length && 'Riaccendilo dalla scheda della radio.'}
-        </p>
+        <p class="muted">Spento su {aps.map((ap) => `${ap.band} GHz`).join(' e ')}.</p>
       )}
 
       {byToggle.length > 0 && (
         <p class="alert alert--info">
-          {byToggle.map((ap) => `${ap.band} GHz`).join(' e ')}: lo comanda l’interruttore
-          fisico, e si accende o si spegne muovendo la levetta. Per tornare a deciderlo
-          dall’interfaccia, cambia la funzione dell’interruttore in Sistema.
+          {byToggle.map((ap) => `${ap.band} GHz`).join(' e ')}: comandato dall’interruttore
+          fisico.
         </p>
       )}
 
       {diverging && (
         <p class="alert alert--warn">
-          Le due radio hanno impostazioni diverse. Salvale di nuovo da qui per riallinearle:
-          altrimenti lo spostamento automatico dell'access point cambierebbe rete sotto i
-          piedi di chi è collegato.
+          Le due radio hanno impostazioni diverse: salvale di nuovo per riallinearle.
         </p>
       )}
     </section>
@@ -136,8 +127,6 @@ export function ApSheet({
     if (ok) setConfirmed(true);
   };
 
-  const selected = AP_ENCRYPTIONS.find((e) => e.value === encryption);
-
   return (
     <div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet__panel card">
@@ -174,7 +163,6 @@ export function ApSheet({
                   </option>
                 ))}
               </select>
-              {selected && <span class="muted">{selected.note}</span>}
             </label>
 
             <label class="field">
@@ -198,25 +186,15 @@ export function ApSheet({
               {password !== '' && password.length < 8 && (
                 <span class="muted">Servono almeno 8 caratteri.</span>
               )}
-              {password === '' && !needsPassword && (
-                <span class="muted">
-                  La password attuale non viene mostrata: non esce mai dal router.
-                </span>
-              )}
             </label>
 
-            <p class="alert alert--warn">
-              Le impostazioni valgono per <strong>entrambe le radio</strong>, così
-              l'access point può spostarsi senza cambiare rete.
-              {changesCredentials && (
-                <>
-                  {' '}
-                  Cambiando nome o password <strong>tutti i dispositivi si scollegano</strong>:
-                  dovrai ricollegarti a mano con le credenziali nuove entro{' '}
-                  {AP_ROLLBACK_SECONDS} secondi, altrimenti il router torna indietro da solo.
-                </>
-              )}
-            </p>
+            {changesCredentials && (
+              <p class="alert alert--warn">
+                Cambiando nome o password <strong>tutti i dispositivi si scollegano</strong>:
+                ricollegati entro {AP_ROLLBACK_SECONDS} secondi, altrimenti il router torna
+                indietro da solo.
+              </p>
+            )}
 
             <div class="sheet__actions">
               <button class="button button--ghost" type="button" onClick={() => onClose(false)}>

@@ -392,30 +392,20 @@ export function ConnectSheet({
               {net.band} GHz · canale {net.channel} · {net.security}
             </p>
 
-            <p class="alert alert--info">
-              Il router userà la radio <strong>{plan.staRadio.band} GHz</strong> per
-              collegarsi. Gli access point restano accesi dove sono: questa operazione non
-              ne tocca nessuno.
-            </p>
-
             {plan.sharesRadioWithAp && (
               <p class="alert alert--warn">
                 L'access point su <strong>{plan.staRadio.band} GHz</strong> condivide questa
-                radio: erediterà il canale della rete e potrà interrompersi quando la rete
-                cade.
+                radio: potrà interrompersi se la rete cade.
                 {plan.otherApActive && plan.otherRadio ? (
                   <>
                     {' '}
-                    Quello su <strong>{plan.otherRadio.band} GHz</strong> resta indipendente:
-                    è da lì che rientri se succede.
+                    Quello su <strong>{plan.otherRadio.band} GHz</strong> resta raggiungibile.
                   </>
                 ) : (
                   <>
                     {' '}
-                    <strong>
-                      Sull'altra radio non c'è nessun access point acceso: accendilo prima
-                    </strong>
-                    , altrimenti resteresti senza via di rientro se questa rete cade.
+                    <strong>Accendi prima un access point sull'altra radio</strong>, per non
+                    restare senza accesso.
                   </>
                 )}
               </p>
@@ -423,8 +413,7 @@ export function ConnectSheet({
 
             {plan.noApAtAll && (
               <p class="alert alert--warn">
-                Non c'è <strong>nessun access point acceso</strong>. Se ti stai collegando
-                via cavo va bene, ma in viaggio accendine uno prima di partire.
+                Non c'è <strong>nessun access point acceso</strong>.
               </p>
             )}
 
@@ -441,14 +430,6 @@ export function ConnectSheet({
                   }
                   onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
                 />
-                {/* La chiave salvata non si mostra: non esce mai dal router.
-                    Lasciare il campo vuoto non la cancella - la usa. */}
-                {known?.has_key && (
-                  <span class="muted">
-                    Questa rete ha già una password salvata: lascia il campo vuoto per
-                    usarla, oppure scrivine una nuova per correggerla.
-                  </span>
-                )}
               </label>
             )}
 
@@ -459,13 +440,6 @@ export function ConnectSheet({
               deviceHostname={deviceHostname}
               onChange={setHostname}
             />
-
-            {savedHere && (
-              <p class="muted">
-                Questa rete è già salvata ({bandsLabel(savedHere.bands)}): l'ultimo utilizzo
-                verrà aggiornato.
-              </p>
-            )}
 
             {/* La stessa rete, salvata finora solo sull'altra banda. Non se ne
                 crea una seconda: si aggiunge questa banda a quella che c'e'
@@ -478,9 +452,8 @@ export function ConnectSheet({
                   onChange={(e) => setAddBand((e.target as HTMLInputElement).checked)}
                 />
                 <span>
-                  «{savedElsewhere.ssid}» è già salvata ({bandsLabel(savedElsewhere.bands)}):
-                  aggiungi anche <strong>{bandLabel(net.band)}</strong> a quella stessa rete,
-                  invece di salvarne una seconda. Succede solo se la connessione riesce.
+                  Aggiungi <strong>{bandLabel(net.band)}</strong> alla rete salvata «
+                  {savedElsewhere.ssid}» ({bandsLabel(savedElsewhere.bands)})
                 </span>
               </label>
             )}
@@ -500,9 +473,7 @@ export function ConnectSheet({
                     onChange={(e) => setRemember((e.target as HTMLInputElement).checked)}
                   />
                   <span>
-                    Salva questa rete{savedElsewhere ? ' come voce a parte' : ''}, così la
-                    ritrovi senza ridigitare la password. Viene salvata solo se la
-                    connessione riesce.
+                    Salva questa rete{savedElsewhere ? ' come voce a parte' : ''}
                   </span>
                 </label>
 
@@ -510,10 +481,7 @@ export function ConnectSheet({
                     collegarsi, non a scrivere una voce nuova che deve averne
                     una sua. */}
                 {!canSaveApart && (
-                  <p class="muted">
-                    Per salvarla come voce a parte serve la password: scrivila qui sopra.
-                    Per collegarti e basta non serve — quella salvata la usa il router.
-                  </p>
+                  <p class="muted">Per salvarla come voce a parte serve la password.</p>
                 )}
 
                 {/* La banda da cui l'hai trovata resta accesa e non si può
@@ -536,19 +504,11 @@ export function ConnectSheet({
                           />
                           <span>
                             {bandLabel(band)}
-                            {band === net.band ? ' · la banda da cui l’hai trovata' : ''}
-                            {band === otherBand && otherTaken
-                              ? ' · già usata da un’altra rete salvata con questo nome'
-                              : ''}
+                            {band === otherBand && otherTaken ? ' · già usata da un’altra rete salvata' : ''}
                           </span>
                         </label>
                       ))}
                     </div>
-                    <span class="muted">
-                      {otherTaken
-                        ? "Su quella banda una voce con questo nome c'è già: non se ne aggiunge una seconda, che non verrebbe mai provata."
-                        : `Aggiungi ${otherBand ? bandLabel(otherBand) : "l'altra banda"} solo se sai che la stessa rete, con la stessa password, c'è anche lì.`}
-                    </span>
                   </div>
                 )}
               </>
@@ -618,8 +578,7 @@ function Outcome({
             <>
               <br />
               <br />
-              Non è stato possibile verificare l'uscita: se la rete richiede un login su
-              pagina web non hai ancora Internet. Il controllo si rifà dalla scheda Internet.
+              Uscita verso Internet non verificata.
             </>
           )}
         </p>
@@ -631,8 +590,7 @@ function Outcome({
       {state === 'addressed' && portal?.state === 'portal' && (
         <>
           <p class="alert alert--warn">
-            La rete ha un <strong>portale di accesso</strong>: finché non fai il login non
-            passa niente. Aprilo adesso, dal telefono.
+            La rete ha un <strong>portale di accesso</strong>: serve il login.
           </p>
           {portalLoginUrl(portal) && (
             <a
@@ -649,8 +607,7 @@ function Outcome({
 
       {state === 'addressed' && portal?.state === 'blocked' && (
         <p class="alert alert--warn">
-          La rete ha dato un indirizzo ma <strong>non esce niente</strong>: nessuna risposta
-          dall'esterno. Non è un portale — quello risponderebbe.
+          La rete ha dato un indirizzo ma <strong>non esce niente</strong>.
         </p>
       )}
 
@@ -661,14 +618,12 @@ function Outcome({
       {state === 'no-address' && (
         <p class="alert alert--error">
           Agganciato a <strong>{uplink?.ssid}</strong>, ma la rete non ha dato un indirizzo.
-          Di solito è una rete satura o che richiede un'autenticazione preventiva.
         </p>
       )}
 
       {(state === 'unassociated' || state === 'disabled') && (
         <p class="alert alert--error">
-          Non è riuscito ad agganciare la rete. Il motivo più probabile è la password
-          sbagliata.
+          Non è riuscito ad agganciare la rete. Controlla la password.
         </p>
       )}
 

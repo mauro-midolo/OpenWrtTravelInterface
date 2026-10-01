@@ -134,17 +134,13 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
       {lan && extra.length > 0 && (
         <section class="card uplink uplink--no-address">
           <h2 class="uplink__title">Transizione in corso</h2>
-          <p>
-            Il router risponde su <strong>due indirizzi</strong>: quello nuovo e il vecchio,
-            tenuto come rete di sicurezza.
-          </p>
           <Row label="Nuovo" value={primary} />
           {extra.map((address) => (
             <Row key={address} label="Vecchio" value={address} />
           ))}
           <p class="muted">
-            Verifica di raggiungere l'interfaccia su <strong>https://{primary}/travel/</strong>,
-            poi togli il vecchio. Finché è lì, hai sempre una via di rientro.
+            Verifica di raggiungere <strong>https://{primary}/travel/</strong> prima di
+            togliere il vecchio.
           </p>
           <button
             class="button button--primary"
@@ -160,17 +156,15 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
         <section class="card uplink uplink--unassociated">
           <h2 class="uplink__title">Conflitto di sottorete</h2>
           <p>
-            La rete locale usa la stessa sottorete di una rete a monte. In questa
-            situazione il traffico dei client <strong>non esce</strong>: il router non
-            distingue più ciò che è locale da ciò che sta oltre.
+            La rete locale usa la stessa sottorete di una rete a monte: il traffico dei
+            client <strong>non esce</strong>.
           </p>
           {conflicts.map((c) => (
             <Row key={c.label} label={c.label} value={c.ipv4} />
           ))}
           {suggestion && (
             <p class="muted">
-              Un intervallo libero: <strong>{suggestion}</strong>. Aprendo la modifica lo
-              trovi già proposto.
+              Intervallo libero: <strong>{suggestion}</strong>
             </p>
           )}
           <button class="button button--primary" onClick={() => setEditing(true)}>
@@ -219,14 +213,6 @@ export function Lan({ onLogout }: { onLogout: () => void }) {
             }
           />
         </section>
-      )}
-
-      {lan && (
-        <p class="footnote">
-          Due elenchi di DNS diversi: quelli <em>dati ai client</em> viaggiano nel DHCP,
-          quelli del <em>router</em> servono a risolvere i nomi. Confonderli è il modo
-          classico di rompere la risoluzione senza capire perché.
-        </p>
       )}
 
       <EthPortCard />
@@ -343,7 +329,6 @@ function EthMacSheet({
             <MacPicker
               choice={mac}
               onChange={setMac}
-              deviceNote="La porta torna a usare l'indirizzo di fabbrica: l'impostazione viene tolta dalla configurazione."
             />
 
             {/* L'avviso dipende da cosa fa la porta adesso, perche' le
@@ -352,15 +337,10 @@ function EthMacSheet({
                 locale sotto ai tuoi. */}
             <p class="alert alert--warn">
               {port.role === 'wan'
-                ? "La rete a monte ti vedrà come un dispositivo nuovo: rifarà il DHCP e un eventuale portale di accesso chiederà di nuovo il login. È anche il motivo per cui si cambia."
+                ? 'Un eventuale portale di accesso chiederà di nuovo il login.'
                 : port.role === 'lan'
-                  ? "La porta fa parte del bridge locale: il collegamento cade per qualche secondo, e il bridge può cambiare a sua volta indirizzo, perché prende il proprio da una delle porte che lo compongono."
-                  : 'La porta non è assegnata: il nuovo indirizzo varrà da quando le darai un ruolo.'}
-            </p>
-
-            <p class="muted">
-              Se non riesci a confermare, dopo {MAC_ROLLBACK_SECONDS} secondi torna tutto
-              come prima.
+                  ? 'Il collegamento via cavo cade per qualche secondo.'
+                  : 'La porta non è assegnata.'}
             </p>
 
             <div class="sheet__actions">
@@ -515,14 +495,6 @@ function EthPortCard() {
           </div>
         ))}
 
-        {ports.length > 0 && (
-          <p class="muted">
-            Come <strong>WAN</strong> la porta è un uplink: ci attacchi la rete del posto.
-            Come <strong>LAN</strong> fa parte della tua rete: ci attacchi un computer. Più
-            porte WAN insieme sono ammesse, e in Fase 3 diventeranno uplink distinti per il
-            bilanciamento.
-          </p>
-        )}
       </section>
 
       {macPort && (
@@ -546,8 +518,8 @@ function EthPortCard() {
               <>
                 <p class="alert alert--warn">
                   {pick.target === 'lan'
-                    ? 'La porta entra nel bridge locale e smette di essere un uplink. Il bridge si riconfigura: chi è collegato via cavo perde il collegamento per qualche secondo.'
-                    : "La porta esce dal bridge e diventa un uplink in DHCP. Un computer attaccato a questa porta perde la rete: assicurati di essere collegato da un'altra porta o dal WiFi prima di procedere."}
+                    ? 'Chi è collegato via cavo perde il collegamento per qualche secondo.'
+                    : 'Un computer attaccato a questa porta perde la rete.'}
                 </p>
 
                 {lastOfKind && (
@@ -558,9 +530,6 @@ function EthPortCard() {
                   </p>
                 )}
 
-                <p class="muted">
-                  Se non riesci a confermare, dopo 90 secondi torna tutto come prima.
-                </p>
                 <div class="sheet__actions">
                   <button class="button button--ghost" onClick={close}>
                     Annulla
@@ -650,13 +619,6 @@ function ClientsCard() {
         </div>
       ))}
 
-      {clients && clients.length > 0 && (
-        <p class="muted">
-          Chi non ha un <strong>lease DHCP</strong> compare lo stesso, dalla tabella dei
-          vicini del kernel: lì un dispositivo resta per qualche minuto anche dopo essersi
-          scollegato, e senza un nome da mostrare.
-        </p>
-      )}
     </section>
   );
 }
@@ -675,10 +637,7 @@ function DnsUntouched({ title, servers }: { title: string; servers: string[] }) 
     <div class="field">
       <span>{title}</span>
       <span class="row__value">{servers.join('  ')}</span>
-      <span class="muted">
-        Sono più di due e scelti a mano: da qui non si modificano, e il salvataggio li
-        lascia com’erano. Per cambiarli, riducili a due da LuCI.
-      </span>
+      <span class="muted">Modificabili solo da LuCI.</span>
     </div>
   );
 }
@@ -733,7 +692,6 @@ function DnsChoice({
   two,
   onOne,
   onTwo,
-  autoHint,
   ipv6,
 }: {
   title: string;
@@ -744,7 +702,6 @@ function DnsChoice({
   two: string;
   onOne: (value: string) => void;
   onTwo: (value: string) => void;
-  autoHint: string;
   /** Se questa lista accetta anche indirizzi IPv6. Cambia tastiera e avviso. */
   ipv6: boolean;
 }) {
@@ -764,7 +721,6 @@ function DnsChoice({
         ))}
       </select>
 
-      {mode === 'auto' && <span class="muted">{autoHint}</span>}
       {chosen && chosen.servers.length > 0 && (
         <span class="muted">{chosen.servers.join('  ·  ')}</span>
       )}
@@ -793,11 +749,7 @@ function DnsChoice({
               onInput={(e) => onTwo((e.target as HTMLInputElement).value)}
             />
           </label>
-          <span class="muted">
-            {ipv6
-              ? 'Indirizzi IPv4 o IPv6, anche uno per tipo: vanno al posto giusto da soli.'
-              : 'Solo indirizzi IPv4.'}
-          </span>
+          {!ipv6 && <span class="muted">Solo indirizzi IPv4.</span>}
         </>
       )}
     </div>
@@ -919,12 +871,6 @@ function LanSheet({
 
         {apply.phase === 'idle' && !done && (
           <form onSubmit={save}>
-            {suggestion && suggestion === address && (
-              <p class="alert alert--info">
-                Indirizzo proposto perché quello attuale collide con una rete a monte.
-              </p>
-            )}
-
             <label class="field">
               <span>Indirizzo IP del router</span>
               <input
@@ -936,17 +882,8 @@ function LanSheet({
                 placeholder="192.168.10.1"
                 onInput={(e) => setAddress(stripPrefix((e.target as HTMLInputElement).value))}
               />
-              {addressOk ? (
-                <span class="muted">
-                  La rete sarà {net}.0 → {net}.254, fino a 254 dispositivi.
-                </span>
-              ) : (
-                address !== '' && (
-                  <span class="muted">
-                    Serve un indirizzo IPv4 con l'ultimo numero fra 1 e 254, come
-                    192.168.10.1.
-                  </span>
-                )
+              {!addressOk && address !== '' && (
+                <span class="muted">Indirizzo IPv4 non valido.</span>
               )}
             </label>
 
@@ -990,10 +927,9 @@ function LanSheet({
                       basta, come fa la scelta dei DNS con un fornitore che non
                       riconosce. */}
                   <span class="muted">
-                    Configurati fuori da questa schermata: ra <strong>{lan.ra || '—'}</strong>,
-                    dhcpv6 <strong>{lan.dhcpv6 || '—'}</strong>
+                    ra <strong>{lan.ra || '—'}</strong>, dhcpv6 <strong>{lan.dhcpv6 || '—'}</strong>
                     {lan.ra_flags.length > 0 && <> , flag <strong>{lan.ra_flags.join(' ')}</strong></>}
-                    . Restano com’è: da qui non vengono modificati.
+                    {' '}· modificabili solo da LuCI.
                   </span>
                 </>
               ) : (
@@ -1008,9 +944,6 @@ function LanSheet({
                       </option>
                     ))}
                   </select>
-                  <span class="muted">
-                    {RA_OPTIONS.find((o) => o.id === raMode)?.hint}
-                  </span>
                 </>
               )}
             </div>
@@ -1025,7 +958,6 @@ function LanSheet({
                 two={clientTwo}
                 onOne={setClientOne}
                 onTwo={setClientTwo}
-                autoHint="I dispositivi useranno il router come DNS."
                 ipv6
               />
             ) : (
@@ -1042,7 +974,6 @@ function LanSheet({
                 two={routerTwo}
                 onOne={setRouterOne}
                 onTwo={setRouterTwo}
-                autoHint="Il router userà i DNS che gli dà la rete a cui è collegato."
                 ipv6
               />
             ) : (
@@ -1051,20 +982,15 @@ function LanSheet({
 
             {routerMode !== 'auto' && (
               <p class="alert alert--warn">
-                Con DNS fissi, una rete che richiede il login su pagina web potrebbe non
-                riuscire a mandarti alla sua pagina: quei portali si appoggiano proprio al
-                DNS della rete. Il rilevamento automatico arriva in Fase 5.
+                Con DNS fissi la pagina di login di alcune reti potrebbe non aprirsi.
               </p>
             )}
 
             {moves && (
               <p class="alert alert--warn">
                 Stai spostando il router da <strong>{current}</strong> a{' '}
-                <strong>{address}</strong>. Il vecchio indirizzo <strong>resta attivo</strong>{' '}
-                per tutta la finestra di conferma, così non puoi restare chiuso fuori: se
-                qualcosa non torna, non confermi e dopo {LAN_ROLLBACK_SECONDS} secondi
-                torna tutto come prima. I dispositivi collegati passeranno al nuovo
-                indirizzo al rinnovo del DHCP.
+                <strong>{address}</strong>. Il vecchio indirizzo resta attivo finché non lo
+                rimuovi.
               </p>
             )}
 
@@ -1092,9 +1018,7 @@ function LanSheet({
               {moves && (
                 <>
                   {' '}
-                  L'interfaccia è ora anche su <strong>https://{address}/travel/</strong>. Il
-                  vecchio indirizzo <strong>{current}</strong> resta attivo finché non lo
-                  rimuovi dalla schermata: verifica prima di raggiungere il nuovo.
+                  L'interfaccia è ora su <strong>https://{address}/travel/</strong>.
                 </>
               )}
             </p>

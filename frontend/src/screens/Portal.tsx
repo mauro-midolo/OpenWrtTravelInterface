@@ -88,10 +88,7 @@ export function PortalPanel({
     return (
       <>
         <h2>Uscita verso Internet</h2>
-        <p class="muted">
-          Non ancora verificata. Il router lo controlla da solo poco dopo che la WAN prende
-          un indirizzo.
-        </p>
+        <p class="muted">Non ancora verificata.</p>
         {verify}
         {error && <p class="alert alert--error alert--code">{error}</p>}
       </>
@@ -113,10 +110,7 @@ export function PortalPanel({
       {result.state === 'portal' && (
         <>
           <p class="alert alert--warn">
-            Questa rete ha un <strong>portale di accesso</strong>: il collegamento c'è, ma
-            finché non fai il login non passa niente. Apri la pagina dal telefono — il
-            traffico esce da qui, quindi è la stessa pagina che vedresti collegandoti alla
-            rete direttamente.
+            Questa rete ha un <strong>portale di accesso</strong>: serve il login.
           </p>
           {/* Un link vero e non una chiamata: il login deve avvenire nel
               browser di chi guarda, con i suoi cookie e la sua sessione. Il
@@ -133,18 +127,14 @@ export function PortalPanel({
             </a>
           )}
           <p class="muted">
-            Se la pagina non si apre, prova a visitare un indirizzo qualsiasi in{' '}
-            <strong>http://</strong> (non https): è così che il portale si fa vedere.
-            Fatto il login, torna qui e verifica di nuovo.
+            Se la pagina non si apre, visita un indirizzo qualsiasi in <strong>http://</strong>.
           </p>
         </>
       )}
 
       {result.state === 'blocked' && (
         <p class="alert alert--error">
-          La WAN ha un indirizzo ma <strong>non esce niente</strong>: nessuna risposta
-          dall'esterno. Non è un portale — quello risponderebbe — ma una rete che non porta
-          da nessuna parte.
+          La WAN ha un indirizzo ma <strong>non esce niente</strong>.
           {reason ? ` ${reason}` : ''}
         </p>
       )}
@@ -152,13 +142,6 @@ export function PortalPanel({
       {result.state === 'unknown' && (
         <p class="alert alert--warn">
           {reason || 'La verifica non ha potuto dire niente.'}
-        </p>
-      )}
-
-      {result.state === 'online' && result.tool === 'uclient-fetch' && (
-        <p class="muted">
-          Verificata con uclient-fetch: segue i rimandi, quindi se comparisse un portale non
-          saprebbe dire dove si trova la sua pagina.
         </p>
       )}
 
@@ -263,10 +246,7 @@ export function MacCloneSheet({
             {clients === null && <p class="muted">Leggo i dispositivi collegati…</p>}
 
             {clients !== null && clients.length === 0 && (
-              <p class="muted">
-                Nessun dispositivo visto sulla LAN. Collega al router il telefono con cui hai
-                fatto l'accesso: comparirà qui.
-              </p>
+              <p class="muted">Nessun dispositivo collegato.</p>
             )}
 
             {clients !== null && clients.length > 0 && (
@@ -302,10 +282,8 @@ export function MacCloneSheet({
             )}
 
             <p class="alert alert--warn">
-              Mentre il router usa il MAC di un dispositivo, quel dispositivo non deve
-              restare collegato <strong>direttamente</strong> alla stessa rete: due schede
-              con lo stesso indirizzo si tolgono la connessione a vicenda. Passando dal
-              router va bene, ed è il punto.
+              Quel dispositivo non deve restare collegato <strong>direttamente</strong> alla
+              stessa rete.
             </p>
 
             <div class="sheet__actions">
@@ -339,9 +317,7 @@ export function MacCloneSheet({
         {done && (
           <>
             <p class="alert alert--ok">
-              Fatto. Il router si presenta con il MAC scelto: se il portale lo riconosce come
-              già autenticato, Internet passa senza rifare il login. Verifica dalla scheda
-              della WAN.
+              Fatto.
             </p>
             <div class="sheet__actions">
               <button class="button button--primary" onClick={() => onClose(true)}>
@@ -392,10 +368,6 @@ export function PortalMemoryCard() {
   return (
     <section class="card">
       <h2 class="uplink__title">Reti con portale</h2>
-      <p class="muted">
-        Reti su cui è già comparsa una pagina di accesso. L'ultimo accesso riuscito dice se
-        quello di prima è ancora valido o se va rifatto.
-      </p>
 
       {entries.map((entry) => (
         <div key={entry.section} class="port">

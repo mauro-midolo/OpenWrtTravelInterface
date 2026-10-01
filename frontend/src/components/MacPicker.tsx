@@ -21,13 +21,10 @@ export function MacPicker({
   choice,
   onChange,
   label = 'Indirizzo MAC da usare',
-  /** Cosa significa "della scheda" qui: cambia fra una radio e una porta. */
-  deviceNote,
 }: {
   choice: MacChoice;
   onChange: (choice: MacChoice) => void;
   label?: string;
-  deviceNote?: string;
 }) {
   const [random, setRandom] = useState(() =>
     choice.mode === 'random' && choice.value ? choice.value : randomMac(),
@@ -88,8 +85,6 @@ export function MacPicker({
         ))}
       </div>
 
-      {choice.mode === 'device' && deviceNote && <span class="muted">{deviceNote}</span>}
-
       {choice.mode === 'random' && (
         <div class="mac-row">
           <code>{random}</code>
@@ -133,10 +128,7 @@ export function MacPicker({
         <>
           {clients === null && <span class="muted">Leggo i dispositivi collegati…</span>}
           {clients !== null && clients.length === 0 && (
-            <span class="muted">
-              Nessun dispositivo visto sulla LAN. Collega al router il telefono con cui hai
-              fatto l'accesso e riprova.
-            </span>
+            <span class="muted">Nessun dispositivo collegato.</span>
           )}
           {clients !== null && clients.length > 0 && (
             <div class="chips">
@@ -158,17 +150,15 @@ export function MacPicker({
           )}
           {clone && (
             <span class="muted">
-              <code>{clone}</code> — mentre il router lo usa, quel dispositivo non deve
-              restare collegato direttamente a questa rete.
+              <code>{clone}</code> — quel dispositivo non deve restare collegato direttamente
+              a questa rete.
             </span>
           )}
         </>
       )}
 
       {invalid && (
-        <span class="muted">
-          Formato non valido, o primo byte dispari (sarebbe un indirizzo multicast).
-        </span>
+        <span class="muted">Indirizzo MAC non valido.</span>
       )}
     </div>
   );

@@ -454,7 +454,7 @@ describe('saving a network found by scanning', () => {
     // Nessuna seconda voce da salvare: e' la stessa rete, e la scelta e' se
     // aggiungerle questa banda.
     expect(checkboxes('bande-salvataggio')).toHaveLength(0);
-    expect(container.textContent).toContain('aggiungi anche');
+    expect(container.textContent).toContain('alla rete salvata «Hotel-Guest» (5 GHz)');
   });
 
   it('opens on the saved configuration and connects with no password retyped', async () => {
@@ -470,8 +470,8 @@ describe('saving a network found by scanning', () => {
     );
     await act(async () => { await Promise.resolve(); });
 
-    // Il messaggio che dice che la rete c'è già resta dov'era, con le sue bande.
-    expect(container.textContent).toContain('Questa rete è già salvata (2.4 GHz)');
+    // La rete c'è già: non si offre di salvarla una seconda volta.
+    expect(container.textContent).not.toContain('Salva questa rete');
 
     // I campi partono dalla configurazione salvata, e restano modificabili.
     expect(container.textContent).toContain('02:00:00:00:00:24');

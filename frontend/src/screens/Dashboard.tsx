@@ -66,27 +66,6 @@ function stateLabel(wan: DashWan): string {
   }
 }
 
-function stateDetail(wan: DashWan): string {
-  switch (wan.state) {
-    case 'unassociated':
-      return 'Configurata ma non agganciata a nessuna rete.';
-    case 'no-carrier':
-      return wan.carrier === 0
-        ? 'Attacca un cavo alla porta WAN per usarla come uplink.'
-        : 'La porta non è attiva. Se hai attaccato un cavo, controlla che sia nella porta WAN.';
-    case 'disabled':
-      return 'Disattivata.';
-    case 'absent':
-      if (wan.kind === 'wifi')
-        return 'Questa radio è libera: collegala a una rete dalla schermata WiFi per usarla come uplink.';
-      if (wan.kind === 'usb')
-        return 'Attacca il telefono via USB e attiva la condivisione della connessione.';
-      return 'Nessun collegamento su questa interfaccia.';
-    default:
-      return 'Nessun collegamento su questa interfaccia.';
-  }
-}
-
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div class="row">
@@ -152,9 +131,8 @@ function WanCard({
           rete "funziona" e le pagine non si aprono. */}
       {mwan && mwan.status === 'online' && wan.portal?.state === 'portal' && (
         <p class="alert alert--warn">
-          Per mwan3 questa WAN è <strong>online</strong>: il suo controllo è un ping, e il
-          portale lo lascia passare. Finché non fai il login il traffico esce da qui e non
-          arriva da nessuna parte.
+          Per mwan3 questa WAN è <strong>online</strong>, ma finché non fai il login il
+          traffico non passa.
         </p>
       )}
 
@@ -221,7 +199,7 @@ function WanCard({
                   lo sa. */}
               <Row
                 label="Gateway IPv6"
-                value={wan.gateway6 || 'nessuno · IPv6 non esce dalla rete locale'}
+                value={wan.gateway6 || 'nessuno'}
               />
               {wan.dns6.length > 0 && <Row label="DNS IPv6" value={wan.dns6.join('  ')} />}
               {wan.prefix6 && <Row label="Prefisso delegato" value={wan.prefix6} />}
@@ -264,9 +242,7 @@ function WanCard({
             value={`↓ ${formatBytes(wan.rx_session)}   ↑ ${formatBytes(wan.tx_session)}`}
           />
         </>
-      ) : (
-        <p class="muted">{stateDetail(wan)}</p>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -344,14 +320,6 @@ function HostnameSheet({
               onChange={setChoice}
             />
 
-            <p class="muted">
-              Cambiarlo fa rinnovare l'indirizzo su questa WAN: può restare senza
-              connessione per qualche secondo.
-              {saved
-                ? ` Verrà aggiornata anche la rete salvata "${saved.ssid}", così la riconnessione automatica non lo rimette com'era.`
-                : ''}
-            </p>
-
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
                 Annulla
@@ -413,10 +381,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
           <p class="muted">Caricamento…</p>
         ) : (
           <section class="card">
-            <p class="muted">
-              La dashboard è servita da travelD, che non risponde. Le altre schermate
-              funzionano lo stesso.
-            </p>
+            <p class="muted">travelD non risponde.</p>
             {poll.error && <p class="alert alert--warn alert--code">{poll.error.message}</p>}
           </section>
         )}
@@ -442,20 +407,13 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
             ? `Il traffico esce da ${wanTitle(active)}${active.ssid ? ` · ${active.ssid}` : ''}.`
             : 'Nessuna WAN sta portando traffico.'}
         </p>
-        {/* Il titolo dice cosa succede, questa riga dice cosa fare: da sola
-            "Serve un login" lascerebbe a cercare dove. */}
-        {active?.portal?.state === 'portal' && (
-          <p class="muted">
-            Apri la pagina di accesso dalla scheda di {wanTitle(active)}, qui sotto.
-          </p>
-        )}
         <p class="muted">
           Riconnessione automatica {data.autoreconnect ? 'attiva' : 'spenta'}.{' '}
           {data.portal_check === false ? 'Verifica dei portali spenta. ' : ''}
           {mwan === null
             ? 'Multi-WAN: lettura in corso.'
             : !mwan.installed
-              ? 'Multi-WAN non installato: al prossimo setup con Internet.'
+              ? 'Multi-WAN non installato.'
               : !mwan.running
                 ? 'Multi-WAN installato ma mwan3 non risponde.'
                 : `Multi-WAN in ${MODE_LABEL[mwan.mode].toLowerCase()}` +

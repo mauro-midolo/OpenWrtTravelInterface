@@ -151,7 +151,7 @@ function UplinkCard({ uplink, portal }: { uplink: Uplink; portal: PortalResult |
         <p class="muted">
           {state === 'disabled'
             ? 'La rete è configurata ma disattivata.'
-            : 'Configurata, ma la radio non è riuscita ad agganciare la rete. Di solito è la password.'}
+            : 'La radio non è riuscita ad agganciare la rete.'}
         </p>
       )}
     </section>
@@ -208,7 +208,6 @@ function Network({
             {net.hidden ? 'rete nascosta' : net.ssid}
           </span>
           <span class="net__meta">
-            {net.hidden ? 'tocca per aggiungerla scrivendo il nome · ' : ''}
             ch {net.channel} · {net.security}
             {net.count > 1 && ` · ${net.count} punti di accesso`}
           </span>
@@ -251,7 +250,7 @@ function ActionSheet({ action, onClose }: { action: Action; onClose: (c: boolean
 
         {apply.phase === 'idle' && (
           <>
-            <p class="alert alert--warn">{action.warn}</p>
+            {action.warn && <p class="alert alert--warn">{action.warn}</p>}
             <div class="sheet__actions">
               <button class="button button--ghost" onClick={() => onClose(false)}>
                 Annulla
@@ -341,9 +340,7 @@ function RadioCard({
           e "l'access point è acceso" da solo non spiega chi lo tiene acceso. */}
       {radio.apSection && radio.apToggle && (
         <p class="alert alert--info">
-          Questo access point segue l’interruttore fisico: si accende e si spegne muovendo
-          la levetta, non da qui. Per tornare a decidere da qui, cambia la funzione
-          dell’interruttore in Sistema.
+          Questo access point segue l’interruttore fisico.
         </p>
       )}
 
@@ -513,11 +510,11 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
         : `Spegni l'access point su ${radio.band} GHz`,
       warn: enable
         ? radio.staSection
-          ? "L'access point condividerà la radio con la rete a cui sei collegato: erediterà il suo canale e cadrà insieme a lei."
-          : "L'access point tornerà attivo su questa radio."
+          ? "L'access point cadrà insieme alla rete a cui sei collegato."
+          : ''
         : other?.apEnabled
-          ? "Resterà attivo l'access point sull'altra radio: il telefono si riconnetterà da solo."
-          : "Non resterà nessun access point attivo. Se stai usando il router dal WiFi perderai l'accesso, e senza conferma tornerà tutto indietro da solo.",
+          ? ''
+          : "Non resterà nessun access point attivo: dal WiFi perderai l'accesso.",
       stage: () => stageApEnabled(radio, enable),
     });
   };
@@ -525,7 +522,7 @@ export function Wifi({ onLogout }: { onLogout: () => void }) {
   const disconnect = (radio: Radio) => {
     setAction({
       title: `Disconnetti la rete su ${radio.band} GHz`,
-      warn: 'La radio torna libera. Se la usi come uplink, perderai Internet finché non ne colleghi un altro.',
+      warn: 'Se è il tuo uplink, perderai Internet.',
       stage: () => stageDisconnect(radio),
     });
   };

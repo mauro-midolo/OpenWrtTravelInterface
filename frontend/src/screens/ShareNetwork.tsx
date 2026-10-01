@@ -68,13 +68,9 @@ function ShareContent({ net, onClose }: ShareProps) {
                 <path d={qrPath(data.matrix)} fill="#000000" />
               </svg>
             </div>
-            <p class="muted">
-              Inquadra il codice con la fotocamera di Android, iPhone o un lettore
-              compatibile per collegarti alla rete senza digitare la password.
-            </p>
 
             {open ? (
-              <p class="muted">Rete aperta: non c'è nessuna password da mostrare.</p>
+              <p class="muted">Rete aperta, senza password.</p>
             ) : (
               <>
                 <div class="field">
@@ -96,7 +92,6 @@ function ShareContent({ net, onClose }: ShareProps) {
                     </button>
                   </div>
                 </div>
-                <p class="muted">Il QR contiene la password: condividilo solo con chi vuoi far accedere alla rete.</p>
               </>
             )}
           </>

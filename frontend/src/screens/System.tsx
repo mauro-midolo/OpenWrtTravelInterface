@@ -101,8 +101,7 @@ function ProfileSheet({
         {confirmDelete ? (
           <>
             <p class="alert alert--warn">
-              Elimino <strong>{profile.name}</strong>? La configurazione attuale del router
-              non cambia: sparisce solo il profilo.
+              Elimino <strong>{profile.name}</strong>?
             </p>
             <div class="sheet__actions">
               <button
@@ -167,10 +166,6 @@ function ProfileSheet({
             >
               Aggiorna con lo stato di adesso
             </button>
-            <p class="muted">
-              Sovrascrive i valori salvati con quelli attivi in questo momento, tenendo il
-              nome.
-            </p>
           </>
         )}
       </div>
@@ -203,11 +198,6 @@ function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) 
       <div class="sheet__panel card">
         <h2>Nuovo profilo</h2>
         <form onSubmit={save}>
-          <p class="muted">
-            Salva com'è messo il router adesso: modalità multi-WAN, ordine e pesi delle WAN,
-            riconnessione automatica, verifica dei portali, kill switch.
-          </p>
-
           <label class="field">
             <span>Nome</span>
             <input
@@ -217,7 +207,9 @@ function ProfileSaveSheet({ onClose }: { onClose: (changed: boolean) => void }) 
               autocomplete="off"
               onInput={(e) => setName((e.target as HTMLInputElement).value)}
             />
-            <span class="muted">Lettere, cifre, spazi, trattini. Fino a 24 caratteri.</span>
+            {name.trim() !== '' && !valid && (
+              <span class="muted">Lettere, cifre, spazi, trattini. Fino a 24 caratteri.</span>
+            )}
           </label>
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
@@ -256,10 +248,7 @@ export function ProfilesCard() {
   return (
     <section class="card">
       <header class="radio__head">
-        <div>
-          <h2 class="uplink__title">Profili</h2>
-          <p class="muted">Come deve comportarsi il router in un posto.</p>
-        </div>
+        <h2 class="uplink__title">Profili</h2>
         <button class="button button--ghost" onClick={() => setSaving(true)}>
           Salva stato
         </button>
@@ -269,11 +258,7 @@ export function ProfilesCard() {
       {!data && !error && <p class="muted">Leggo i profili…</p>}
 
       {data && data.profiles.length === 0 && (
-        <p class="muted">
-          Nessun profilo. “Salva stato” mette da parte com'è messo il router adesso, e da lì
-          ci si torna con un tocco: <em>hotel</em> con il tethering escluso e il kill switch
-          acceso, <em>casa</em> con il bilanciamento e la riconnessione automatica.
-        </p>
+        <p class="muted">Nessun profilo.</p>
       )}
 
       {data?.profiles.map((profile) => (
@@ -290,18 +275,7 @@ export function ProfilesCard() {
       ))}
 
       {data && data.profiles.length > 0 && !data.current && (
-        <p class="muted">
-          Nessun profilo corrisponde alla configurazione di adesso: qualcosa è stato
-          cambiato a mano dopo averne applicato uno.
-        </p>
-      )}
-
-      {data && data.profiles.length > 0 && (
-        <p class="muted">
-          Un profilo non tocca l'indirizzo della LAN, gli access point né il ruolo delle
-          porte: sono le cose da cui si <strong>entra</strong> nel router, e applicarne uno
-          non deve poterti chiudere fuori.
-        </p>
+        <p class="muted">Nessun profilo corrisponde alla configurazione attuale.</p>
       )}
 
       {open && (
@@ -380,10 +354,7 @@ export function BackupCard() {
   return (
     <section class="card">
       <h2 class="uplink__title">Backup della configurazione</h2>
-      <p class="muted">
-        L'archivio standard di OpenWrt: contiene tutto <code>/etc/config</code>, quindi
-        anche le password del WiFi e le chiavi della VPN. Tienilo come terresti quelle.
-      </p>
+      <p class="muted">Contiene anche le password del WiFi e le chiavi della VPN.</p>
 
       <button class="button button--ghost" disabled={busy !== null} onClick={save}>
         {busy === 'export' ? 'Preparo…' : 'Scarica il backup'}
@@ -408,10 +379,7 @@ export function BackupCard() {
         <>
           <p class="alert alert--warn">
             Ripristinare <strong>{pending.name}</strong> sovrascrive tutta la configurazione
-            e <strong>riavvia il router</strong>. Se il backup viene da un altro dispositivo
-            o da un'altra versione di OpenWrt, il router può tornare su con una rete diversa
-            da quella che stai usando adesso: tieni a portata di mano il cavo e la procedura
-            di recupero che hai salvato sul telefono.
+            e <strong>riavvia il router</strong>.
           </p>
           <div class="sheet__actions">
             <button class="button button--ghost" onClick={() => setPending(null)}>
@@ -426,8 +394,7 @@ export function BackupCard() {
 
       {busy === 'import' && (
         <p class="muted">
-          Carico l'archivio… {progress}%. Non chiudere la pagina: il file sale a pezzi, e
-          uno che manca lo rende inutilizzabile.
+          Carico l'archivio… {progress}%. Non chiudere la pagina.
         </p>
       )}
 
@@ -500,10 +467,6 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
               ))}
               <option value="custom">Altro — stringa POSIX</option>
             </select>
-            <span class="muted">
-              L'elenco è corto di proposito: il database completo dei fusi non è installato
-              su questo router, e la stringa POSIX è quella che il sistema usa comunque.
-            </span>
           </label>
 
           {zone === 'custom' && (
@@ -527,10 +490,7 @@ function TimeSheet({ time, onClose }: { time: TimeState; onClose: (changed: bool
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>
-              Sincronizza l'ora dalla rete. Senza, e senza orologio a batteria, il router
-              resta all'ora del firmware: l'HTTPS smette di funzionare.
-            </span>
+            <span>Sincronizza l'ora dalla rete</span>
           </label>
 
           <label class="field">
@@ -589,10 +549,7 @@ export function TimeCard() {
   return (
     <section class="card">
       <header class="radio__head">
-        <div>
-          <h2 class="uplink__title">Ora e fuso</h2>
-          <p class="muted">Serve più di quanto sembri: l'HTTPS dipende dall'orologio.</p>
-        </div>
+        <h2 class="uplink__title">Ora e fuso</h2>
         <button class="button button--ghost" onClick={() => setEditing(true)} disabled={!time}>
           Modifica
         </button>
@@ -623,18 +580,10 @@ export function TimeCard() {
               questo progetto evita altrove. */}
           {!time.plausible && (
             <p class="alert alert--warn">
-              L'orologio è indietro di parecchio: finché non si sincronizza, i siti in HTTPS
-              non si aprono e sembra un guasto della rete. Serve una connessione che esca
-              davvero — se sei dietro un captive portal, prima il login.
+              L'orologio è indietro: finché non si sincronizza i siti in HTTPS non si aprono.
             </p>
           )}
 
-          {!time.rtc && (
-            <p class="muted">
-              Questo router non ha un orologio a batteria: a ogni distacco di corrente
-              riparte dall'ora del firmware e la recupera solo dalla rete.
-            </p>
-          )}
         </>
       )}
 
@@ -701,7 +650,7 @@ function RebootSheet({
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>Riavvia il router da solo, all'ora scelta.</span>
+            <span>Riavvio pianificato</span>
           </label>
 
           <label class="field">
@@ -740,11 +689,6 @@ function RebootSheet({
               <span class="muted">Ora fra 0 e 23, minuti fra 0 e 59.</span>
             )}
           </div>
-
-          <p class="muted">
-            L'ora è quella del router: se il fuso è sbagliato, il riavvio cade a un'ora
-            diversa da quella che hai in mente.
-          </p>
 
           {error && <p class="alert alert--error alert--code">{error}</p>}
 
@@ -806,16 +750,14 @@ export function RebootCard() {
           direbbe "riavvia ogni notte" e non riavvierebbe mai. */}
       {schedule?.enabled && !schedule.cron_running && (
         <p class="alert alert--warn">
-          Il servizio cron non sta girando: la pianificazione è scritta ma non verrà
-          eseguita.
+          Il servizio cron non sta girando: il riavvio pianificato non verrà eseguito.
         </p>
       )}
 
       {confirm ? (
         <>
           <p class="alert alert--warn">
-            Il router riparte adesso: la rete cade per un minuto o due, e questa pagina si
-            ricarica da sola quando torna.
+            Il router riparte adesso: la rete cade per un minuto o due.
           </p>
           <div class="sheet__actions">
             <button class="button button--ghost" onClick={() => setConfirm(false)}>
@@ -846,10 +788,7 @@ export function RebootCard() {
       )}
 
       {going && (
-        <p class="muted">
-          Il router si sta riavviando. Se non torna in un paio di minuti, controlla di
-          essere ancora collegato al suo WiFi.
-        </p>
+        <p class="muted">Il router si sta riavviando…</p>
       )}
 
       {editing && schedule && (
