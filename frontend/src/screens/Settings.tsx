@@ -433,7 +433,7 @@ export function Settings({ onLogout }: { onLogout: () => void }) {
         )}
       </section>
 
-      {/* I profili stanno per primi fra le cose della Fase 8: sono quelli che
+      {/* I profili stanno per primi fra queste schede: sono quelli che
           si usano arrivando in un posto nuovo, mentre backup, orologio e
           riavvio si toccano una volta e poi stanno li'. */}
       <ProfilesCard />

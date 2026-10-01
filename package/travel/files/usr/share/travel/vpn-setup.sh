@@ -1,5 +1,5 @@
 #!/bin/sh
-# VPN (requisito F, Fase 6a): installa Tailscale e prepara il firewall.
+# VPN (requisito F): installa Tailscale e prepara il firewall.
 #
 # Idempotente, come mwan3-setup.sh: crea solo cio' che manca e non sovrascrive
 # mai una scelta dell'utente. Chiamato da setup.sh, si puo' rilanciare a mano.
@@ -112,7 +112,7 @@ EOF
 TS_RULE_PREF=900
 TS_TABLE=52
 
-# WireGuard (Fase 6b): stesso meccanismo, un gradino sotto.
+# WireGuard: stesso meccanismo, un gradino sotto.
 #
 # La 900 manda nel tunnel Tailscale cio' che e' diretto al tailnet; la 901
 # manda in WireGuard tutto il resto. L'ordine conta ed e' quello giusto: con
@@ -492,7 +492,7 @@ else
 	fi
 fi
 
-# WireGuard (Fase 6b). Il proto handler di netifd arriva con `wireguard-tools`,
+# WireGuard. Il proto handler di netifd arriva con `wireguard-tools`,
 # che si tira dietro il modulo del kernel; `luci-proto-wireguard` e' opzionale e
 # serve solo a LuCI - ma LuCI e' la via di fuga, e poterla usare per riparare un
 # tunnel vale i suoi pochi kB.

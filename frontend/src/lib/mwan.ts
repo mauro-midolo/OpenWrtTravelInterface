@@ -72,7 +72,7 @@ export interface Mwan {
   interfaces: MwanInterface[];
   rules: MwanRule[];
   /**
-   * Chi sta decidendo dove esce il traffico (Fase 6b).
+   * Chi sta decidendo dove esce il traffico.
    *
    * Serve qui perche' il bilanciamento e' una delle tre cose che si escludono
    * a vicenda: con un exit node Tailscale o un tunnel WireGuard acceso non e'

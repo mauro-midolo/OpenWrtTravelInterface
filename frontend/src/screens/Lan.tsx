@@ -370,7 +370,7 @@ function EthMacSheet({
  *
  * Ogni porta puo' fare l'uplink o stare nella rete locale, indipendentemente
  * dalle altre: due connessioni via cavo distinte sono una configurazione
- * legittima, e in Fase 3 diventeranno due WAN per mwan3.
+ * legittima, e per mwan3 diventano due WAN.
  *
  * E' l'operazione che ti chiude fuori se sbagliata, perche' ci si collega via
  * cavo proprio a quelle porte. Passa da applica-e-conferma con una verifica in
@@ -547,7 +547,7 @@ function EthPortCard() {
 }
 
 /**
- * Chi e' collegato alla rete locale (Fase 7).
+ * Chi e' collegato alla rete locale.
  *
  * Sta sotto le porte ethernet perche' risponde alla domanda successiva: capito
  * come sono messe le prese, si vuole sapere chi c'e' dietro. Per la stessa

@@ -447,8 +447,8 @@ ipv6_prefix() {
 # Interfacce logiche che sono WAN, cioe' quelle nella zona firewall "wan".
 #
 # E' la definizione operativa giusta su questo router: qualunque cosa esca da
-# li' e' un uplink, e quando in Fase 3 arrivera' il tethering USB comparira' da
-# solo senza toccare questo codice.
+# li' e' un uplink, e il tethering USB compare da solo senza toccare questo
+# codice.
 wan_networks() {
 	local zone net device entry bridge ports
 	zone=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'\$/\1/p" | head -n 1)
@@ -1551,7 +1551,7 @@ method_ethports() {
 		json_add_string  mac            "$(first_line "/sys/class/net/$port/address")"
 		json_add_string  mac_config     "$dev_mac"
 		json_add_string  device_section "$dev_section"
-		# Con mwan3 (Fase 3) ogni WAN ha anche una voce li': va seguita nella
+		# Con mwan3 ogni WAN ha anche una voce li': va seguita nella
 		# stessa transazione, altrimenti resterebbe un health check su una WAN
 		# che non esiste piu'.
 		json_add_boolean mwan3   "$([ -n "$network" ] && [ -n "$(uci -q get "mwan3.$network")" ] && echo 1 || echo 0)"
@@ -1564,7 +1564,7 @@ method_ethports() {
 	json_dump
 }
 
-# --- Chi e' collegato alla rete locale (Fase 7) -------------------------------
+# --- Chi e' collegato alla rete locale ----------------------------------------
 #
 # Un metodo solo per due schermate: la scheda LAN mostra l'elenco, la clonazione
 # del MAC ci sceglie dentro. Due enumerazioni separate divergerebbero, e
@@ -1752,7 +1752,7 @@ client_object() {
 }
 
 # Dispositivi visti sulla rete locale, con il MAC e la porta o l'access point da
-# cui entrano (requisito G, Fase 7).
+# cui entrano (requisito G).
 #
 # Serve anche alla clonazione del MAC: certi portali autenticano l'indirizzo, e
 # dopo aver fatto l'accesso dal telefono si puo' far indossare al router quello
@@ -3477,7 +3477,7 @@ method_ts_logout() {
 	json_dump
 }
 
-# --- WireGuard (Fase 6b) ------------------------------------------------------
+# --- WireGuard ---------------------------------------------------------------
 #
 # **Piu' configurazioni salvate, una sola accesa.** Le due meta' della frase
 # sono indipendenti e vanno tenute tali: chi viaggia ha il provider di casa, il
@@ -4827,7 +4827,7 @@ method_backup_import() {
 	json_dump
 }
 
-# --- Orologio e NTP (Fase 8) -------------------------------------------------
+# --- Orologio e NTP -----------------------------------------------------------
 #
 # Su questo router non c'e' un orologio a batteria: staccata la corrente,
 # l'ora riparte da quella del firmware. Non e' un dettaglio da pignoli - con
@@ -4973,7 +4973,7 @@ method_time_set() {
 	json_dump
 }
 
-# --- Riavvio, subito o a un'ora (Fase 8) -------------------------------------
+# --- Riavvio, subito o a un'ora ---------------------------------------------
 #
 # Il riavvio pianificato serve a una cosa sola e va detta: un router acceso per
 # settimane in valigia accumula stati strani - una WAN che non torna, un driver

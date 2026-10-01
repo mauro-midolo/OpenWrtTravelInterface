@@ -85,7 +85,7 @@ wg_name() {
 	printf '%s' "$name"
 }
 
-# --- Chi decide da dove esce il traffico (Fase 6b) ----------------------------
+# --- Chi decide da dove esce il traffico -------------------------------------
 #
 # Tre cose, e **al massimo una alla volta**:
 #
@@ -105,7 +105,7 @@ wg_name() {
 #   rompere. Il tunnel e' una connessione sola: mwan3 non la puo' sparpagliare,
 #   ma la puo' spostare, e a ogni spostamento cambia l'indirizzo di partenza e
 #   costringe a un handshake nuovo su *tutto* il traffico, perche' tutto e' li'
-#   dentro (il ragionamento lungo sta piu' su, nella Fase 6);
+#   dentro (il ragionamento lungo sta piu' su);
 # - **due tunnel completi insieme** vorrebbe dire due rotte predefinite dentro
 #   due tunnel diversi. Vincerebbe quella con la priorita' piu' alta e l'altra
 #   resterebbe li' a non fare niente, con l'interfaccia che ne mostra due

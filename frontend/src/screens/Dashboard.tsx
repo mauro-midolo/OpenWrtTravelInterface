@@ -27,7 +27,7 @@ import { dashboardText } from '../i18n/dashboard';
  *
  * "Collegato" e "Internet raggiungibile" sono due frasi diverse di proposito:
  * la prima dice che c'e' una rotta, la seconda che una richiesta vera e'
- * uscita ed e' tornata. Prima della Fase 5 esisteva solo la prima, e sotto ci
+ * uscita ed e' tornata. Con la sola prima, sotto ci
  * stava anche il caso peggiore - una rete d'albergo che ti tiene fuori con una
  * pagina di login mentre tutto sembra a posto.
  */

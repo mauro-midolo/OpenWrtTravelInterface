@@ -157,10 +157,10 @@ export type OverallState =
 /**
  * Stato complessivo in una parola (requisito G.1).
  *
- * Fino alla Fase 5 questa funzione non poteva dire "online" e non lo diceva:
+ * Senza la verifica dell'uscita questa funzione non potrebbe dire "online":
  * avere indirizzo e rotta non garantisce che Internet funzioni, perche' un
- * portale risponde a tutto e blocca il resto. Adesso la verifica c'e', e la
- * distinzione che ne esce e' la ragione dell'intera fase: `connected` significa
+ * portale risponde a tutto e blocca il resto. La verifica c'e', e la
+ * distinzione che ne esce e' la sua ragione d'essere: `connected` significa
  * "non lo so ancora", `online` significa "l'ho misurato".
  *
  * La WAN che conta e' quella che porta il traffico: e' da li' che esce anche il

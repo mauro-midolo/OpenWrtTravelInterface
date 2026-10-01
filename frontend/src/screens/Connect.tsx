@@ -296,7 +296,7 @@ export function ConnectSheet({
         setPortal(verdict);
       } catch {
         // Una verifica che non riesce non toglie niente alla connessione appena
-        // fatta: si mostra l'esito senza, come prima della Fase 5.
+        // fatta: si mostra l'esito senza verdetto sull'uscita.
       }
       setProbing(false);
     }
@@ -580,7 +580,7 @@ function Outcome({
         </p>
       )}
 
-      {/* Il caso per cui esiste tutta la Fase 5: la connessione e' riuscita e
+      {/* Il caso per cui esiste la verifica dell'uscita: la connessione e' riuscita e
           Internet non c'e'. Senza questo riquadro si vedrebbe "Collegato" e si
           andrebbe a cercare il guasto nella password o nel segnale. */}
       {state === 'addressed' && portal?.state === 'portal' && (

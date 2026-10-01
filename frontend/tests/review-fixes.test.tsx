@@ -35,8 +35,8 @@ describe('first_line', () => {
 
   it('legge anche una riga senza ritorno a capo finale, come il file della versione', () => {
     const file = join(dir, 'version');
-    writeFileSync(file, '1.9.1-fase8');
-    expect(sh(`${fn('first_line')}\nfirst_line '${file}'`)).toBe('1.9.1-fase8');
+    writeFileSync(file, '1.11.0');
+    expect(sh(`${fn('first_line')}\nfirst_line '${file}'`)).toBe('1.11.0');
   });
 
   it('con il ritorno a capo restituisce la sola prima riga', () => {

@@ -406,7 +406,7 @@ export function BackupCard() {
 }
 
 /**
- * Orologio (Fase 8).
+ * Orologio.
  *
  * Su questo router non c'e' un orologio a batteria: staccata la corrente, l'ora
  * riparte da quella del firmware. Con l'orologio indietro di mesi ogni
@@ -597,7 +597,7 @@ export function TimeCard() {
 }
 
 /**
- * Riavvio, subito o a un'ora (Fase 8).
+ * Riavvio, subito o a un'ora.
  *
  * Il riavvio pianificato non e' manutenzione preventiva generica: e' il rimedio
  * a guasti che questo progetto ha gia' incontrato - una WAN che non torna su, il

@@ -236,7 +236,7 @@ export function blockReason(policy: VpnPolicy | undefined, what: PolicyHolder): 
   }
 }
 
-// --- WireGuard (Fase 6b) -----------------------------------------------------
+// --- WireGuard ---------------------------------------------------------------
 
 export interface WgConfig {
   addresses: string;
@@ -639,7 +639,7 @@ export function wgCarrying(wg: WgState): boolean {
   // decidere se un tunnel c'e'. Un "no" li' direbbe a chi ha il tunnel su e
   // Internet che funziona di non essere protetto da niente. E la perdita v6 che
   // le righe segnalano il kill switch la chiude comunque: la sua regola e'
-  // dual-family (Fase 0), quindi acceso blocca anche quella.
+  // dual-family, quindi acceso blocca anche quella.
   return wgRoutingSteps(wg).every((step) => step.ok || step.advisory === true);
 }
 

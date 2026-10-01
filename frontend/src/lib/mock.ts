@@ -445,7 +445,7 @@ interface MockWgProfile {
 }
 
 /**
- * WireGuard, e i vincoli di compatibilita' (Fase 6b).
+ * WireGuard, e i vincoli di compatibilita'.
  *
  * Parte senza nessuna configurazione salvata: e' lo stato di un router appena
  * installato, quello che si vede una volta sola e che quindi nessuno prova mai.
@@ -568,7 +568,7 @@ const vpnState = {
  * Sul dispositivo vero serve un albergo. Qui basta collegarsi a una rete il cui
  * nome sta in questo elenco: la connessione riesce, l'indirizzo arriva, e la
  * verifica dell'uscita dice che c'e' un portale. E' proprio la combinazione che
- * senza la Fase 5 si presentava come "Collegato" e basta.
+ * senza la verifica dell'uscita si presentava come "Collegato" e basta.
  *
  * L'accesso non si simula con un timer ma con la clonazione del MAC: il portale
  * finto autorizza gli indirizzi, e prendendo quello di un dispositivo gia'
@@ -643,7 +643,7 @@ let portalMemory = [
 ];
 
 /**
- * Profili (Fase 8).
+ * Profili.
  *
  * Due, perche' uno solo non fa vedere la cosa che conta: quale dei due
  * corrisponde allo stato di adesso. Il simulatore lo decide come il router,
@@ -1635,7 +1635,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       }),
   }),
 
-  // --- Fase 8: profili, backup, orologio, riavvio, velocita' ---
+  // --- Profili, backup, orologio, riavvio, velocita' ---
 
   /**
    * Quale profilo corrisponde allo stato di adesso.

@@ -58,8 +58,6 @@ nelle Impostazioni, purché rete e uhttpd funzionino.
 
 ## Frontend e funzionalità implementate
 
-<a id="fasi"></a>
-
 Il frontend usa Preact 10, TypeScript e Vite 5. `src/app.tsx` gestisce login e
 navigazione con stato locale, montando solo la schermata selezionata. La scheda
 iniziale è WiFi. Le cinque schede nella barra inferiore sono:
@@ -1460,7 +1458,7 @@ dal frontend.
 | `traveld` | Stato e automazioni | `status`, `dashboard`, `reset`, `portal`, `portal_check` |
 
 Le risposte possono contenere errori applicativi nel campo `error`, oltre
-ai codici ubus; dalla versione 1.10 il campo è accompagnato da `error_code` ed
+ai codici ubus; dalla versione 1.11 il campo è accompagnato da `error_code` ed
 `error_params` (vedi [Lingue](#lingue)). Non tutti i metodi restituiscono un diff, sono idempotenti
 o condividono lo stesso meccanismo di rollback.
 
@@ -1552,8 +1550,7 @@ né una roadmap approvata.
 
 ### Debiti tecnici e verifiche da completare
 
-- **Documentazione operativa:** `README.md` conserva riferimenti alle fasi;
-  `recovery.md` descrive ancora spostamento automatico degli AP, timeout
+- **Documentazione operativa:** `recovery.md` descrive ancora spostamento automatico degli AP, timeout
   uniforme di 90 secondi, un archivio `lastgood` non creato dal codice e
   disinstallazione come pacchetto. La procedura va riallineata prima di
   usarla come riferimento operativo.
@@ -1605,7 +1602,7 @@ né una roadmap approvata.
   per funzione, e disinstallazione completa dei file copiati e delle
   configurazioni generate.
 - Versione della UI/plugin e del daemon unificata, oggi mantenuta separatamente,
-  e pulizia dei commenti che riportano fasi o comportamenti superati.
+  e pulizia dei commenti che riportano comportamenti superati.
 - Country code e altre impostazioni radio dalla UI, mantenendo i controlli
   dell'accesso locale durante le riconfigurazioni.
 - Eventuali storico del traffico, vista conntrack/top talker, registro eventi

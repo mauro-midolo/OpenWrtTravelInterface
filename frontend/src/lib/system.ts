@@ -1,5 +1,5 @@
 /**
- * Orologio, backup e riavvio (Fase 8).
+ * Orologio, backup e riavvio.
  *
  * Tre cose diverse tenute insieme da una sola idea: sono le operazioni sul
  * router in quanto apparecchio, non sulle reti che collega. Vivono tutte nel

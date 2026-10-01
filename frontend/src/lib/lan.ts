@@ -1006,7 +1006,7 @@ export async function stageEthPort(
   }
 }
 
-// --- Dispositivi collegati (Fase 7) -------------------------------------------
+// --- Dispositivi collegati ----------------------------------------------------
 
 export interface LanClient {
   mac: string;
